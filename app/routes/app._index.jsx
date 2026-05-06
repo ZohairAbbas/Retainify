@@ -156,7 +156,7 @@ export default function Dashboard() {
       {!settings?.isActive && (
         <s-banner tone="warning" title="Cart Rescue is paused">
           <s-paragraph>Your journey is not active. Go to Cart Rescue settings to turn it on.</s-paragraph>
-          <s-button slot="primaryAction" onClick={() => navigate("/app/journey")}>Go to Cart Rescue</s-button>
+          <s-button slot="primaryAction" onClick={() => navigate(`/app/journey${location.search}`)}>Go to Cart Rescue</s-button>
         </s-banner>
       )}
 

@@ -1,6 +1,7 @@
 import prisma from "../db.server.js";
 import { verifyConfirmToken } from "../lib/email/confirm.server.js";
 import { createDiscountCode } from "../lib/shopify/discounts.server.js";
+import { syncConfirmedSubscriber } from "../lib/shopify/customers.server.js";
 import { sendEmail } from "../lib/email/resend.server.js";
 import { renderDiscountRevealEmail } from "../lib/email/templates.server.js";
 
@@ -66,10 +67,16 @@ export const loader = async ({ request }) => {
   }
 
   // Persist confirmation
+  const confirmedAt = new Date();
   await prisma.popupSignup.update({
     where: { id: signup.id },
-    data: { confirmedAt: new Date(), discountCode },
+    data: { confirmedAt, discountCode },
   });
+
+  // Push subscriber to Shopify with CONFIRMED_OPT_IN marketing consent (fire-and-forget)
+  syncConfirmedSubscriber(shop, email, confirmedAt).catch((err) =>
+    console.error("[confirm] shopify customer sync failed:", err.message),
+  );
 
   // Send discount reveal email (fire-and-forget)
   if (discountCode) {

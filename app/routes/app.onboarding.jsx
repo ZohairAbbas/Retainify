@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useLoaderData, useFetcher, useNavigate } from "react-router";
+import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
@@ -74,6 +74,7 @@ export default function Onboarding() {
   const themeEditorUrl = `https://${shop}/admin/themes/current/editor?context=apps&template=index&activateAppId=${apiKey}/cart-rescue-popup`;
   const fetcher = useFetcher();
   const navigate = useNavigate();
+  const location = useLocation();
   const saving = fetcher.state !== "idle";
   const data = fetcher.data;
 
@@ -114,7 +115,7 @@ export default function Onboarding() {
             <s-paragraph>
               Retainify will now automatically send recovery emails to shoppers who abandon their carts.
             </s-paragraph>
-            <s-button onClick={() => navigate("/app")}>Go to dashboard</s-button>
+            <s-button onClick={() => navigate(`/app${location.search}`)}>Go to dashboard</s-button>
           </s-stack>
         </s-section>
       </s-page>
