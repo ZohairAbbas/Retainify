@@ -1,0 +1,22 @@
+{% comment %}
+  Retainify — Cart Rescue Popup block.
+  Merchants add this via Online Store > Themes > Customize > App embeds.
+  All popup content and behavior is configured in the Retainify admin app.
+{% endcomment %}
+
+<script>
+  window.__retainifyPopup = {
+    shop: {{ shop.permanent_domain | json }},
+    endpoint: {{ routes.root_url | append: "apps/retainify/popup-signup" | json }},
+    configEndpoint: {{ routes.root_url | append: "apps/retainify/popup-config" | json }},
+  };
+</script>
+{{ 'cart-rescue-popup.js' | asset_url | script_tag }}
+
+{% schema %}
+{
+  "name": "Retainify Popup",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}

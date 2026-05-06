@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:apps.shopify.com)",
+      "WebFetch(domain:www.privy.com)",
+      "WebSearch"
+    ]
+  },
+  "enabledMcpjsonServers": [
+    "shopify-dev-mcp"
+  ],
+  "enableAllProjectMcpServers": true
+}
