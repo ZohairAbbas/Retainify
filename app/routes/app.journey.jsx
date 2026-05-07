@@ -97,10 +97,10 @@ export const action = async ({ request }) => {
     const email1DelayHours = parseFloat(formData.get("email1DelayHours") || "1");
     const email1Subject = String(formData.get("email1Subject") || "").trim();
     const email2Enabled = formData.get("email2Enabled") === "true";
-    const email2DelayHours = parseInt(formData.get("email2DelayHours") || "24", 10);
+    const email2DelayHours = parseFloat(formData.get("email2DelayHours") || "24");
     const email2Subject = String(formData.get("email2Subject") || "").trim();
     const email3Enabled = formData.get("email3Enabled") === "true";
-    const email3DelayHours = parseInt(formData.get("email3DelayHours") || "72", 10);
+    const email3DelayHours = parseFloat(formData.get("email3DelayHours") || "72");
     const email3Subject = String(formData.get("email3Subject") || "").trim();
     const email3DiscountPct = parseInt(formData.get("email3DiscountPct") || "10", 10);
 
@@ -228,6 +228,7 @@ export default function JourneySettings() {
                 value={email1DelayHours}
                 onChange={(e) => setEmail1DelayHours(e.target?.value ?? e.detail?.value ?? email1DelayHours)}
               >
+                <s-option value="0.0167">1 minute (for testing)</s-option>
                 <s-option value="0.5">30 minutes</s-option>
                 <s-option value="1">1 hour</s-option>
                 <s-option value="2">2 hours</s-option>
