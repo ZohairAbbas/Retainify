@@ -71,7 +71,7 @@ const TEMPLATES = [
 
 export default function Onboarding() {
   const { shop, step, settings, journey, apiKey } = useLoaderData();
-  const themeEditorUrl = `https://${shop}/admin/themes/current/editor?context=apps&template=index&activateAppId=${apiKey}/cart-rescue-popup`;
+  const themeEditorUrl = `https://${shop}/admin/themes/current/editor?context=apps&template=index&activateAppId=${apiKey}/popup`;
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -224,7 +224,7 @@ export default function Onboarding() {
             </s-paragraph>
             <s-button
               href={themeEditorUrl}
-              target="_top"
+              target="_blank"
             >
               Open theme editor to enable popup
             </s-button>

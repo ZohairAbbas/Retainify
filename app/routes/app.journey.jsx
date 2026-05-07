@@ -228,6 +228,7 @@ export default function JourneySettings() {
                 value={email1DelayHours}
                 onChange={(e) => setEmail1DelayHours(e.target?.value ?? e.detail?.value ?? email1DelayHours)}
               >
+                <s-option value="0.0167">1 minute (for testing)</s-option>
                 <s-option value="0.5">30 minutes</s-option>
                 <s-option value="1">1 hour</s-option>
                 <s-option value="2">2 hours</s-option>
