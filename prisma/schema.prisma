@@ -56,17 +56,17 @@ model JourneySettings {
   templateStyle   String   @default("classic") // classic | bold | minimal
   // Email 1
   email1Enabled   Boolean  @default(true)
-  email1DelayHours Int     @default(1)
+  email1DelayHours Float   @default(1)
   email1Subject   String   @default("You left something behind")
   email1Body      String   @default("")
   // Email 2
   email2Enabled   Boolean  @default(true)
-  email2DelayHours Int     @default(24)
+  email2DelayHours Float   @default(24)
   email2Subject   String   @default("Still thinking it over?")
   email2Body      String   @default("")
   // Email 3
   email3Enabled   Boolean  @default(true)
-  email3DelayHours Int     @default(72)
+  email3DelayHours Float   @default(72)
   email3Subject   String   @default("Last chance — 10% off")
   email3Body      String   @default("")
   email3DiscountPct Int    @default(10)

@@ -6,18 +6,18 @@ application_url = "https://retainify.growzar.com"
 embedded = true
 
 [build]
-automatically_update_urls_on_dev = true
+automatically_update_urls_on_dev = false
 
 [webhooks]
 api_version = "2025-01"
 
   [[webhooks.subscriptions]]
-  topics = [ "checkouts/update", "checkouts/create" ]
-  uri = "/webhooks/checkouts"
-
-  [[webhooks.subscriptions]]
   topics = [ "orders/create", "orders/paid" ]
   uri = "/webhooks/orders"
+
+  [[webhooks.subscriptions]]
+  topics = [ "checkouts/update", "checkouts/create" ]
+  uri = "/webhooks/checkouts"
 
   [[webhooks.subscriptions]]
   uri = "/webhooks/customers/data_request"
