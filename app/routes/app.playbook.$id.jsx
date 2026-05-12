@@ -1,5 +1,5 @@
 import { useState, useMemo } from "react";
-import { useLoaderData, useFetcher, useNavigate } from "react-router";
+import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
@@ -63,7 +63,6 @@ export const loader = async ({ request, params }) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  // Pre-render preview HTML for all 3 styles × all steps
   const styles = ["classic", "bold", "minimal"];
   const previews = {};
   for (const style of styles) {
@@ -120,6 +119,7 @@ export default function PlaybookDetail() {
   const fetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const navigate = useNavigate();
+  const location = useLocation();
 
   const saving = fetcher.state !== "idle";
   const saved = fetcher.data?.saved;
@@ -289,7 +289,7 @@ export default function PlaybookDetail() {
           </s-button>
           <s-button
             slot="secondaryAction"
-            onClick={() => navigate(`/app/playbooks${window.location.search}`)}
+            onClick={() => navigate(`/app/playbooks${location.search}`)}
           >
             Back
           </s-button>

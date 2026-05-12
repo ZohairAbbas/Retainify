@@ -1,4 +1,4 @@
-import { useLoaderData, useNavigate, useFetcher } from "react-router";
+import { useLoaderData, useNavigate, useLocation, useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
@@ -82,6 +82,7 @@ export const action = async ({ request }) => {
 export default function Playbooks() {
   const { journeys } = useLoaderData();
   const navigate = useNavigate();
+  const location = useLocation();
   const fetcher = useFetcher();
 
   function toggleActive(journeyId) {
@@ -93,27 +94,26 @@ export default function Playbooks() {
       <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
         {journeys.map((journey) => (
           <s-section key={journey.id}>
-            <s-stack direction="inline" gap="base" align="center" justify="space-between">
-              <s-stack direction="block" gap="tight">
-                <s-text variant="headingSm">{journey.name}</s-text>
-                <s-text tone="subdued" variant="bodySm">
-                  {TRIGGER_LABELS[journey.trigger] || journey.trigger} · {journey.steps.length} emails ·{" "}
-                  {journey.sentLast30} sent (last 30 days)
-                </s-text>
-              </s-stack>
-              <s-stack direction="inline" gap="base" align="center">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "16px" }}>
+              <div>
+                <div style={{ fontSize: "14px", fontWeight: 600, color: "#202223", marginBottom: "4px" }}>
+                  {journey.name}
+                </div>
+                <div style={{ fontSize: "13px", color: "#6d7175" }}>
+                  {TRIGGER_LABELS[journey.trigger] || journey.trigger} · {journey.steps.length} emails · {journey.sentLast30} sent (last 30 days)
+                </div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
                 <ToggleSwitch
                   checked={journey.isActive}
                   onChange={() => toggleActive(journey.id)}
                   disabled={fetcher.state !== "idle"}
                 />
-                <s-button
-                  onClick={() => navigate(`/app/playbooks/${journey.id}${window.location.search}`)}
-                >
+                <s-button onClick={() => navigate(`/app/playbook/${journey.id}${location.search}`)}>
                   Edit
                 </s-button>
-              </s-stack>
-            </s-stack>
+              </div>
+            </div>
           </s-section>
         ))}
 
