@@ -20,6 +20,9 @@ type Pages = {
   "/webhooks/app/scopes_update": {
     params: {};
   };
+  "/webhooks/customers/create": {
+    params: {};
+  };
   "/webhooks/customers/redact": {
     params: {};
   };
@@ -70,6 +73,14 @@ type Pages = {
   "/app/onboarding": {
     params: {};
   };
+  "/app/playbooks": {
+    params: {};
+  };
+  "/app/playbooks/:id": {
+    params: {
+      "id": string;
+    };
+  };
   "/app/settings": {
     params: {};
   };
@@ -84,7 +95,7 @@ type Pages = {
 type RouteFiles = {
   "root.jsx": {
     id: "root";
-    page: "/" | "/webhooks/customers/data_request" | "/webhooks/app/scopes_update" | "/webhooks/customers/redact" | "/webhooks/app/uninstalled" | "/webhooks/shop/redact" | "/webhooks/checkouts" | "/track/unsubscribe" | "/webhooks/orders" | "/track/confirm" | "/popup-config" | "/popup-signup" | "/track/click" | "/auth/login" | "/auth/*" | "/app" | "/app/preview/email" | "/app/additional" | "/app/onboarding" | "/app/settings" | "/app/journey" | "/app/popup";
+    page: "/" | "/webhooks/customers/data_request" | "/webhooks/app/scopes_update" | "/webhooks/customers/create" | "/webhooks/customers/redact" | "/webhooks/app/uninstalled" | "/webhooks/shop/redact" | "/webhooks/checkouts" | "/track/unsubscribe" | "/webhooks/orders" | "/track/confirm" | "/popup-config" | "/popup-signup" | "/track/click" | "/auth/login" | "/auth/*" | "/app" | "/app/preview/email" | "/app/additional" | "/app/onboarding" | "/app/playbooks" | "/app/playbooks/:id" | "/app/settings" | "/app/journey" | "/app/popup";
   };
   "routes/webhooks.customers.data_request.jsx": {
     id: "routes/webhooks.customers.data_request";
@@ -93,6 +104,10 @@ type RouteFiles = {
   "routes/webhooks.app.scopes_update.jsx": {
     id: "routes/webhooks.app.scopes_update";
     page: "/webhooks/app/scopes_update";
+  };
+  "routes/webhooks.customers.create.jsx": {
+    id: "routes/webhooks.customers.create";
+    page: "/webhooks/customers/create";
   };
   "routes/webhooks.customers.redact.jsx": {
     id: "routes/webhooks.customers.redact";
@@ -148,7 +163,7 @@ type RouteFiles = {
   };
   "routes/app.jsx": {
     id: "routes/app";
-    page: "/app" | "/app/preview/email" | "/app/additional" | "/app/onboarding" | "/app/settings" | "/app/journey" | "/app/popup";
+    page: "/app" | "/app/preview/email" | "/app/additional" | "/app/onboarding" | "/app/playbooks" | "/app/playbooks/:id" | "/app/settings" | "/app/journey" | "/app/popup";
   };
   "routes/app.preview.email.jsx": {
     id: "routes/app.preview.email";
@@ -161,6 +176,14 @@ type RouteFiles = {
   "routes/app.onboarding.jsx": {
     id: "routes/app.onboarding";
     page: "/app/onboarding";
+  };
+  "routes/app.playbooks.jsx": {
+    id: "routes/app.playbooks";
+    page: "/app/playbooks" | "/app/playbooks/:id";
+  };
+  "routes/app.playbooks.$id.jsx": {
+    id: "routes/app.playbooks.$id";
+    page: "/app/playbooks/:id";
   };
   "routes/app.settings.jsx": {
     id: "routes/app.settings";
@@ -184,6 +207,7 @@ type RouteModules = {
   "root": typeof import("./app/root.jsx");
   "routes/webhooks.customers.data_request": typeof import("./app/routes/webhooks.customers.data_request.jsx");
   "routes/webhooks.app.scopes_update": typeof import("./app/routes/webhooks.app.scopes_update.jsx");
+  "routes/webhooks.customers.create": typeof import("./app/routes/webhooks.customers.create.jsx");
   "routes/webhooks.customers.redact": typeof import("./app/routes/webhooks.customers.redact.jsx");
   "routes/webhooks.app.uninstalled": typeof import("./app/routes/webhooks.app.uninstalled.jsx");
   "routes/webhooks.shop.redact": typeof import("./app/routes/webhooks.shop.redact.jsx");
@@ -201,6 +225,8 @@ type RouteModules = {
   "routes/app.preview.email": typeof import("./app/routes/app.preview.email.jsx");
   "routes/app.additional": typeof import("./app/routes/app.additional.jsx");
   "routes/app.onboarding": typeof import("./app/routes/app.onboarding.jsx");
+  "routes/app.playbooks": typeof import("./app/routes/app.playbooks.jsx");
+  "routes/app.playbooks.$id": typeof import("./app/routes/app.playbooks.$id.jsx");
   "routes/app.settings": typeof import("./app/routes/app.settings.jsx");
   "routes/app.journey": typeof import("./app/routes/app.journey.jsx");
   "routes/app._index": typeof import("./app/routes/app._index.jsx");

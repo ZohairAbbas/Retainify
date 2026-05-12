@@ -3,8 +3,8 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:dev.sqlite"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Session {
@@ -189,4 +189,82 @@ model PopupSettings {
   enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// Flexible journey engine — a playbook (welcome, win-back, post-purchase, etc.)
+model Journey {
+  id          String   @id @default(cuid())
+  shop        String
+  name        String
+  trigger     String   // cart_abandoned | customer_created | order_placed | win_back
+  isActive    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  steps       JourneyStep[]
+  enrollments JourneyEnrollment[]
+
+  @@index([shop, trigger])
+}
+
+// One email step within a journey
+model JourneyStep {
+  id            String   @id @default(cuid())
+  journeyId     String
+  stepNumber    Int
+  delayHours    Float    @default(1)
+  subject       String   @default("")
+  templateStyle String   @default("classic")
+  discountPct   Int      @default(0)
+  isEnabled     Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  jobs          JourneyJob[]
+
+  @@index([journeyId, stepNumber])
+}
+
+// One contact enrolled in a journey
+model JourneyEnrollment {
+  id            String    @id @default(cuid())
+  shop          String
+  journeyId     String
+  contactEmail  String
+  contactName   String    @default("")
+  payload       String    @default("{}")
+  enrolledAt    DateTime  @default(now())
+  completedAt   DateTime?
+  exitReason    String    @default("")
+
+  journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  jobs          JourneyJob[]
+
+  @@index([shop, contactEmail])
+  @@index([journeyId])
+}
+
+// Scheduled send per step per enrollment
+model JourneyJob {
+  id              String    @id @default(cuid())
+  shop            String
+  enrollmentId    String
+  stepId          String
+  scheduledFor    DateTime
+  status          String    @default("pending")
+  attempts        Int       @default(0)
+  lastError       String    @default("")
+  resendMessageId String    @default("")
+  sentAt          DateTime?
+  openedAt        DateTime?
+  clickedAt       DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  enrollment      JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step            JourneyStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([shop, enrollmentId])
 }

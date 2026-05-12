@@ -3,6 +3,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { getCartRescueStats, getEmailBreakdown } from "../lib/analytics/stats.server.js";
+import { ensureDefaultJourneys } from "../lib/journey/seed-defaults.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -23,6 +24,11 @@ export const loader = async ({ request }) => {
       });
     }
   }
+
+  // Seed default playbooks for this shop if not yet created (idempotent)
+  await ensureDefaultJourneys(shop).catch((err) =>
+    console.error("[dashboard] seed defaults failed:", err.message),
+  );
 
   return { settings, stats, breakdown };
 };
@@ -95,6 +101,7 @@ function QuickActions({ onNavigate, currentPath }) {
   const items = [
     { label: "Dashboard", path: "/app" },
     { label: "Cart Rescue", path: "/app/journey" },
+    { label: "Playbooks", path: "/app/playbooks" },
     { label: "Popup", path: "/app/popup" },
     { label: "Settings", path: "/app/settings" },
   ];

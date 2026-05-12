@@ -5,12 +5,13 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { runWorker } from "./lib/journey/worker.server.js";
+import { runJourneyWorker } from "./lib/journey/journey-worker.server.js";
 
-// Poll the email job queue every 60 seconds.
-// In production replace with a proper cron/background worker process.
+// Poll both job queues every 60 seconds.
 if (typeof setInterval !== "undefined") {
   setInterval(() => {
     runWorker().catch((err) => console.error("[worker] poll error:", err));
+    runJourneyWorker().catch((err) => console.error("[journey-worker] poll error:", err));
   }, 60_000);
 }
 

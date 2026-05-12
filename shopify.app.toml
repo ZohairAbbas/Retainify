@@ -16,6 +16,10 @@ api_version = "2025-01"
   uri = "/webhooks/orders"
 
   [[webhooks.subscriptions]]
+  topics = [ "customers/create" ]
+  uri = "/webhooks/customers/create"
+
+  [[webhooks.subscriptions]]
   topics = [ "checkouts/update", "checkouts/create" ]
   uri = "/webhooks/checkouts"
 
