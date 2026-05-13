@@ -4,6 +4,7 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { getCartRescueStats, getEmailBreakdown } from "../lib/analytics/stats.server.js";
 import { ensureDefaultJourneys } from "../lib/journey/seed-defaults.server.js";
+import { seedJourneyTemplates } from "../lib/journey/journey-templates.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -28,6 +29,11 @@ export const loader = async ({ request }) => {
   // Seed default playbooks for this shop if not yet created (idempotent)
   await ensureDefaultJourneys(shop).catch((err) =>
     console.error("[dashboard] seed defaults failed:", err.message),
+  );
+
+  // Seed flow templates table (idempotent, shop-agnostic)
+  await seedJourneyTemplates().catch((err) =>
+    console.error("[dashboard] seed templates failed:", err.message),
   );
 
   return { settings, stats, breakdown };
@@ -100,8 +106,8 @@ function FunnelCell({ count, label, color, bg }) {
 function QuickActions({ onNavigate, currentPath }) {
   const items = [
     { label: "Dashboard", path: "/app" },
-    { label: "Cart Rescue", path: "/app/journey" },
-    { label: "Playbooks", path: "/app/playbooks" },
+    { label: "Flows", path: "/app/flows" },
+    { label: "Automations", path: "/app/automations" },
     { label: "Popup", path: "/app/popup" },
     { label: "Settings", path: "/app/settings" },
   ];
@@ -162,8 +168,8 @@ export default function Dashboard() {
     <s-page heading="Dashboard">
       {!settings?.isActive && (
         <s-banner tone="warning" title="Cart Rescue is paused">
-          <s-paragraph>Your journey is not active. Go to Cart Rescue settings to turn it on.</s-paragraph>
-          <s-button slot="primaryAction" onClick={() => navigate(`/app/journey${location.search}`)}>Go to Cart Rescue</s-button>
+          <s-paragraph>Your journey is not active. Open Flows to publish it.</s-paragraph>
+          <s-button slot="primaryAction" onClick={() => navigate(`/app/flows${location.search}`)}>Go to Flows</s-button>
         </s-banner>
       )}
 

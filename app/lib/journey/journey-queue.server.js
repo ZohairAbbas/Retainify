@@ -1,23 +1,44 @@
 import prisma from "../../db.server.js";
 
 /**
- * Enroll a contact in a journey — creates one JourneyJob per enabled step.
- * Idempotent: skips if an active enrollment already exists for this contact+journey.
+ * Enroll a contact in a journey — creates one JourneyJob per sendable step.
+ * Honors Journey.status (only "published") and Journey.entryFrequency:
+ *   - "no_reentry"        → skip if any prior enrollment exists for this contact
+ *   - "delayed_<hours>"   → skip if an enrollment exists within the window
+ *   - "immediate"         → always create a new enrollment
  */
 export async function enrollContact(journeyId, contactEmail, contactName, payloadObj) {
-  const existing = await prisma.journeyEnrollment.findFirst({
-    where: { journeyId, contactEmail, exitReason: "" },
-  });
-  if (existing) return existing;
+  const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
+  if (!journey) return null;
+  if (journey.status !== "published") return null;
+
+  const frequency = journey.entryFrequency || "no_reentry";
+
+  if (frequency === "no_reentry") {
+    const any = await prisma.journeyEnrollment.findFirst({
+      where: { journeyId, contactEmail },
+    });
+    if (any) return any;
+  } else if (frequency.startsWith("delayed_")) {
+    const hours = Number(frequency.slice("delayed_".length)) || 24;
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const recent = await prisma.journeyEnrollment.findFirst({
+      where: { journeyId, contactEmail, enrolledAt: { gt: since } },
+    });
+    if (recent) return recent;
+  } else {
+    // immediate — still skip if there's an active in-flight enrollment to prevent doubles
+    const active = await prisma.journeyEnrollment.findFirst({
+      where: { journeyId, contactEmail, exitReason: "" },
+    });
+    if (active) return active;
+  }
 
   const steps = await prisma.journeyStep.findMany({
-    where: { journeyId, isEnabled: true },
+    where: { journeyId, isEnabled: true, nodeType: { in: ["email"] } },
     orderBy: { stepNumber: "asc" },
   });
   if (!steps.length) return null;
-
-  const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
-  if (!journey) return null;
 
   const enrollment = await prisma.journeyEnrollment.create({
     data: {

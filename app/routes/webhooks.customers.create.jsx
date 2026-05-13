@@ -13,7 +13,7 @@ export const action = async ({ request }) => {
   const name = [firstName, lastName].filter(Boolean).join(" ");
 
   const journey = await prisma.journey.findFirst({
-    where: { shop, trigger: "customer_created", isActive: true },
+    where: { shop, trigger: "customer_created", status: "published" },
   });
   if (!journey) return new Response(null, { status: 200 });
 

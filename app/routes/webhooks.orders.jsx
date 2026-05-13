@@ -2,6 +2,7 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { cancelCartJobs } from "../lib/journey/queue.server.js";
 import { enrollContact } from "../lib/journey/journey-queue.server.js";
+import { evaluateExitCriteria } from "../lib/journey/exit-criteria.server.js";
 
 export const action = async ({ request }) => {
   const { shop, payload } = await authenticate.webhook(request);
@@ -23,13 +24,25 @@ export const action = async ({ request }) => {
         }),
         cancelCartJobs(shop, cart.id),
       ]);
+      if (cart.customerEmail) {
+        await evaluateExitCriteria(shop, cart.customerEmail, "cart_recovered").catch((err) =>
+          console.error("[webhook] exit-criteria cart_recovered failed:", err.message),
+        );
+      }
     }
+  }
+
+  // Fire exit-criteria for active enrollments (win-back, welcome, etc.)
+  if (customerEmail) {
+    await evaluateExitCriteria(shop, customerEmail, "order_placed").catch((err) =>
+      console.error("[webhook] exit-criteria order_placed failed:", err.message),
+    );
   }
 
   // Enroll in post-purchase journey
   if (customerEmail) {
     const journey = await prisma.journey.findFirst({
-      where: { shop, trigger: "order_placed", isActive: true },
+      where: { shop, trigger: "order_placed", status: "published" },
     });
     if (journey) {
       const firstName = payload.customer?.first_name || "";

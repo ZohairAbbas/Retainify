@@ -193,27 +193,40 @@ model PopupSettings {
 
 // Flexible journey engine — a playbook (welcome, win-back, post-purchase, etc.)
 model Journey {
-  id          String   @id @default(cuid())
-  shop        String
-  name        String
-  trigger     String   // cart_abandoned | customer_created | order_placed | win_back
-  isActive    Boolean  @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id               String    @id @default(cuid())
+  shop             String
+  name             String
+  trigger          String    // cart_abandoned | customer_created | order_placed | win_back
+  isActive         Boolean   @default(false)
+  status           String    @default("draft")        // draft | published | paused
+  publishedAt      DateTime?
+  publishedVersion Int       @default(0)
+  draftVersion     Int       @default(0)
+  entryFrequency   String    @default("no_reentry")   // immediate | delayed_<hours> | no_reentry
+  exitCriteria     String    @default("[]")           // JSON array of event keys
+  source           String    @default("flows")        // flows | automations | cart_rescue_legacy
+  archivedAt       DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   steps       JourneyStep[]
   enrollments JourneyEnrollment[]
 
   @@index([shop, trigger])
+  @@index([shop, status])
 }
 
-// One email step within a journey
+// One step within a journey (email send, time delay, or exit)
 model JourneyStep {
   id            String   @id @default(cuid())
   journeyId     String
   stepNumber    Int
+  nodeType      String   @default("email") // email | delay | exit
+  positionY     Int      @default(0)
   delayHours    Float    @default(1)
   subject       String   @default("")
+  previewText   String   @default("")
+  emailName     String   @default("")
   templateStyle String   @default("classic")
   discountPct   Int      @default(0)
   isEnabled     Boolean  @default(true)
@@ -224,6 +237,20 @@ model JourneyStep {
   jobs          JourneyJob[]
 
   @@index([journeyId, stepNumber])
+}
+
+// Pre-configured flow templates (seed data)
+model JourneyTemplate {
+  id          String   @id @default(cuid())
+  key         String   @unique // welcome_series | abandoned_cart | post_purchase | winback
+  name        String
+  description String   @default("")
+  trigger     String
+  category    String   @default("") // welcome | cart | post_purchase | winback | special_occasion
+  bestFor     String   @default("[]") // JSON array of bullet strings
+  definition  String   @default("{}") // JSON: { steps, entryFrequency, exitCriteria }
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
 
 // One contact enrolled in a journey

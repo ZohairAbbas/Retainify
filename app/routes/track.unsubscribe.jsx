@@ -1,4 +1,5 @@
 import prisma from "../db.server.js";
+import { evaluateExitCriteria } from "../lib/journey/exit-criteria.server.js";
 
 // Public route — one-click unsubscribe.
 export const loader = async ({ request }) => {
@@ -12,6 +13,9 @@ export const loader = async ({ request }) => {
       create: { shop, email, reason: "unsubscribe" },
       update: { reason: "unsubscribe" },
     });
+    await evaluateExitCriteria(shop, email, "unsubscribed").catch((err) =>
+      console.error("[unsubscribe] exit-criteria failed:", err.message),
+    );
   }
 
   return new Response(
