@@ -88,12 +88,20 @@ export default function Automations() {
 
   return (
     <s-page heading="Automations">
-      <div style={{ marginBottom: 12, fontSize: 13, color: "#6d7175" }}>
-        Simple form-based editor for your flows. For the full visual builder, use{" "}
-        <a
-          href={`/app/flows${location.search}`}
-          style={{ color: "#005c8a", textDecoration: "none" }}
-        >Flows</a>.
+      <div style={{
+        marginBottom: 12, display: "flex", alignItems: "center",
+        justifyContent: "space-between", gap: 16,
+      }}>
+        <div style={{ fontSize: 13, color: "#6d7175" }}>
+          Simple form-based editor for your flows. For the full visual builder, use{" "}
+          <a
+            href={`/app/flows${location.search}`}
+            style={{ color: "#005c8a", textDecoration: "none" }}
+          >Flows</a>.
+        </div>
+        <s-button variant="primary" onClick={() => navigate(`/app/flows${location.search}`)}>
+          Create Flow
+        </s-button>
       </div>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

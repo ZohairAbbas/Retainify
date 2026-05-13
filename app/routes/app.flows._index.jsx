@@ -146,23 +146,24 @@ export default function Flows() {
 
   return (
     <s-page heading="Flows">
-      <div slot="primary-action">
-        <s-button variant="primary" onClick={() => setShowModal(true)}>
-          Create Flow
-        </s-button>
-      </div>
-
       {journeys.length === 0 ? (
         <EmptyState onCreate={() => setShowModal(true)} />
       ) : (
-        <s-section>
-          <FlowsTable
-            journeys={journeys}
-            onOpen={(id) => navigate(`/app/flows/${id}${location.search}`)}
-            onDuplicate={(id) => fetcher.submit({ intent: "duplicate", journeyId: id }, { method: "post" })}
-            onArchive={(id) => fetcher.submit({ intent: "archive", journeyId: id }, { method: "post" })}
-          />
-        </s-section>
+        <>
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <s-button variant="primary" onClick={() => setShowModal(true)}>
+              Create Flow
+            </s-button>
+          </div>
+          <s-section>
+            <FlowsTable
+              journeys={journeys}
+              onOpen={(id) => navigate(`/app/flows/${id}${location.search}`)}
+              onDuplicate={(id) => fetcher.submit({ intent: "duplicate", journeyId: id }, { method: "post" })}
+              onArchive={(id) => fetcher.submit({ intent: "archive", journeyId: id }, { method: "post" })}
+            />
+          </s-section>
+        </>
       )}
 
       {showModal && (
