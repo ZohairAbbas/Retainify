@@ -3,11 +3,13 @@
     "allow": [
       "WebFetch(domain:apps.shopify.com)",
       "WebFetch(domain:www.privy.com)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\zohair.abbas\\\\Retainify\" -Directory)",
+      "Bash(Select-Object Name)"
     ]
   },
+  "enableAllProjectMcpServers": true,
   "enabledMcpjsonServers": [
     "shopify-dev-mcp"
-  ],
-  "enableAllProjectMcpServers": true
+  ]
 }

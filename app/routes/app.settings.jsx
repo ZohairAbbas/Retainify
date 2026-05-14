@@ -76,89 +76,146 @@ export default function Settings() {
   }
 
   return (
-    <s-page heading="Settings">
-      <s-section heading="Sender details">
-        <s-form-layout>
-          <s-text-field
-            label="Sender name"
-            value={senderName}
-            onInput={(e) => setSenderName(e.target.value)}
-            placeholder="Your Store"
-            helpText="Shown as the From name in emails."
-          />
-          <s-text-field
-            label="Sender email"
-            type="email"
-            value={senderEmail}
-            onInput={(e) => setSenderEmail(e.target.value)}
-            placeholder="hello@yourstore.com"
-          />
-          <s-text-field
-            label="Reply-to email"
-            type="email"
-            value={replyTo}
-            onInput={(e) => setReplyTo(e.target.value)}
-            placeholder="support@yourstore.com"
-          />
-        </s-form-layout>
-      </s-section>
+    <div className="rt-page">
+      <header className="rt-page-head">
+        <div>
+          <div className="t-micro muted" style={{ marginBottom: 8 }}>Retainify</div>
+          <h1 className="t-display-2" style={{ margin: 0 }}>Settings</h1>
+        </div>
+      </header>
 
-      <s-section heading="Brand">
-        <s-form-layout>
-          <s-text-field
-            label="Brand color"
-            value={brandColor}
-            onInput={(e) => setBrandColor(e.target.value)}
-            placeholder="#000000"
-            helpText="Hex color used for buttons and accents in emails."
-          />
-          <s-text-field
-            label="Logo URL"
-            value={logoUrl}
-            onInput={(e) => setLogoUrl(e.target.value)}
-            placeholder="https://yourstore.com/logo.png"
-            helpText="Shown at the top of every recovery email."
-          />
-        </s-form-layout>
-      </s-section>
+      <div style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 16 }}>
 
-      <s-section heading="Quiet hours">
-        <s-text tone="subdued">Emails will not be sent during this window.</s-text>
-        <s-form-layout>
-          <s-select
-            label="Start (don't send after)"
-            options={JSON.stringify(HOURS)}
-            value={quietHoursStart}
-            onChange={(e) => setQuietHoursStart(e.detail?.value ?? e.target?.value ?? quietHoursStart)}
-          />
-          <s-select
-            label="End (resume sending after)"
-            options={JSON.stringify(HOURS)}
-            value={quietHoursEnd}
-            onChange={(e) => setQuietHoursEnd(e.detail?.value ?? e.target?.value ?? quietHoursEnd)}
-          />
-          <s-text-field
-            label="Store timezone"
-            value={storeTimezone}
-            onInput={(e) => setStoreTimezone(e.target.value)}
-            placeholder="Asia/Karachi"
-            helpText="IANA timezone e.g. Asia/Dubai, Asia/Kolkata, America/New_York"
-          />
-        </s-form-layout>
-      </s-section>
+        {/* Sender details */}
+        <section className="rt-form-section">
+          <div className="t-micro muted" style={{ marginBottom: 16 }}>Sender details</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label className="field-label">Sender name</label>
+              <input
+                className="input"
+                value={senderName}
+                onChange={(e) => setSenderName(e.target.value)}
+                placeholder="Your Store"
+              />
+              <div className="field-help">Shown as the From name in emails.</div>
+            </div>
+            <div>
+              <label className="field-label">Sender email</label>
+              <input
+                className="input"
+                type="email"
+                value={senderEmail}
+                onChange={(e) => setSenderEmail(e.target.value)}
+                placeholder="hello@yourstore.com"
+              />
+            </div>
+            <div>
+              <label className="field-label">Reply-to email</label>
+              <input
+                className="input"
+                type="email"
+                value={replyTo}
+                onChange={(e) => setReplyTo(e.target.value)}
+                placeholder="support@yourstore.com"
+              />
+            </div>
+          </div>
+        </section>
 
-      <div style={{ marginTop: "20px" }}>
-        <s-page-actions>
-          <s-button
-            slot="primaryAction"
+        {/* Brand */}
+        <section className="rt-form-section">
+          <div className="t-micro muted" style={{ marginBottom: 16 }}>Brand</div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label className="field-label">Brand color</label>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <input
+                  type="color"
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  style={{ width: 40, height: 36, padding: 2, border: "1px solid var(--hair-1)", borderRadius: "var(--r-2)", cursor: "pointer", background: "none" }}
+                />
+                <input
+                  className="input"
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  placeholder="#000000"
+                  style={{ flex: 1 }}
+                />
+              </div>
+              <div className="field-help">Hex color used for buttons and accents in emails.</div>
+            </div>
+            <div>
+              <label className="field-label">Logo URL</label>
+              <input
+                className="input"
+                value={logoUrl}
+                onChange={(e) => setLogoUrl(e.target.value)}
+                placeholder="https://yourstore.com/logo.png"
+              />
+              <div className="field-help">Shown at the top of every recovery email.</div>
+            </div>
+          </div>
+        </section>
+
+        {/* Quiet hours */}
+        <section className="rt-form-section">
+          <div className="t-micro muted" style={{ marginBottom: 4 }}>Quiet hours</div>
+          <div className="t-small muted" style={{ marginBottom: 16 }}>
+            Emails will not be sent during this window.
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+            <div>
+              <label className="field-label">Start (don&apos;t send after)</label>
+              <select
+                className="select"
+                value={quietHoursStart}
+                onChange={(e) => setQuietHoursStart(e.target.value)}
+              >
+                {HOURS.map((h) => (
+                  <option key={h.value} value={h.value}>{h.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="field-label">End (resume sending after)</label>
+              <select
+                className="select"
+                value={quietHoursEnd}
+                onChange={(e) => setQuietHoursEnd(e.target.value)}
+              >
+                {HOURS.map((h) => (
+                  <option key={h.value} value={h.value}>{h.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="field-label">Store timezone</label>
+              <input
+                className="input"
+                value={storeTimezone}
+                onChange={(e) => setStoreTimezone(e.target.value)}
+                placeholder="Asia/Karachi"
+              />
+              <div className="field-help">
+                IANA timezone e.g. Asia/Dubai, Asia/Kolkata, America/New_York
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+          <button
+            className="btn btn-primary"
             onClick={saveSettings}
-            {...(saving ? { loading: true } : {})}
+            disabled={saving}
           >
-            {saved ? "Saved!" : "Save settings"}
-          </s-button>
-        </s-page-actions>
+            {saved && !saving ? "Saved!" : "Save settings"}
+          </button>
+        </div>
       </div>
-    </s-page>
+    </div>
   );
 }
 

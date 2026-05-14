@@ -65,16 +65,7 @@ export default function PopupSettings() {
 
   function save() {
     fetcher.submit(
-      {
-        intent: "save-popup",
-        headline,
-        bodyText,
-        buttonText,
-        brandColor,
-        logoUrl,
-        discountPct,
-        delayMs,
-      },
+      { intent: "save-popup", headline, bodyText, buttonText, brandColor, logoUrl, discountPct, delayMs },
       { method: "post" },
     );
   }
@@ -84,218 +75,233 @@ export default function PopupSettings() {
   }
 
   return (
-    <s-page heading="Popup">
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 480px", gap: "20px", alignItems: "start" }}>
-        <div style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-          <s-section heading="Status">
-            <s-stack direction="inline" gap="base" align="center" justify="space-between">
-              <s-stack direction="block" gap="tight">
-                <s-text variant="bodyLg">{enabled ? "Enabled" : "Disabled"}</s-text>
-                <s-text tone="subdued" variant="bodySm">
+    <div className="rt-page">
+      <header className="rt-page-head">
+        <div>
+          <div className="t-micro muted" style={{ marginBottom: 8 }}>Retainify</div>
+          <h1 className="t-display-2" style={{ margin: 0 }}>Popup</h1>
+        </div>
+      </header>
+
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 24, alignItems: "start" }}>
+        {/* Left: form */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+
+          {/* Status */}
+          <section className="rt-form-section">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div className="t-micro muted" style={{ marginBottom: 4 }}>Status</div>
+                <div className="t-body" style={{ fontWeight: 500 }}>
+                  {enabled ? "Enabled" : "Disabled"}
+                </div>
+                <div className="t-small muted" style={{ marginTop: 2 }}>
                   {enabled
                     ? "The popup will appear on your storefront."
                     : "Toggle on to start showing the popup on your storefront."}
-                </s-text>
-              </s-stack>
-              <ToggleSwitch
-                checked={enabled}
-                onChange={toggleEnabled}
-                disabled={toggleFetcher.state !== "idle"}
-              />
-            </s-stack>
-          </s-section>
-
-          <s-section heading="Content">
-            <s-form-layout>
-              <s-text-field
-                label="Headline"
-                value={headline}
-                onInput={(e) => setHeadline(e.target.value)}
-              />
-              <s-text-field
-                label="Body text"
-                value={bodyText}
-                onInput={(e) => setBodyText(e.target.value)}
-              />
-              <s-text-field
-                label="Button text"
-                value={buttonText}
-                onInput={(e) => setButtonText(e.target.value)}
-              />
-            </s-form-layout>
-          </s-section>
-
-          <s-section heading="Appearance">
-            <s-form-layout>
-              <s-text-field
-                label="Button color"
-                value={brandColor}
-                onInput={(e) => setBrandColor(e.target.value)}
-                placeholder="#000000"
-                helpText="Hex color for the CTA button."
-              />
-              <s-text-field
-                label="Logo URL (optional)"
-                value={logoUrl}
-                onInput={(e) => setLogoUrl(e.target.value)}
-                placeholder="https://yourstore.com/logo.png"
-              />
-            </s-form-layout>
-          </s-section>
-
-          <s-section heading="Discount & timing">
-            <s-form-layout>
-              <s-select
-                label="Discount percentage"
-                value={discountPct}
-                onChange={(e) => setDiscountPct(e.target?.value ?? e.detail?.value ?? discountPct)}
-                helpText="Applied to the auto-generated single-use code sent after email confirmation."
-              >
-                <s-option value="5">5%</s-option>
-                <s-option value="10">10%</s-option>
-                <s-option value="15">15%</s-option>
-                <s-option value="20">20%</s-option>
-                <s-option value="25">25%</s-option>
-              </s-select>
-              <s-select
-                label="Trigger delay"
-                value={delayMs}
-                onChange={(e) => setDelayMs(e.target?.value ?? e.detail?.value ?? delayMs)}
-                helpText="Time before the popup appears on the storefront."
-              >
-                <s-option value="3000">3 seconds</s-option>
-                <s-option value="10000">10 seconds</s-option>
-                <s-option value="20000">20 seconds</s-option>
-                <s-option value="30000">30 seconds</s-option>
-                <s-option value="45000">45 seconds</s-option>
-                <s-option value="60000">60 seconds</s-option>
-              </s-select>
-            </s-form-layout>
-          </s-section>
-        </div>
-
-        <div style={{ position: "sticky", top: "16px" }}>
-          <s-section heading="Live preview">
-            <div style={{
-              background: "#6d7175",
-              borderRadius: "8px",
-              padding: "32px 16px",
-              minHeight: "480px",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}>
-              <div style={{
-                background: "#fff",
-                borderRadius: "12px",
-                padding: "36px 32px",
-                width: "100%",
-                maxWidth: "360px",
-                boxShadow: "0 20px 60px rgba(0,0,0,.18)",
-                fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-                position: "relative",
-              }}>
-                <div style={{
-                  position: "absolute", top: "12px", right: "14px",
-                  fontSize: "20px", color: "#888", lineHeight: 1,
-                }}>×</div>
-                {logoUrl && (
-                  <img src={logoUrl} alt="logo" style={{
-                    display: "block", maxHeight: "48px", maxWidth: "160px",
-                    margin: "0 auto 16px",
-                  }} />
-                )}
-                <h2 style={{
-                  margin: "0 0 8px", fontSize: "22px", fontWeight: 700,
-                  color: "#111", textAlign: "center",
-                }}>
-                  {headline || "Wait — don't go yet!"}
-                </h2>
-                <p style={{
-                  margin: "0 0 20px", fontSize: "14px", color: "#555",
-                  textAlign: "center", lineHeight: 1.6,
-                }}>
-                  {bodyText || "Enter your email for an exclusive discount on your first order."}
-                </p>
+                </div>
+              </div>
+              <label className="rt-toggle">
                 <input
-                  type="email"
-                  placeholder="your@email.com"
-                  readOnly
-                  style={{
-                    width: "100%", boxSizing: "border-box", padding: "12px 14px",
-                    border: "1.5px solid #ddd", borderRadius: "8px", fontSize: "15px",
-                    outline: "none", marginBottom: "10px",
-                  }}
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={toggleEnabled}
+                  disabled={toggleFetcher.state !== "idle"}
                 />
-                <button type="button" style={{
-                  width: "100%", padding: "13px", background: brandColor || "#000",
-                  color: "#fff", border: "none", borderRadius: "8px",
-                  fontSize: "15px", fontWeight: 600, cursor: "default",
-                }}>
-                  {buttonText || "Get my discount"}
-                </button>
-                {Number(discountPct) > 0 && (
-                  <p style={{
-                    marginTop: "10px", fontSize: "11px", color: "#aaa",
-                    textAlign: "center",
-                  }}>
-                    By subscribing you agree to receive marketing emails. Unsubscribe anytime.
-                  </p>
-                )}
+                <span className="rt-toggle-switch" />
+              </label>
+            </div>
+          </section>
+
+          {/* Content */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>Content</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label className="field-label">Headline</label>
+                <input
+                  className="input"
+                  value={headline}
+                  onChange={(e) => setHeadline(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="field-label">Body text</label>
+                <input
+                  className="input"
+                  value={bodyText}
+                  onChange={(e) => setBodyText(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="field-label">Button text</label>
+                <input
+                  className="input"
+                  value={buttonText}
+                  onChange={(e) => setButtonText(e.target.value)}
+                />
               </div>
             </div>
-          </s-section>
+          </section>
+
+          {/* Appearance */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>Appearance</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label className="field-label">Button color</label>
+                <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                  <input
+                    type="color"
+                    value={brandColor}
+                    onChange={(e) => setBrandColor(e.target.value)}
+                    style={{ width: 40, height: 36, padding: 2, border: "1px solid var(--hair-1)", borderRadius: "var(--r-2)", cursor: "pointer", background: "none" }}
+                  />
+                  <input
+                    className="input"
+                    value={brandColor}
+                    onChange={(e) => setBrandColor(e.target.value)}
+                    placeholder="#000000"
+                    style={{ flex: 1 }}
+                  />
+                </div>
+                <div className="field-help">Hex color for the CTA button.</div>
+              </div>
+              <div>
+                <label className="field-label">Logo URL (optional)</label>
+                <input
+                  className="input"
+                  value={logoUrl}
+                  onChange={(e) => setLogoUrl(e.target.value)}
+                  placeholder="https://yourstore.com/logo.png"
+                />
+              </div>
+            </div>
+          </section>
+
+          {/* Discount & timing */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>Discount &amp; timing</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label className="field-label">Discount percentage</label>
+                <select
+                  className="select"
+                  value={discountPct}
+                  onChange={(e) => setDiscountPct(e.target.value)}
+                >
+                  <option value="5">5%</option>
+                  <option value="10">10%</option>
+                  <option value="15">15%</option>
+                  <option value="20">20%</option>
+                  <option value="25">25%</option>
+                </select>
+                <div className="field-help">
+                  Applied to the auto-generated single-use code sent after email confirmation.
+                </div>
+              </div>
+              <div>
+                <label className="field-label">Trigger delay</label>
+                <select
+                  className="select"
+                  value={delayMs}
+                  onChange={(e) => setDelayMs(e.target.value)}
+                >
+                  <option value="3000">3 seconds</option>
+                  <option value="10000">10 seconds</option>
+                  <option value="20000">20 seconds</option>
+                  <option value="30000">30 seconds</option>
+                  <option value="45000">45 seconds</option>
+                  <option value="60000">60 seconds</option>
+                </select>
+                <div className="field-help">Time before the popup appears on the storefront.</div>
+              </div>
+            </div>
+          </section>
+
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button className="btn btn-primary" onClick={save} disabled={saving}>
+              {saved && !saving ? "Saved!" : "Save settings"}
+            </button>
+          </div>
+        </div>
+
+        {/* Right: live preview */}
+        <div style={{ position: "sticky", top: 16 }}>
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Live preview</div>
+          <div style={{
+            background: "var(--ink-4)",
+            borderRadius: "var(--r-3)",
+            padding: "32px 16px",
+            minHeight: 480,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+          }}>
+            <div style={{
+              background: "#fff",
+              borderRadius: 12,
+              padding: "36px 32px",
+              width: "100%",
+              maxWidth: 340,
+              boxShadow: "0 20px 60px rgba(0,0,0,.22)",
+              fontFamily: "var(--font-ui)",
+              position: "relative",
+            }}>
+              <div style={{
+                position: "absolute", top: 12, right: 14,
+                fontSize: 20, color: "#aaa", lineHeight: 1, cursor: "default",
+              }}>×</div>
+              {logoUrl && (
+                <img
+                  src={logoUrl}
+                  alt="logo"
+                  style={{ display: "block", maxHeight: 48, maxWidth: 160, margin: "0 auto 16px" }}
+                />
+              )}
+              <h2 style={{
+                margin: "0 0 8px", fontSize: 20, fontWeight: 700,
+                color: "#111", textAlign: "center", lineHeight: 1.3,
+              }}>
+                {headline || "Wait — don't go yet!"}
+              </h2>
+              <p style={{
+                margin: "0 0 20px", fontSize: 13, color: "#666",
+                textAlign: "center", lineHeight: 1.6,
+              }}>
+                {bodyText || "Enter your email for an exclusive discount on your first order."}
+              </p>
+              <input
+                type="email"
+                placeholder="your@email.com"
+                readOnly
+                style={{
+                  width: "100%", boxSizing: "border-box", padding: "11px 14px",
+                  border: "1.5px solid #e0e0e0", borderRadius: 8, fontSize: 14,
+                  outline: "none", marginBottom: 10,
+                }}
+              />
+              <button
+                type="button"
+                style={{
+                  width: "100%", padding: "12px",
+                  background: brandColor || "#000",
+                  color: "#fff", border: "none", borderRadius: 8,
+                  fontSize: 14, fontWeight: 600, cursor: "default",
+                }}
+              >
+                {buttonText || "Get my discount"}
+              </button>
+              {Number(discountPct) > 0 && (
+                <p style={{ marginTop: 10, fontSize: 11, color: "#bbb", textAlign: "center" }}>
+                  By subscribing you agree to receive marketing emails. Unsubscribe anytime.
+                </p>
+              )}
+            </div>
+          </div>
         </div>
       </div>
-
-      <div style={{ marginTop: "20px" }}>
-        <s-page-actions>
-          <s-button
-            slot="primaryAction"
-            onClick={save}
-            {...(saving ? { loading: true } : {})}
-          >
-            {saved ? "Saved!" : "Save settings"}
-          </s-button>
-        </s-page-actions>
-      </div>
-    </s-page>
-  );
-}
-
-function ToggleSwitch({ checked, onChange, disabled }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      onClick={onChange}
-      disabled={disabled}
-      style={{
-        width: "44px",
-        height: "24px",
-        borderRadius: "12px",
-        background: checked ? "#0c5132" : "#c9cccf",
-        border: "none",
-        position: "relative",
-        cursor: disabled ? "not-allowed" : "pointer",
-        transition: "background 0.2s",
-        opacity: disabled ? 0.6 : 1,
-        padding: 0,
-      }}
-    >
-      <span style={{
-        position: "absolute",
-        top: "2px",
-        left: checked ? "22px" : "2px",
-        width: "20px",
-        height: "20px",
-        borderRadius: "50%",
-        background: "#fff",
-        transition: "left 0.2s",
-        boxShadow: "0 1px 3px rgba(0,0,0,.2)",
-      }} />
-    </button>
+    </div>
   );
 }
 

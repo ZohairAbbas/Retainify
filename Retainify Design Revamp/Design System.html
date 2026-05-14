@@ -1,0 +1,619 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Retainify — Design System</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="src/tokens.css" />
+<style>
+  body { background: var(--paper-1); }
+  .wrap { max-width: 1240px; margin: 0 auto; padding: 64px 48px 120px; }
+  .ds-header { display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 32px; margin-bottom: 72px; padding-bottom: 32px; border-bottom: 1px solid var(--hair-2); }
+  .ds-eyebrow { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 16px; }
+  .ds-title { font-family: var(--font-display); font-size: 96px; line-height: 0.95; letter-spacing: -0.02em; margin: 0; color: var(--ink-1); }
+  .ds-title em { font-style: italic; color: var(--brand-700); }
+  .ds-lede { font-size: 16px; line-height: 1.55; color: var(--ink-3); max-width: 360px; margin: 0; }
+  .ds-meta { font-family: var(--font-mono); font-size: 11px; color: var(--ink-4); display: flex; flex-direction: column; gap: 4px; text-align: right; }
+
+  /* Section */
+  .sec { margin-bottom: 96px; }
+  .sec-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 32px; }
+  .sec-num { font-family: var(--font-mono); font-size: 12px; color: var(--ink-4); width: 32px; }
+  .sec-title { font-family: var(--font-display); font-size: 36px; line-height: 1.1; margin: 0; font-weight: 400; letter-spacing: -0.005em; }
+  .sec-desc { font-size: 14px; color: var(--ink-3); margin-left: auto; max-width: 360px; line-height: 1.5; }
+
+  /* Color */
+  .swatch-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 12px; }
+  .swatch { border-radius: var(--r-3); border: 1px solid var(--hair-1); overflow: hidden; background: var(--paper-3); }
+  .swatch-color { height: 88px; }
+  .swatch-meta { padding: 10px 12px; }
+  .swatch-name { font-size: 12px; font-weight: 600; color: var(--ink-1); margin-bottom: 2px; }
+  .swatch-token { font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); }
+  .swatch-hex { font-family: var(--font-mono); font-size: 10px; color: var(--ink-4); margin-top: 2px; }
+  .scale-row + .scale-row { margin-top: 24px; }
+  .scale-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 10px; }
+
+  /* Type */
+  .type-row { display: grid; grid-template-columns: 130px 1fr 200px; align-items: baseline; padding: 24px 0; border-top: 1px solid var(--hair-1); gap: 24px; }
+  .type-row:last-child { border-bottom: 1px solid var(--hair-1); }
+  .type-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-3); }
+  .type-meta { font-family: var(--font-mono); font-size: 11px; color: var(--ink-4); text-align: right; }
+  .type-sample { color: var(--ink-1); }
+
+  /* Components */
+  .comp-grid { display: grid; grid-template-columns: 280px 1fr; gap: 32px; padding: 24px 0; border-top: 1px solid var(--hair-1); }
+  .comp-meta h3 { font-family: var(--font-display); font-size: 22px; margin: 0 0 6px; font-weight: 400; }
+  .comp-meta p { font-size: 13px; color: var(--ink-3); margin: 0 0 12px; line-height: 1.5; }
+  .comp-meta code { font-family: var(--font-mono); font-size: 11px; color: var(--brand-700); background: var(--brand-50); padding: 2px 6px; border-radius: 4px; }
+  .comp-demo { background: var(--paper-2); border: 1px solid var(--hair-1); border-radius: var(--r-4); padding: 28px; display: flex; flex-wrap: wrap; align-items: center; gap: 14px; }
+
+  /* Spacing scale */
+  .sp-row { display: flex; align-items: center; gap: 16px; padding: 10px 0; border-bottom: 1px dashed var(--hair-1); }
+  .sp-token { font-family: var(--font-mono); font-size: 11px; width: 60px; color: var(--ink-3); }
+  .sp-px { font-family: var(--font-mono); font-size: 11px; width: 60px; color: var(--ink-4); }
+  .sp-bar { height: 16px; background: var(--brand-700); border-radius: 2px; }
+
+  /* Radii */
+  .radii-row { display: flex; gap: 24px; flex-wrap: wrap; }
+  .radii-cell { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .radii-swatch { width: 80px; height: 80px; background: var(--brand-100); border: 1px solid var(--hair-2); }
+
+  /* Nodes preview */
+  .nodes-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .node-preview {
+    background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4); padding: 16px;
+    display: flex; flex-direction: column; gap: 8px;
+  }
+  .node-preview .node-head { display: flex; align-items: center; gap: 10px; }
+  .node-glyph { width: 28px; height: 28px; border-radius: var(--r-2); display: flex; align-items: center; justify-content: center; }
+  .node-name { font-size: 13px; font-weight: 600; color: var(--ink-1); }
+  .node-body { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
+
+  /* Top nav link */
+  .topnav { position: sticky; top: 0; background: var(--paper-1); padding: 16px 48px; border-bottom: 1px solid var(--hair-1); display: flex; gap: 24px; font-family: var(--font-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); z-index: 10; }
+  .topnav a:hover { color: var(--brand-700); }
+  .topnav .spacer { flex: 1; }
+  .topnav .app-link { color: var(--brand-700); font-weight: 600; }
+
+  /* Iconography */
+  .icon-row { display: grid; grid-template-columns: repeat(8, 1fr); gap: 12px; }
+  .icon-cell { background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-3); padding: 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; }
+  .icon-name { font-family: var(--font-mono); font-size: 10px; color: var(--ink-3); }
+
+  /* Tokens table */
+  .tok-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tok-table th { text-align: left; font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); font-weight: 500; padding: 12px 16px; border-bottom: 1px solid var(--hair-2); }
+  .tok-table td { padding: 14px 16px; border-bottom: 1px solid var(--hair-1); }
+  .tok-table tr:hover td { background: var(--paper-2); }
+  .tok-table code { font-family: var(--font-mono); font-size: 12px; color: var(--brand-700); }
+
+  /* Voice & tone */
+  .voice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .voice-cell { padding: 24px; border: 1px solid var(--hair-1); border-radius: var(--r-4); background: var(--paper-3); }
+  .voice-cell h4 { font-family: var(--font-display); font-size: 22px; margin: 0 0 12px; font-weight: 400; }
+  .voice-cell ul { margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; line-height: 1.7; }
+  .voice-cell.do { border-color: var(--success-ink); }
+  .voice-cell.dont { border-color: var(--danger-ink); }
+  .voice-cell .tag { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 4px; }
+  .voice-cell.do .tag { color: var(--success-ink); }
+  .voice-cell.dont .tag { color: var(--danger-ink); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <a href="#color">Color</a>
+  <a href="#type">Typography</a>
+  <a href="#spacing">Spacing</a>
+  <a href="#components">Components</a>
+  <a href="#nodes">Canvas Nodes</a>
+  <a href="#icons">Icons</a>
+  <a href="#voice">Voice</a>
+  <span class="spacer"></span>
+  <a class="app-link" href="Retainify.html">→ Prototype</a>
+</nav>
+
+<div class="wrap">
+
+  <header class="ds-header">
+    <div>
+      <div class="ds-eyebrow">Retainify · Design System v1</div>
+      <h1 class="ds-title">Retain<em>ify</em></h1>
+      <p class="ds-lede" style="margin-top: 24px;">An editorial system for an automation product that doesn't feel like one. Warm paper, restrained color, deliberate type.</p>
+    </div>
+    <div class="ds-meta">
+      <span>RELEASE / 2026.05.14</span>
+      <span>FOR / CLAUDE CODE HANDOFF</span>
+      <span>STATUS / READY</span>
+    </div>
+  </header>
+
+  <!-- ─── PRINCIPLES ─────────────────────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">01</span>
+      <h2 class="sec-title">Principles</h2>
+      <p class="sec-desc">Five rules every screen answers to. Use them as a sanity check before shipping.</p>
+    </div>
+    <div style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px;">
+      <div style="padding: 24px; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4);">
+        <div class="t-micro" style="color: var(--ink-3); margin-bottom: 8px;">01</div>
+        <div class="t-h3" style="margin-bottom: 8px;">Paper, not pixels</div>
+        <div class="t-small muted">Warm cream over slate. The product is a workspace, not a dashboard.</div>
+      </div>
+      <div style="padding: 24px; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4);">
+        <div class="t-micro" style="color: var(--ink-3); margin-bottom: 8px;">02</div>
+        <div class="t-h3" style="margin-bottom: 8px;">Serifs earn it</div>
+        <div class="t-small muted">Display only. Never inside dense data, forms, or buttons.</div>
+      </div>
+      <div style="padding: 24px; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4);">
+        <div class="t-micro" style="color: var(--ink-3); margin-bottom: 8px;">03</div>
+        <div class="t-h3" style="margin-bottom: 8px;">One yellow</div>
+        <div class="t-small muted">Accent is a stage light, not a paint job. If it's everywhere, it's nowhere.</div>
+      </div>
+      <div style="padding: 24px; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4);">
+        <div class="t-micro" style="color: var(--ink-3); margin-bottom: 8px;">04</div>
+        <div class="t-h3" style="margin-bottom: 8px;">Density on demand</div>
+        <div class="t-small muted">Lists are tight. Editors breathe. Match Shopify density in tables.</div>
+      </div>
+      <div style="padding: 24px; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4);">
+        <div class="t-micro" style="color: var(--ink-3); margin-bottom: 8px;">05</div>
+        <div class="t-h3" style="margin-bottom: 8px;">Soon is honest</div>
+        <div class="t-small muted">Show what's coming. Never disable without a story.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── COLOR ──────────────────────────────────────────────────────────── -->
+  <section class="sec" id="color">
+    <div class="sec-head">
+      <span class="sec-num">02</span>
+      <h2 class="sec-title">Color</h2>
+      <p class="sec-desc">A palette built around two warm neutrals. Brand greens carry action; yellow accent is reserved for highlight and emphasis.</p>
+    </div>
+
+    <div class="scale-row">
+      <div class="scale-label">Paper · backgrounds &amp; surfaces</div>
+      <div class="swatch-grid">
+        <div class="swatch"><div class="swatch-color" style="background: var(--paper-0)"></div><div class="swatch-meta"><div class="swatch-name">Paper 0</div><div class="swatch-token">--paper-0</div><div class="swatch-hex">#EFE8D7</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--paper-1)"></div><div class="swatch-meta"><div class="swatch-name">Paper 1</div><div class="swatch-token">--paper-1</div><div class="swatch-hex">#F4EFE4</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--paper-2)"></div><div class="swatch-meta"><div class="swatch-name">Paper 2</div><div class="swatch-token">--paper-2</div><div class="swatch-hex">#FAF6EC</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--paper-3)"></div><div class="swatch-meta"><div class="swatch-name">Paper 3</div><div class="swatch-token">--paper-3</div><div class="swatch-hex">#FDFBF5</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--paper-pure); border-right: 1px solid var(--hair-1)"></div><div class="swatch-meta"><div class="swatch-name">Paper Pure</div><div class="swatch-token">--paper-pure</div><div class="swatch-hex">#FFFFFF</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--hair-1)"></div><div class="swatch-meta"><div class="swatch-name">Hair 1</div><div class="swatch-token">--hair-1</div><div class="swatch-hex">#E4DDCB</div></div></div>
+      </div>
+    </div>
+
+    <div class="scale-row">
+      <div class="scale-label">Ink · text &amp; iconography</div>
+      <div class="swatch-grid">
+        <div class="swatch"><div class="swatch-color" style="background: var(--ink-1)"></div><div class="swatch-meta"><div class="swatch-name">Ink 1</div><div class="swatch-token">--ink-1</div><div class="swatch-hex">#14201A</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--ink-2)"></div><div class="swatch-meta"><div class="swatch-name">Ink 2</div><div class="swatch-token">--ink-2</div><div class="swatch-hex">#2D362F</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--ink-3)"></div><div class="swatch-meta"><div class="swatch-name">Ink 3</div><div class="swatch-token">--ink-3</div><div class="swatch-hex">#5C625A</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--ink-4)"></div><div class="swatch-meta"><div class="swatch-name">Ink 4</div><div class="swatch-token">--ink-4</div><div class="swatch-hex">#8A8E84</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--ink-5)"></div><div class="swatch-meta"><div class="swatch-name">Ink 5</div><div class="swatch-token">--ink-5</div><div class="swatch-hex">#B5B8AE</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--hair-2)"></div><div class="swatch-meta"><div class="swatch-name">Hair 2</div><div class="swatch-token">--hair-2</div><div class="swatch-hex">#D2C9B0</div></div></div>
+      </div>
+    </div>
+
+    <div class="scale-row">
+      <div class="scale-label">Brand · action &amp; emphasis</div>
+      <div class="swatch-grid">
+        <div class="swatch"><div class="swatch-color" style="background: var(--brand-ink)"></div><div class="swatch-meta"><div class="swatch-name">Brand Ink</div><div class="swatch-token">--brand-ink</div><div class="swatch-hex">#14271D</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--brand-700)"></div><div class="swatch-meta"><div class="swatch-name">Brand 700</div><div class="swatch-token">--brand-700</div><div class="swatch-hex">#1F3D2F</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--brand-600)"></div><div class="swatch-meta"><div class="swatch-name">Brand 600</div><div class="swatch-token">--brand-600</div><div class="swatch-hex">#2A5240</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--brand-500)"></div><div class="swatch-meta"><div class="swatch-name">Brand 500</div><div class="swatch-token">--brand-500</div><div class="swatch-hex">#356A53</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--brand-100)"></div><div class="swatch-meta"><div class="swatch-name">Brand 100</div><div class="swatch-token">--brand-100</div><div class="swatch-hex">#DCE7DF</div></div></div>
+        <div class="swatch"><div class="swatch-color" style="background: var(--accent)"></div><div class="swatch-meta"><div class="swatch-name">Accent</div><div class="swatch-token">--accent</div><div class="swatch-hex">#E8F25A</div></div></div>
+      </div>
+    </div>
+
+    <div class="scale-row">
+      <div class="scale-label">Status pills</div>
+      <div style="display: flex; gap: 12px; flex-wrap: wrap;">
+        <span class="pill draft">Draft</span>
+        <span class="pill active">Active</span>
+        <span class="pill paused">Paused</span>
+        <span class="pill archived">Archived</span>
+        <span class="pill soon">Soon</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── TYPOGRAPHY ─────────────────────────────────────────────────────── -->
+  <section class="sec" id="type">
+    <div class="sec-head">
+      <span class="sec-num">03</span>
+      <h2 class="sec-title">Typography</h2>
+      <p class="sec-desc">Instrument Serif for display, Geist Sans for everything else. Mono for technical labels and data only.</p>
+    </div>
+
+    <div class="type-row">
+      <div class="type-label">Display 1</div>
+      <div class="t-display-1 type-sample">Win them <em style="color: var(--brand-700); font-family: var(--font-display)">back</em>.</div>
+      <div class="type-meta">Instrument Serif · 56/1.05<br/>Marketing &amp; hero only</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">Display 2</div>
+      <div class="t-display-2 type-sample">Welcome Series</div>
+      <div class="type-meta">Instrument Serif · 40/1.08<br/>Page headers</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">H1</div>
+      <div class="t-h1 type-sample">Customer Win-back</div>
+      <div class="type-meta">Instrument Serif · 28/1.2<br/>Section heads, modals</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">H2 / UI bold</div>
+      <div class="t-h2 type-sample">Trigger settings</div>
+      <div class="type-meta">Geist Sans 600 · 22/1.25</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">H3</div>
+      <div class="t-h3 type-sample">Entry frequency</div>
+      <div class="type-meta">Geist Sans 600 · 17/1.35</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">Body</div>
+      <div class="t-body type-sample">Contacts can re-enter this flow after a cooldown period. Useful for repeat-purchase campaigns where you want to re-engage without spamming.</div>
+      <div class="type-meta">Geist Sans 400 · 14/1.5</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">Small</div>
+      <div class="t-small muted type-sample">Subscribed to Marketing · 3 emails · 1,284 sent (last 30 days)</div>
+      <div class="type-meta">Geist Sans 400 · 13/1.45</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">Micro / eyebrow</div>
+      <div class="t-micro type-sample" style="color: var(--ink-3)">Best for</div>
+      <div class="type-meta">Geist Sans 600 · 11/1.4 · 0.06em</div>
+    </div>
+    <div class="type-row">
+      <div class="type-label">Mono</div>
+      <div class="t-mono type-sample" style="font-size: 13px;">customer_created · cart_abandoned · order_placed</div>
+      <div class="type-meta">Geist Mono 400 · 13<br/>Tokens, data, IDs</div>
+    </div>
+  </section>
+
+  <!-- ─── SPACING ────────────────────────────────────────────────────────── -->
+  <section class="sec" id="spacing">
+    <div class="sec-head">
+      <span class="sec-num">04</span>
+      <h2 class="sec-title">Spacing &amp; Radii</h2>
+      <p class="sec-desc">A 4px base scale. Stay on the scale unless you've thought hard about why you shouldn't.</p>
+    </div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 48px;">
+      <div>
+        <div class="scale-label">Spacing</div>
+        <div class="sp-row"><span class="sp-token">--s-1</span><span class="sp-px">4px</span><span class="sp-bar" style="width: 4px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-2</span><span class="sp-px">8px</span><span class="sp-bar" style="width: 8px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-3</span><span class="sp-px">12px</span><span class="sp-bar" style="width: 12px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-4</span><span class="sp-px">16px</span><span class="sp-bar" style="width: 16px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-5</span><span class="sp-px">20px</span><span class="sp-bar" style="width: 20px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-6</span><span class="sp-px">24px</span><span class="sp-bar" style="width: 24px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-7</span><span class="sp-px">32px</span><span class="sp-bar" style="width: 32px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-8</span><span class="sp-px">40px</span><span class="sp-bar" style="width: 40px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-9</span><span class="sp-px">48px</span><span class="sp-bar" style="width: 48px;"></span></div>
+        <div class="sp-row"><span class="sp-token">--s-10</span><span class="sp-px">64px</span><span class="sp-bar" style="width: 64px;"></span></div>
+      </div>
+      <div>
+        <div class="scale-label">Radii</div>
+        <div class="radii-row">
+          <div class="radii-cell"><div class="radii-swatch" style="border-radius: 4px"></div><div class="t-mono" style="font-size: 11px; color: var(--ink-3)">--r-1 · 4px</div></div>
+          <div class="radii-cell"><div class="radii-swatch" style="border-radius: 6px"></div><div class="t-mono" style="font-size: 11px; color: var(--ink-3)">--r-2 · 6px</div></div>
+          <div class="radii-cell"><div class="radii-swatch" style="border-radius: 8px"></div><div class="t-mono" style="font-size: 11px; color: var(--ink-3)">--r-3 · 8px</div></div>
+          <div class="radii-cell"><div class="radii-swatch" style="border-radius: 12px"></div><div class="t-mono" style="font-size: 11px; color: var(--ink-3)">--r-4 · 12px</div></div>
+          <div class="radii-cell"><div class="radii-swatch" style="border-radius: 16px"></div><div class="t-mono" style="font-size: 11px; color: var(--ink-3)">--r-5 · 16px</div></div>
+          <div class="radii-cell"><div class="radii-swatch" style="border-radius: 999px"></div><div class="t-mono" style="font-size: 11px; color: var(--ink-3)">--r-pill</div></div>
+        </div>
+        <div class="scale-label" style="margin-top: 40px">Elevation</div>
+        <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-top: 12px">
+          <div style="background: var(--paper-3); border-radius: var(--r-4); height: 80px; box-shadow: var(--sh-1); display: flex; align-items: end; justify-content: center; padding: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--ink-3)">sh-1</div>
+          <div style="background: var(--paper-3); border-radius: var(--r-4); height: 80px; box-shadow: var(--sh-2); display: flex; align-items: end; justify-content: center; padding: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--ink-3)">sh-2</div>
+          <div style="background: var(--paper-3); border-radius: var(--r-4); height: 80px; box-shadow: var(--sh-3); display: flex; align-items: end; justify-content: center; padding: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--ink-3)">sh-3</div>
+          <div style="background: var(--paper-3); border-radius: var(--r-4); height: 80px; box-shadow: var(--sh-4); display: flex; align-items: end; justify-content: center; padding: 8px; font-family: var(--font-mono); font-size: 10px; color: var(--ink-3)">sh-4</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── COMPONENTS ─────────────────────────────────────────────────────── -->
+  <section class="sec" id="components">
+    <div class="sec-head">
+      <span class="sec-num">05</span>
+      <h2 class="sec-title">Components</h2>
+      <p class="sec-desc">The kit. Every screen in Retainify is composed from these.</p>
+    </div>
+
+    <div class="comp-grid">
+      <div class="comp-meta">
+        <h3>Buttons</h3>
+        <p>Primary is forest. Use one per surface. Accent yellow only for delight moments — never for default actions.</p>
+        <code>.btn .btn-primary</code>
+      </div>
+      <div class="comp-demo">
+        <button class="btn btn-primary">Publish flow</button>
+        <button class="btn btn-secondary">Save draft</button>
+        <button class="btn btn-ghost">Cancel</button>
+        <button class="btn btn-accent">Customize →</button>
+        <button class="btn btn-danger">Archive</button>
+        <button class="btn btn-primary" disabled>Disabled</button>
+      </div>
+    </div>
+
+    <div class="comp-grid">
+      <div class="comp-meta">
+        <h3>Inputs</h3>
+        <p>One height (36px). Warm cream surface with sand border, forest focus ring.</p>
+        <code>.input .select .textarea</code>
+      </div>
+      <div class="comp-demo" style="flex-direction: column; align-items: stretch; gap: 16px;">
+        <div><label class="field-label">Flow name</label><input class="input" value="Welcome Series" /></div>
+        <div><label class="field-label">Subject</label><input class="input" placeholder="Welcome to our brand" /></div>
+        <div><label class="field-label">Preview text</label><textarea class="textarea" placeholder="A short preview snippet..."></textarea></div>
+      </div>
+    </div>
+
+    <div class="comp-grid">
+      <div class="comp-meta">
+        <h3>Status pills</h3>
+        <p>22px tall, uppercase 11/0.04em, leading dot in the same ink. Use exact lifecycle labels — don't invent new ones.</p>
+        <code>.pill .pill.active</code>
+      </div>
+      <div class="comp-demo">
+        <span class="pill draft">Draft</span>
+        <span class="pill active">Active</span>
+        <span class="pill paused">Paused</span>
+        <span class="pill archived">Archived</span>
+        <span class="pill soon">Soon</span>
+      </div>
+    </div>
+
+    <div class="comp-grid">
+      <div class="comp-meta">
+        <h3>Table row</h3>
+        <p>Tight (52px tall) so a screen full of flows feels like a real list. Bold name, muted meta below.</p>
+        <code>.flow-row</code>
+      </div>
+      <div class="comp-demo" style="flex-direction: column; align-items: stretch; gap: 0; padding: 0; background: var(--paper-3);">
+        <div style="display: grid; grid-template-columns: 2.4fr 0.9fr 1fr 0.9fr 0.9fr; gap: 16px; padding: 16px 20px; border-bottom: 1px solid var(--hair-1); align-items: center;">
+          <div>
+            <div style="font-weight: 600; color: var(--ink-1); margin-bottom: 2px;">Welcome Series</div>
+            <div style="font-size: 12px; color: var(--ink-3);">Subscribed to Marketing · 3 emails</div>
+          </div>
+          <span class="pill active">Active</span>
+          <div style="font-family: var(--font-mono); font-size: 12px; color: var(--ink-3);">2 days ago</div>
+          <div style="font-family: var(--font-mono); font-size: 13px; color: var(--ink-1);">1,284</div>
+          <div style="font-family: var(--font-mono); font-size: 13px; color: var(--ink-1);">38.2%</div>
+        </div>
+        <div style="display: grid; grid-template-columns: 2.4fr 0.9fr 1fr 0.9fr 0.9fr; gap: 16px; padding: 16px 20px; align-items: center;">
+          <div>
+            <div style="font-weight: 600; color: var(--ink-1); margin-bottom: 2px;">Abandoned Cart</div>
+            <div style="font-size: 12px; color: var(--ink-3);">Cart Abandoned · 3 emails</div>
+          </div>
+          <span class="pill draft">Draft</span>
+          <div style="font-family: var(--font-mono); font-size: 12px; color: var(--ink-3);">just now</div>
+          <div style="font-family: var(--font-mono); font-size: 13px; color: var(--ink-4);">—</div>
+          <div style="font-family: var(--font-mono); font-size: 13px; color: var(--ink-4);">—</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="comp-grid">
+      <div class="comp-meta">
+        <h3>Template card</h3>
+        <p>Used in the Create Flow gallery. Selectable; highlights with forest border. Email count in the corner.</p>
+        <code>.template-card</code>
+      </div>
+      <div class="comp-demo" style="gap: 16px;">
+        <div style="background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4); padding: 20px; width: 260px;">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+            <span class="pill" style="background: var(--node-trigger-bg); color: var(--node-trigger-ink); text-transform: none; font-size: 11px; padding: 2px 8px; height: auto;">⤵ New Contact</span>
+            <div style="font-family: var(--font-mono); font-size: 11px; color: var(--ink-3);">3 ✉</div>
+          </div>
+          <div class="t-h3" style="font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 6px;">Welcome Series</div>
+          <div class="t-small muted">Turn new subscribers into first-time customers with a proven email series.</div>
+        </div>
+        <div style="background: var(--paper-3); border: 2px solid var(--brand-700); border-radius: var(--r-4); padding: 19px; width: 260px;">
+          <div style="display: flex; justify-content: space-between; align-items: start; margin-bottom: 12px;">
+            <span class="pill" style="background: var(--node-sms-bg); color: var(--node-sms-ink); text-transform: none; font-size: 11px; padding: 2px 8px; height: auto;">🛒 Cart Abandoned</span>
+            <div style="font-family: var(--font-mono); font-size: 11px; color: var(--ink-3);">3 ✉</div>
+          </div>
+          <div class="t-h3" style="font-family: var(--font-display); font-weight: 400; font-size: 22px; margin-bottom: 6px;">Abandoned Cart</div>
+          <div class="t-small muted">Prevent lost sales with a series of targeted emails when a customer abandons their cart.</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="comp-grid">
+      <div class="comp-meta">
+        <h3>Inspector section</h3>
+        <p>Right panel pattern. 360-380px wide, paper-2 background, hairline-separated sections, mono-style eyebrows.</p>
+        <code>.inspector .ins-section</code>
+      </div>
+      <div class="comp-demo" style="background: var(--paper-2); align-items: stretch; padding: 0; width: 380px; flex-direction: column;">
+        <div style="padding: 20px; border-bottom: 1px solid var(--hair-1);">
+          <div class="t-micro muted" style="margin-bottom: 4px;">Selected</div>
+          <div class="t-h3">Email Message #1</div>
+        </div>
+        <div style="padding: 20px;">
+          <div class="t-micro muted" style="margin-bottom: 12px;">Entry Frequency</div>
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <label style="display: flex; gap: 10px; align-items: start; cursor: pointer;">
+              <span style="width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--brand-700); display: inline-block; flex-shrink: 0; margin-top: 2px; position: relative;"><span style="position: absolute; inset: 3px; background: var(--brand-700); border-radius: 50%;"></span></span>
+              <span><span style="font-weight: 500; color: var(--ink-1);">No re-entry</span><br/><span class="t-small muted">Once enrolled, never again.</span></span>
+            </label>
+            <label style="display: flex; gap: 10px; align-items: start; cursor: pointer;">
+              <span style="width: 16px; height: 16px; border-radius: 50%; border: 1.5px solid var(--hair-3); display: inline-block; flex-shrink: 0; margin-top: 2px;"></span>
+              <span><span style="font-weight: 500; color: var(--ink-1);">Delayed re-entry</span><br/><span class="t-small muted">After a waiting period.</span></span>
+            </label>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── CANVAS NODES ───────────────────────────────────────────────────── -->
+  <section class="sec" id="nodes">
+    <div class="sec-head">
+      <span class="sec-num">06</span>
+      <h2 class="sec-title">Canvas Nodes</h2>
+      <p class="sec-desc">Each node type has a distinct tinted glyph — same shape, different ink. Lock badge marks roadmap items.</p>
+    </div>
+    <div class="nodes-row">
+      <div class="node-preview">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--node-trigger-bg); color: var(--node-trigger-ink); font-family: var(--font-mono); font-size: 14px;">⤵</span>
+          <span class="node-name">Trigger</span>
+        </div>
+        <div class="node-body">Subscribed to Marketing</div>
+      </div>
+      <div class="node-preview">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--node-email-bg); color: var(--node-email-ink); font-family: var(--font-mono); font-size: 14px;">✉</span>
+          <span class="node-name">Email</span>
+        </div>
+        <div class="node-body">Subject: Welcome to our brand</div>
+      </div>
+      <div class="node-preview">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--node-sms-bg); color: var(--node-sms-ink); font-family: var(--font-mono); font-size: 14px;">◉</span>
+          <span class="node-name">SMS <span class="pill soon" style="margin-left: 4px; height: 16px; font-size: 9px; padding: 0 5px;">Soon</span></span>
+        </div>
+        <div class="node-body">Text message, single send</div>
+      </div>
+      <div class="node-preview">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--node-delay-bg); color: var(--node-delay-ink); font-family: var(--font-mono); font-size: 14px;">⏱</span>
+          <span class="node-name">Delay</span>
+        </div>
+        <div class="node-body">Wait 24 hours</div>
+      </div>
+      <div class="node-preview">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--node-split-bg); color: var(--node-split-ink); font-family: var(--font-mono); font-size: 14px;">⌥</span>
+          <span class="node-name">Split <span class="pill soon" style="margin-left: 4px; height: 16px; font-size: 9px; padding: 0 5px;">Soon</span></span>
+        </div>
+        <div class="node-body">Branch on a condition</div>
+      </div>
+      <div class="node-preview">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--node-tag-bg); color: var(--node-tag-ink); font-family: var(--font-mono); font-size: 14px;">#</span>
+          <span class="node-name">Tag <span class="pill soon" style="margin-left: 4px; height: 16px; font-size: 9px; padding: 0 5px;">Soon</span></span>
+        </div>
+        <div class="node-body">Tag contact for segmentation</div>
+      </div>
+      <div class="node-preview">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--node-exit-bg); color: var(--node-exit-ink); font-family: var(--font-mono); font-size: 14px;">⇥</span>
+          <span class="node-name">Exit</span>
+        </div>
+        <div class="node-body">The contact exits the flow</div>
+      </div>
+      <div class="node-preview" style="background: var(--paper-2); border-style: dashed;">
+        <div class="node-head">
+          <span class="node-glyph" style="background: var(--paper-3); color: var(--ink-3); font-family: var(--font-mono); font-size: 14px; border: 1px dashed var(--hair-3);">＋</span>
+          <span class="node-name muted">Insert</span>
+        </div>
+        <div class="node-body">Click to add a step</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── ICONS ──────────────────────────────────────────────────────────── -->
+  <section class="sec" id="icons">
+    <div class="sec-head">
+      <span class="sec-num">07</span>
+      <h2 class="sec-title">Iconography</h2>
+      <p class="sec-desc">Hand-picked glyphs (Lucide / Phosphor light). 1.5px stroke, 20px size. Never filled — always linear.</p>
+    </div>
+    <div class="icon-row">
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16v4l-6 6v6l-4-2v-4L4 8V4z"/></svg><span class="icon-name">filter</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 8l9 6 9-6"/></svg><span class="icon-name">mail</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg><span class="icon-name">clock</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg><span class="icon-name">check</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v14M5 12h14"/></svg><span class="icon-name">plus</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v18M18 3v18M6 12h12"/></svg><span class="icon-name">columns</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h16M4 12h16M4 18h10"/></svg><span class="icon-name">list</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M19 12a7 7 0 1 1-7-7"/></svg><span class="icon-name">target</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7l9-4 9 4-9 4-9-4z"/><path d="M3 12l9 4 9-4M3 17l9 4 9-4"/></svg><span class="icon-name">flow</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg><span class="icon-name">user</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5 8l7-5 7 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V8z"/><path d="M9 21V12h6v9"/></svg><span class="icon-name">home</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1A2 2 0 1 1 4.4 17l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.8l-.1-.1A2 2 0 1 1 7 4.4l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1A2 2 0 1 1 19.6 7l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg><span class="icon-name">settings</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-5-5"/></svg><span class="icon-name">search</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="12" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="19" cy="12" r="1.5"/></svg><span class="icon-name">more</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="11" width="12" height="9" rx="2"/><path d="M9 11V7a3 3 0 0 1 6 0v4"/></svg><span class="icon-name">lock</span></div>
+      <div class="icon-cell"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12l4 4 14-14"/></svg><span class="icon-name">tick</span></div>
+    </div>
+  </section>
+
+  <!-- ─── VOICE ──────────────────────────────────────────────────────────── -->
+  <section class="sec" id="voice">
+    <div class="sec-head">
+      <span class="sec-num">08</span>
+      <h2 class="sec-title">Voice &amp; Copy</h2>
+      <p class="sec-desc">Short. Specific. Plain. We're a tool, not a hype machine.</p>
+    </div>
+    <div class="voice-grid">
+      <div class="voice-cell do">
+        <div class="tag">Do</div>
+        <h4>Plain &amp; concrete</h4>
+        <ul>
+          <li>"Send 24 hours after the cart was abandoned"</li>
+          <li>"This flow has been live for 9 days. 1,284 emails delivered."</li>
+          <li>"Contacts can re-enter after a cooldown."</li>
+          <li>"Publish to start sending."</li>
+        </ul>
+      </div>
+      <div class="voice-cell dont">
+        <div class="tag">Don't</div>
+        <h4>Vague &amp; salesy</h4>
+        <ul>
+          <li>"Unlock the power of automation"</li>
+          <li>"Deliver delight to every customer 🚀"</li>
+          <li>"Supercharge your revenue"</li>
+          <li>"Click here to elevate your strategy"</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─── TOKEN REFERENCE ────────────────────────────────────────────────── -->
+  <section class="sec">
+    <div class="sec-head">
+      <span class="sec-num">09</span>
+      <h2 class="sec-title">Token reference</h2>
+      <p class="sec-desc">Every CSS variable lives in <code style="font-family: var(--font-mono); font-size: 12px;">src/tokens.css</code>. Import that file and you have everything.</p>
+    </div>
+    <div style="background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4); overflow: hidden;">
+      <table class="tok-table">
+        <thead><tr><th>Token</th><th>Purpose</th><th>Value</th></tr></thead>
+        <tbody>
+          <tr><td><code>--brand-700</code></td><td>Primary action, focus, key text emphasis</td><td>#1F3D2F</td></tr>
+          <tr><td><code>--paper-1</code></td><td>App background</td><td>#F4EFE4</td></tr>
+          <tr><td><code>--paper-3</code></td><td>Cards, modals, primary surface</td><td>#FDFBF5</td></tr>
+          <tr><td><code>--ink-1</code></td><td>Primary text</td><td>#14201A</td></tr>
+          <tr><td><code>--hair-1</code></td><td>Default border</td><td>#E4DDCB</td></tr>
+          <tr><td><code>--accent</code></td><td>Highlight only — never default</td><td>#E8F25A</td></tr>
+          <tr><td><code>--font-display</code></td><td>Headings &amp; display copy</td><td>Instrument Serif</td></tr>
+          <tr><td><code>--font-ui</code></td><td>UI &amp; body</td><td>Geist</td></tr>
+          <tr><td><code>--font-mono</code></td><td>Tokens, data, IDs</td><td>Geist Mono</td></tr>
+          <tr><td><code>--nav-w</code></td><td>Left sidebar width</td><td>240px</td></tr>
+          <tr><td><code>--inspector-w</code></td><td>Right inspector width</td><td>380px</td></tr>
+          <tr><td><code>--topbar-h</code></td><td>Sticky top bar height</td><td>56px</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer style="border-top: 1px solid var(--hair-2); padding-top: 32px; display: flex; justify-content: space-between; align-items: end; color: var(--ink-3); font-family: var(--font-mono); font-size: 11px;">
+    <div>RETAINIFY · DESIGN SYSTEM</div>
+    <div><a href="Retainify.html" style="color: var(--brand-700); font-weight: 600;">→ See the prototype</a></div>
+  </footer>
+
+</div>
+</body>
+</html>
