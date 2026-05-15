@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, Fragment } from "react";
 import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
@@ -388,30 +388,32 @@ export default function FlowBuilder() {
         <div className="rt-builder-canvas">
           {viewMode === "canvas" ? (
             <div className="rt-canvas-pad">
-              {nodes.map((node, idx) => (
-                <div key={node.id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-                  <NodeCard
-                    node={node}
-                    journey={journey}
-                    selected={node.id === selectedId}
-                    onSelect={() => setSelectedId(node.id)}
-                    onDuplicate={() => duplicateNode(node.id)}
-                    onDelete={() => deleteNode(node.id)}
-                    stats={stats?.[node.id]}
-                    previewHtml={previews?.[node.id]}
-                    showPreview={showPreview}
-                    showAnalytics={showAnalytics}
-                  />
-                  {node.kind !== "exit" && (
-                    <Connector
-                      id={`conn-${idx}`}
-                      openMenuId={openMenuId}
-                      setOpenMenuId={setOpenMenuId}
-                      onInsert={(kind) => insertNode(idx, kind)}
+              <div className="rt-canvas-col">
+                {nodes.map((node, idx) => (
+                  <Fragment key={node.id}>
+                    <NodeCard
+                      node={node}
+                      journey={journey}
+                      selected={node.id === selectedId}
+                      onSelect={() => setSelectedId(node.id)}
+                      onDuplicate={() => duplicateNode(node.id)}
+                      onDelete={() => deleteNode(node.id)}
+                      stats={stats?.[node.id]}
+                      previewHtml={previews?.[node.id]}
+                      showPreview={showPreview}
+                      showAnalytics={showAnalytics}
                     />
-                  )}
-                </div>
-              ))}
+                    {node.kind !== "exit" && (
+                      <Connector
+                        id={`conn-${idx}`}
+                        openMenuId={openMenuId}
+                        setOpenMenuId={setOpenMenuId}
+                        onInsert={(kind) => insertNode(idx, kind)}
+                      />
+                    )}
+                  </Fragment>
+                ))}
+              </div>
             </div>
           ) : (
             <FormView
@@ -849,10 +851,6 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
   }
 
   if (node.kind === "delay") {
-    const totalHours = Number(node.hours) || 0;
-    const days = Math.floor(totalHours / 24);
-    const remHours = totalHours - days * 24;
-
     return (
       <div className="rt-ins">
         <div className="rt-ins-head">

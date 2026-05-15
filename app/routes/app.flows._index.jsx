@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, Fragment } from "react";
 import { useLoaderData, useNavigate, useLocation, useFetcher, redirect } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
@@ -348,37 +348,14 @@ function FlowsList({ journeys, onCreate, onOpen, onDuplicate, onArchive }) {
               <div className="rt-tnum t-mono">{openRate}</div>
               <div className="rt-tnum t-mono">{clickRate}</div>
               <div className="rt-tactions" onClick={(e) => e.stopPropagation()}>
-                <button
-                  className="btn btn-ghost btn-icon"
-                  onClick={() => setOpenMenu(openMenu === j.id ? null : j.id)}
-                  aria-label="Row actions"
-                >
-                  <Icons.More size={16} />
-                </button>
-                {openMenu === j.id && (
-                  <>
-                    <button
-                      type="button"
-                      aria-label="Close menu"
-                      onClick={() => setOpenMenu(null)}
-                      style={{
-                        position: "fixed", inset: 0, zIndex: 10,
-                        background: "transparent", border: "none", padding: 0, cursor: "default",
-                      }}
-                    />
-                    <div className="rt-menu">
-                      <button onClick={() => { setOpenMenu(null); onOpen(j.id); }}>
-                        <Icons.Eye size={14} /> View
-                      </button>
-                      <button onClick={() => { setOpenMenu(null); onDuplicate(j.id); }}>
-                        <Icons.Copy size={14} /> Duplicate
-                      </button>
-                      <button className="rt-menu-danger" onClick={() => { setOpenMenu(null); onArchive(j.id); }}>
-                        <Icons.Trash size={14} /> Archive
-                      </button>
-                    </div>
-                  </>
-                )}
+                <RowMenu
+                  open={openMenu === j.id}
+                  onToggle={() => setOpenMenu(openMenu === j.id ? null : j.id)}
+                  onClose={() => setOpenMenu(null)}
+                  onView={() => { setOpenMenu(null); onOpen(j.id); }}
+                  onDuplicate={() => { setOpenMenu(null); onDuplicate(j.id); }}
+                  onArchive={() => { setOpenMenu(null); onArchive(j.id); }}
+                />
               </div>
             </div>
           );
@@ -397,6 +374,59 @@ function FlowsList({ journeys, onCreate, onOpen, onDuplicate, onArchive }) {
   );
 }
 
+function RowMenu({ open, onToggle, onClose, onView, onDuplicate, onArchive }) {
+  const btnRef = useRef(null);
+  const [pos, setPos] = useState(null);
+
+  function handleToggle() {
+    if (!open && btnRef.current) {
+      const r = btnRef.current.getBoundingClientRect();
+      setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    }
+    onToggle();
+  }
+
+  return (
+    <>
+      <button
+        ref={btnRef}
+        className="btn btn-ghost btn-icon"
+        onClick={handleToggle}
+        aria-label="Row actions"
+      >
+        <Icons.More size={16} />
+      </button>
+      {open && pos && (
+        <>
+          <button
+            type="button"
+            aria-label="Close menu"
+            onClick={onClose}
+            style={{
+              position: "fixed", inset: 0, zIndex: 50,
+              background: "transparent", border: "none", padding: 0, cursor: "default",
+            }}
+          />
+          <div
+            className="rt-menu"
+            style={{ position: "fixed", top: pos.top, right: pos.right, zIndex: 51 }}
+          >
+            <button onClick={onView}>
+              <Icons.Eye size={14} /> View
+            </button>
+            <button onClick={onDuplicate}>
+              <Icons.Copy size={14} /> Duplicate
+            </button>
+            <button className="rt-menu-danger" onClick={onArchive}>
+              <Icons.Trash size={14} /> Archive
+            </button>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function FlowMiniMap({ template }) {
   const nodes = template.nodes || template.definition?.steps || [];
   return (
@@ -409,7 +439,7 @@ function FlowMiniMap({ template }) {
       {nodes.map((n, i) => {
         const type = n.type || n.nodeType;
         return (
-          <React.Fragment key={n.id || i}>
+          <Fragment key={n.id || i}>
             {type === "email" && (
               <div className="rt-minimap-node rt-mini-email">
                 <Icons.Mail size={10} />
@@ -425,7 +455,7 @@ function FlowMiniMap({ template }) {
               </div>
             )}
             <div className="rt-minimap-line" />
-          </React.Fragment>
+          </Fragment>
         );
       })}
       <div className="rt-minimap-node rt-mini-exit">
