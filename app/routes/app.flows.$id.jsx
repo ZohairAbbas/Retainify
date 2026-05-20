@@ -8,6 +8,7 @@ import { saveDraft, publishJourney, pauseJourney, unpublishToDraft, archiveJourn
 import { getStepStats } from "../lib/journey/journey-analytics.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
+import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
 const SAMPLE_LINE_ITEMS = [
   {
@@ -53,7 +54,7 @@ export const loader = async ({ request, params }) => {
   const [journey, settings] = await Promise.all([
     prisma.journey.findFirst({
       where: { id, shop },
-      include: { steps: { orderBy: { positionY: "asc" } } },
+      include: { steps: { where: { isArchived: false }, orderBy: { positionY: "asc" } } },
     }),
     prisma.shopSettings.findUnique({ where: { shop } }),
   ]);
@@ -116,6 +117,8 @@ function expandCanvasNodes(steps) {
         templateStyle: s.templateStyle,
         discountPct: s.discountPct,
         isEnabled: s.isEnabled,
+        emailBlocks: safeJson(s.emailBlocks, []),
+        emailBrand: safeJson(s.emailBrand, {}),
       });
     }
   }
@@ -158,6 +161,8 @@ export const action = async ({ request, params }) => {
           templateStyle: n.templateStyle || "classic",
           discountPct: Number(n.discountPct) || 0,
           isEnabled: n.isEnabled !== false,
+          emailBlocks: JSON.stringify(n.emailBlocks || []),
+          emailBrand: JSON.stringify(n.emailBrand || {}),
         };
       });
 
@@ -204,6 +209,7 @@ export default function FlowBuilder() {
   const [showAnalytics, setShowAnalytics] = useState(journey.status === "published");
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [emailEditorNodeId, setEmailEditorNodeId] = useState(null);
 
   const isDirty = useMemo(() => {
     return (
@@ -300,6 +306,29 @@ export default function FlowBuilder() {
   const pillLabel = pillClass === "active" ? "Active" : pillClass.charAt(0).toUpperCase() + pillClass.slice(1);
   const isPublished = journey.status === "published";
   const saving = fetcher.state !== "idle";
+
+  // ── Email visual editor full-page takeover ──
+  if (emailEditorNodeId) {
+    const emailNode = nodes.find((n) => n.id === emailEditorNodeId);
+    if (emailNode) {
+      return (
+        <EmailEditor
+          flow={{ name }}
+          node={emailNode}
+          onBack={() => setEmailEditorNodeId(null)}
+          onSave={(updatedNode) => {
+            updateNode(updatedNode.id, {
+              subject: updatedNode.subject,
+              previewText: updatedNode.previewText,
+              emailBlocks: updatedNode.emailBlocks,
+              emailBrand: updatedNode.emailBrand,
+            });
+            setEmailEditorNodeId(null);
+          }}
+        />
+      );
+    }
+  }
 
   return (
     <div className="rt-builder-shell">
@@ -437,6 +466,7 @@ export default function FlowBuilder() {
             setExitCriteria={setExitCriteria}
             settings={settings}
             onChange={(patch) => selected && updateNode(selected.id, patch)}
+            onOpenEditor={setEmailEditorNodeId}
           />
         </div>
       </div>
@@ -544,9 +574,13 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
         {node.discountPct > 0 && (
           <span className="rt-discount">{node.discountPct}% discount</span>
         )}
-        {showPreview && previewHtml && (
+        {showPreview && (
           <div className="rt-node-preview">
-            <EmailPreview node={node} />
+            {node.emailBlocks?.length ? (
+              <RenderedBlockPreview node={node} />
+            ) : (
+              <EmailPreview node={node} />
+            )}
           </div>
         )}
         {showAnalytics && stats && (
@@ -647,7 +681,7 @@ function InsertMenu({ open, onClose, onAdd }) {
   );
 }
 
-function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, settings, onChange }) {
+function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, settings, onChange, onOpenEditor }) {
   if (!node) {
     return (
       <div className="rt-ins">
@@ -799,18 +833,15 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
 
         <div className="rt-ins-section">
           <div className="t-micro muted" style={{ marginBottom: 12 }}>Design</div>
-          <label className="field-label">Template style</label>
-          <div className="rt-segmented">
-            {["classic", "bold", "minimal"].map((s) => (
-              <button
-                key={s}
-                className={(node.templateStyle || "classic") === s ? "rt-seg-on" : ""}
-                onClick={() => onChange({ templateStyle: s })}
-              >
-                {s.charAt(0).toUpperCase() + s.slice(1)}
-              </button>
-            ))}
-          </div>
+          <button className="btn btn-secondary" style={{ width: "100%", justifyContent: "center" }}
+                  onClick={() => onOpenEditor && onOpenEditor(node.id)}>
+            <Icons.Tab size={14} /> Open visual editor
+          </button>
+          {node.emailBlocks?.length > 0 && (
+            <div className="field-help" style={{ marginTop: 8 }}>
+              {node.emailBlocks.length} block{node.emailBlocks.length !== 1 ? "s" : ""} — click to edit
+            </div>
+          )}
         </div>
 
         <div className="rt-ins-section">

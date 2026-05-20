@@ -44,6 +44,30 @@ export const IconBell = (p) => <I {...p}><path d="M6 8a6 6 0 0 1 12 0c0 7 3 7 3 
 export const IconTab = (p) => <I {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></I>;
 export const IconList = (p) => <I {...p}><path d="M3 6h18M3 12h18M3 18h12"/></I>;
 export const IconSliders = (p) => <I {...p}><path d="M4 21V14M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="20" cy="14" r="2"/></I>;
+export const IconBold = (p) => <I {...p}><path d="M7 4h6a3.5 3.5 0 0 1 0 7H7zM7 11h7a3.5 3.5 0 0 1 0 7H7z"/></I>;
+export const IconItalic = (p) => <I {...p}><path d="M10 4h8M6 20h8M14 4l-4 16"/></I>;
+export const IconUnderline = (p) => <I {...p}><path d="M7 4v8a5 5 0 0 0 10 0V4M5 20h14"/></I>;
+export const IconLinkIcon = (p) => <I {...p}><path d="M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 1 0-5.7-5.7L11 7"/><path d="M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 1 0 5.7 5.7L13 17"/></I>;
+export const IconHeading1 = (p) => <I {...p}><path d="M4 6v12M12 6v12M4 12h8M16 9l3-1v10"/></I>;
+export const IconHeading2 = (p) => <I {...p}><path d="M4 6v12M12 6v12M4 12h8M16 9a2 2 0 1 1 4 0c0 1.5-4 4-4 8h4"/></I>;
+export const IconType = (p) => <I {...p}><path d="M4 7V5h16v2M9 5v14M15 19h-6"/></I>;
+export const IconImage = (p) => <I {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="m3 18 5-5 4 4 3-3 6 6"/></I>;
+export const IconButton = (p) => <I {...p}><rect x="3" y="8" width="18" height="8" rx="4"/><path d="M8 12h8"/></I>;
+export const IconDivider = (p) => <I {...p}><path d="M3 12h18M3 6h4M17 6h4M3 18h4M17 18h4"/></I>;
+export const IconSpacer = (p) => <I {...p}><path d="M4 5h16M4 19h16M12 8v8M9 11l3-3 3 3M9 16l3 3 3-3"/></I>;
+export const IconProductGrid = (p) => <I {...p}><rect x="3" y="3" width="8" height="8" rx="1"/><rect x="13" y="3" width="8" height="8" rx="1"/><rect x="3" y="13" width="8" height="8" rx="1"/><rect x="13" y="13" width="8" height="8" rx="1"/></I>;
+export const IconFooter = (p) => <I {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18M7 17h2M11 17h6"/></I>;
+export const IconLogo = (p) => <I {...p}><circle cx="12" cy="12" r="9"/><path d="M8 12h8M12 8v8"/></I>;
+export const IconDiscount = (p) => <I {...p}><path d="M20 13.4 13.4 20a2 2 0 0 1-2.8 0L3 12.4V4h8.4l7.6 7.6c.8.7.8 1.9 0 2.6z"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="m9 14 5-5"/></I>;
+export const IconPhone = (p) => <I {...p}><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 19h2"/></I>;
+export const IconDesktop = (p) => <I {...p}><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></I>;
+export const IconSend = (p) => <I {...p}><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></I>;
+export const IconArrowUp = (p) => <I {...p}><path d="M12 19V5M5 12l7-7 7 7"/></I>;
+export const IconArrowDown = (p) => <I {...p}><path d="M12 5v14M5 12l7 7 7-7"/></I>;
+export const IconAlignLeft = (p) => <I {...p}><path d="M3 6h18M3 12h12M3 18h18"/></I>;
+export const IconAlignCenter = (p) => <I {...p}><path d="M3 6h18M6 12h12M3 18h18"/></I>;
+export const IconAlignRight = (p) => <I {...p}><path d="M3 6h18M9 12h12M3 18h18"/></I>;
+export const IconCheck = (p) => <I {...p}><path d="M5 12l5 5L20 7"/></I>;
 
 const Icons = {
   Home: IconHome,
@@ -85,6 +109,30 @@ const Icons = {
   Tab: IconTab,
   List: IconList,
   Sliders: IconSliders,
+  Bold: IconBold,
+  Italic: IconItalic,
+  Underline: IconUnderline,
+  LinkIcon: IconLinkIcon,
+  Heading1: IconHeading1,
+  Heading2: IconHeading2,
+  Type: IconType,
+  Image: IconImage,
+  Button: IconButton,
+  Divider: IconDivider,
+  Spacer: IconSpacer,
+  ProductGrid: IconProductGrid,
+  Footer: IconFooter,
+  Logo: IconLogo,
+  Discount: IconDiscount,
+  Phone: IconPhone,
+  Desktop: IconDesktop,
+  Send: IconSend,
+  ArrowUp: IconArrowUp,
+  ArrowDown: IconArrowDown,
+  AlignLeft: IconAlignLeft,
+  AlignCenter: IconAlignCenter,
+  AlignRight: IconAlignRight,
+  Check: IconCheck,
 };
 
 export default Icons;

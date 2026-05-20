@@ -101,8 +101,26 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
     }
   }
 
+  // JourneyJob cascades on JourneyStep delete, so blindly wiping every step
+  // would silently kill in-flight emails for contacts already enrolled in the
+  // published version. Steps still referenced by a job are *archived* instead
+  // of deleted — kept so their jobs survive, but hidden from the builder
+  // canvas and step counts (all reads filter isArchived: false). Steps with no
+  // jobs are safe to delete outright.
+  const stepsWithJobs = await prisma.journeyStep.findMany({
+    where: { journeyId, isArchived: false, jobs: { some: {} } },
+    select: { id: true },
+  });
+  const archiveIds = stepsWithJobs.map((s) => s.id);
+
   await prisma.$transaction([
-    prisma.journeyStep.deleteMany({ where: { journeyId } }),
+    prisma.journeyStep.deleteMany({
+      where: { journeyId, isArchived: false, id: { notIn: archiveIds } },
+    }),
+    prisma.journeyStep.updateMany({
+      where: { id: { in: archiveIds } },
+      data: { isArchived: true },
+    }),
     prisma.journeyStep.createMany({
       data: rows.map((r) => ({ journeyId, ...r })),
     }),
@@ -119,6 +137,6 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
 
   return prisma.journey.findUnique({
     where: { id: journeyId },
-    include: { steps: { orderBy: { stepNumber: "asc" } } },
+    include: { steps: { where: { isArchived: false }, orderBy: { stepNumber: "asc" } } },
   });
 }

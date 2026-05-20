@@ -9,8 +9,14 @@ import prisma from "../../db.server.js";
  */
 export async function enrollContact(journeyId, contactEmail, contactName, payloadObj) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
-  if (!journey) return null;
-  if (journey.status !== "published") return null;
+  if (!journey) {
+    console.warn(`[enroll] journey ${journeyId} not found — skipping ${contactEmail}`);
+    return null;
+  }
+  if (journey.status !== "published") {
+    console.warn(`[enroll] journey ${journeyId} status="${journey.status}" (not published) — skipping ${contactEmail}`);
+    return null;
+  }
 
   const frequency = journey.entryFrequency || "no_reentry";
 
@@ -18,27 +24,44 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
     const any = await prisma.journeyEnrollment.findFirst({
       where: { journeyId, contactEmail },
     });
-    if (any) return any;
+    if (any) {
+      console.warn(`[enroll] ${contactEmail} already enrolled in ${journeyId} (no_reentry) — skipping`);
+      return any;
+    }
   } else if (frequency.startsWith("delayed_")) {
     const hours = Number(frequency.slice("delayed_".length)) || 24;
     const since = new Date(Date.now() - hours * 60 * 60 * 1000);
     const recent = await prisma.journeyEnrollment.findFirst({
       where: { journeyId, contactEmail, enrolledAt: { gt: since } },
     });
-    if (recent) return recent;
+    if (recent) {
+      console.warn(`[enroll] ${contactEmail} enrolled in ${journeyId} within ${hours}h window — skipping`);
+      return recent;
+    }
   } else {
-    // immediate — still skip if there's an active in-flight enrollment to prevent doubles
-    const active = await prisma.journeyEnrollment.findFirst({
-      where: { journeyId, contactEmail, exitReason: "" },
+    // immediate — dedupe only against the double-webhook (orders/create + orders/paid)
+    // by checking for a *very recent* enrollment, not any open one. An enrollment with
+    // exitReason "" is NOT a reliable in-flight signal: a journey ending in delay+exit
+    // never sets exitReason until every job completes, so the old check blocked
+    // re-entry permanently.
+    const since = new Date(Date.now() - 5 * 60 * 1000);
+    const recent = await prisma.journeyEnrollment.findFirst({
+      where: { journeyId, contactEmail, enrolledAt: { gt: since } },
     });
-    if (active) return active;
+    if (recent) {
+      console.warn(`[enroll] ${contactEmail} enrolled in ${journeyId} <5min ago — skipping duplicate`);
+      return recent;
+    }
   }
 
   const steps = await prisma.journeyStep.findMany({
-    where: { journeyId, isEnabled: true, nodeType: { in: ["email"] } },
+    where: { journeyId, isArchived: false, isEnabled: true, nodeType: { in: ["email"] } },
     orderBy: { stepNumber: "asc" },
   });
-  if (!steps.length) return null;
+  if (!steps.length) {
+    console.warn(`[enroll] journey ${journeyId} has no enabled email steps — skipping ${contactEmail}`);
+    return null;
+  }
 
   const enrollment = await prisma.journeyEnrollment.create({
     data: {

@@ -230,6 +230,12 @@ model JourneyStep {
   templateStyle String   @default("classic")
   discountPct   Int      @default(0)
   isEnabled     Boolean  @default(true)
+  // Set when a draft edit replaced this step but in-flight jobs still
+  // reference it. Archived steps are excluded from the builder canvas and
+  // step counts, but kept so their JourneyJobs are not cascade-deleted.
+  isArchived    Boolean  @default(false)
+  emailBlocks   String   @default("[]")   // JSON array of block objects
+  emailBrand    String   @default("{}")   // JSON brand kit object
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 

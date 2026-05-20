@@ -1,0 +1,472 @@
+/* Retainify — Email Visual Editor styles
+   All classes are prefixed `rt-emb-` so they don't collide with the flow builder. */
+
+/* ── Editor shell ──────────────────────────────────────────────────────── */
+.rt-emb-builder { background: var(--paper-0); }
+.rt-emb-builder .rt-builder-body {
+  grid-template-columns: 240px 1fr var(--inspector-w);
+}
+.rt-emb-builder .rt-builder-canvas {
+  background: var(--paper-0);
+  position: relative;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.rt-emb-crumbs {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 11px; color: var(--ink-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-weight: 600;
+  margin-bottom: 2px;
+}
+.rt-emb-crumbs svg { color: var(--ink-4); }
+.rt-emb-subject {
+  font-family: var(--font-display) !important;
+  font-size: 20px !important;
+  font-weight: 400 !important;
+  letter-spacing: -0.005em !important;
+}
+
+.rt-emb-saved {
+  font-size: 11px; color: var(--ink-4);
+  margin-right: 4px;
+  letter-spacing: 0.04em;
+}
+
+/* ── Left rail: block library ──────────────────────────────────────────── */
+.rt-emb-left {
+  background: var(--paper-2);
+  border-right: 1px solid var(--hair-1);
+  overflow-y: auto;
+  padding: 16px 12px 32px;
+}
+.rt-emb-library-head { padding: 0 4px 12px; }
+.rt-emb-lib-grp { margin-bottom: 18px; }
+.rt-emb-lib-grp-h {
+  font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+  color: var(--ink-3); padding: 0 4px 8px; font-weight: 500;
+}
+.rt-emb-lib-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.rt-emb-lib-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  padding: 12px 10px;
+  background: var(--paper-3);
+  border: 1px solid var(--hair-1);
+  border-radius: var(--r-3);
+  font-size: 12px; color: var(--ink-2); font-weight: 500;
+  text-align: left;
+  cursor: grab;
+  transition: all var(--t-fast) var(--ease);
+}
+.rt-emb-lib-item:hover {
+  border-color: var(--brand-700);
+  background: var(--paper-pure);
+  color: var(--ink-1);
+  transform: translateY(-1px);
+  box-shadow: var(--sh-2);
+}
+.rt-emb-lib-item:active { transform: translateY(0); cursor: grabbing; }
+.rt-emb-lib-item svg { color: var(--brand-700); }
+
+/* ── Canvas stage ──────────────────────────────────────────────────────── */
+.rt-emb-stage {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 32px 24px 80px;
+  min-height: 100%;
+  background:
+    linear-gradient(var(--paper-0), var(--paper-0)),
+    radial-gradient(circle at 1px 1px, rgba(20,32,26,0.06) 1px, transparent 1px);
+  background-blend-mode: multiply;
+  background-size: auto, 16px 16px;
+}
+
+.rt-emb-inbox-hint {
+  width: 600px;
+  max-width: 100%;
+  display: flex; justify-content: space-between; align-items: baseline;
+  padding: 0 4px 10px;
+  font-size: 12px;
+  color: var(--ink-3);
+}
+.rt-emb-inbox-from { font-weight: 500; color: var(--ink-2); }
+.rt-emb-inbox-time { font-size: 11px; color: var(--ink-4); }
+
+.rt-emb-frame {
+  background: #FFFFFF;
+  box-shadow: var(--sh-3);
+  border-radius: var(--r-3);
+  padding: 0;
+  position: relative;
+  transition: width var(--t-base) var(--ease);
+  max-width: 100%;
+}
+
+/* ── Block wrapper ─────────────────────────────────────────────────────── */
+.rt-emb-wrap {
+  position: relative;
+  padding: 8px 32px;
+  cursor: pointer;
+  outline: 1.5px solid transparent;
+  outline-offset: -3px;
+  border-radius: 2px;
+  transition: outline-color var(--t-fast) var(--ease), background var(--t-fast) var(--ease);
+}
+.rt-emb-wrap:hover { outline-color: rgba(31, 61, 47, 0.2); }
+.rt-emb-wrap.rt-emb-selected { outline-color: var(--brand-700); }
+.rt-emb-wrap.rt-emb-selected::before {
+  content: attr(data-block-label);
+  position: absolute;
+  top: -1px; left: -1px;
+  transform: translateY(-100%);
+  background: var(--brand-700); color: var(--on-brand);
+  font-size: 10px; padding: 3px 7px;
+  border-radius: 3px 3px 0 0;
+  letter-spacing: 0.06em; text-transform: uppercase; font-weight: 600;
+}
+
+.rt-emb-tools {
+  position: absolute;
+  top: -1px; right: -1px;
+  transform: translateY(-100%);
+  display: flex;
+  background: var(--brand-700);
+  border-radius: 3px 3px 0 0;
+  overflow: hidden;
+}
+.rt-emb-tools button {
+  background: transparent; border: 0;
+  color: var(--on-brand);
+  padding: 4px 6px;
+  display: flex; align-items: center;
+  transition: background var(--t-fast) var(--ease);
+}
+.rt-emb-tools button:hover { background: var(--brand-600); }
+.rt-emb-tools button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.rt-emb-editable { outline: none; }
+.rt-emb-editable:focus { background: rgba(232, 242, 90, 0.18); border-radius: 2px; }
+
+/* ── Insert gap "+" button ─────────────────────────────────────────────── */
+.rt-emb-gap {
+  position: relative;
+  height: 0;
+  display: flex; justify-content: center; align-items: center;
+  z-index: 2;
+}
+.rt-emb-gap-btn {
+  position: absolute;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  background: var(--paper-3);
+  border: 1px solid var(--hair-2);
+  color: var(--ink-3);
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0;
+  transition: all var(--t-fast) var(--ease);
+}
+.rt-emb-gap:hover .rt-emb-gap-btn,
+.rt-emb-gap-btn:focus { opacity: 1; }
+.rt-emb-gap-btn:hover {
+  background: var(--brand-700); border-color: var(--brand-700);
+  color: var(--on-brand);
+  transform: scale(1.1);
+}
+
+.rt-emb-veil {
+  position: fixed; inset: 0;
+  background: transparent;
+  z-index: 30;
+}
+.rt-emb-add-pop {
+  position: absolute;
+  top: 28px; left: 50%;
+  transform: translateX(-50%);
+  z-index: 31;
+  background: var(--paper-3);
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-4);
+  box-shadow: var(--sh-4);
+  padding: 10px;
+  min-width: 280px;
+  display: flex; flex-direction: column; gap: 10px;
+}
+.rt-emb-add-grp-h { padding: 0 4px 6px; }
+.rt-emb-add-list { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+.rt-emb-add-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px;
+  background: transparent; border: 0;
+  border-radius: var(--r-2);
+  font-size: 12px; color: var(--ink-1);
+  text-align: left;
+}
+.rt-emb-add-item:hover { background: var(--paper-2); }
+.rt-emb-add-item svg { color: var(--brand-700); }
+
+/* ── Rich text floating toolbar ────────────────────────────────────────── */
+.rt-emb-rtbar {
+  position: sticky;
+  top: 8px;
+  align-self: center;
+  display: inline-flex;
+  background: var(--ink-1);
+  color: var(--paper-3);
+  padding: 4px;
+  gap: 1px;
+  border-radius: var(--r-3);
+  box-shadow: var(--sh-3);
+  z-index: 5;
+  margin-bottom: -32px;
+}
+.rt-emb-rtbar button {
+  width: 28px; height: 28px;
+  background: transparent; border: 0;
+  color: var(--paper-3);
+  display: flex; align-items: center; justify-content: center;
+  border-radius: var(--r-2);
+}
+.rt-emb-rtbar button:hover { background: rgba(255,255,255,0.1); }
+.rt-emb-rtbar button.on { background: var(--brand-500); color: var(--on-brand); }
+.rt-emb-rtbar-sep { width: 1px; background: rgba(255,255,255,0.15); margin: 4px 4px; }
+
+/* ── Block-specific styles inside email frame ──────────────────────────── */
+.rt-emb-logo {
+  font-weight: 500;
+  letter-spacing: 0.18em;
+  color: #14201A;
+  text-transform: uppercase;
+}
+
+.rt-emb-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 28px;
+  border: 1.5px solid;
+  border-radius: 4px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.rt-emb-image-placeholder {
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #F4EFE4 0,
+      #F4EFE4 10px,
+      #ECE6D6 10px,
+      #ECE6D6 20px
+    );
+  border: 1px solid var(--hair-2);
+  display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  color: var(--ink-3);
+}
+
+.rt-emb-spacer {
+  background:
+    repeating-linear-gradient(
+      to bottom,
+      transparent 0 4px,
+      rgba(20, 32, 26, 0.08) 4px 5px
+    );
+}
+
+.rt-emb-divider {
+  border-top: 1px solid #D2C9B0;
+  margin: 0;
+}
+
+.rt-emb-products {
+  display: grid;
+  gap: 16px;
+}
+.rt-emb-product { text-align: left; }
+.rt-emb-product-img {
+  aspect-ratio: 1 / 1;
+  background:
+    repeating-linear-gradient(
+      45deg,
+      #F4EFE4 0, #F4EFE4 8px,
+      #ECE6D6 8px, #ECE6D6 16px
+    );
+  border-radius: 2px;
+  display: flex; align-items: center; justify-content: center;
+  margin-bottom: 8px;
+}
+.rt-emb-product-name { font-size: 13px; color: #14201A; margin-bottom: 2px; }
+.rt-emb-product-price { font-size: 13px; color: #5C625A; }
+
+.rt-emb-discount {
+  border: 1.5px dashed;
+  border-radius: 4px;
+  padding: 18px;
+  text-align: center;
+}
+.rt-emb-discount-label {
+  font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
+  margin-bottom: 8px; font-weight: 600;
+}
+.rt-emb-discount-code {
+  font-size: 22px; font-weight: 500;
+  letter-spacing: 0.12em;
+  margin-bottom: 6px;
+}
+.rt-emb-discount-percent { font-size: 13px; color: #5C625A; }
+
+.rt-emb-footer {
+  padding-top: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: #8A8E84;
+  line-height: 1.6;
+}
+.rt-emb-footer-store {
+  font-weight: 500; color: #5C625A;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+.rt-emb-footer-addr { margin-bottom: 8px; }
+.rt-emb-footer-links { display: flex; justify-content: center; gap: 8px; }
+.rt-emb-footer-links a { text-decoration: underline; cursor: pointer; }
+
+.rt-emb-empty {
+  padding: 80px 24px;
+  text-align: center;
+  color: var(--ink-3);
+}
+
+/* ── Inspector specifics ───────────────────────────────────────────────── */
+.rt-emb-swatches {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 6px;
+}
+.rt-emb-swatch {
+  height: 28px;
+  border-radius: var(--r-2);
+  border: 1px solid var(--hair-2);
+  cursor: pointer;
+  position: relative;
+  transition: transform var(--t-fast) var(--ease);
+  color: white;
+  display: flex; align-items: center; justify-content: center;
+}
+.rt-emb-swatch:hover { transform: scale(1.06); }
+.rt-emb-swatch.rt-on { outline: 2px solid var(--brand-700); outline-offset: 2px; }
+.rt-emb-swatch-light { color: var(--ink-1); }
+
+.rt-emb-fonts {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 6px;
+}
+.rt-emb-font {
+  padding: 12px 8px;
+  background: var(--paper-3);
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-2);
+  cursor: pointer;
+  text-align: center;
+}
+.rt-emb-font:hover { border-color: var(--ink-3); }
+.rt-emb-font.rt-on { border-color: var(--brand-700); background: var(--brand-50); }
+
+.rt-emb-uploader {
+  border: 1.5px dashed var(--hair-3);
+  border-radius: var(--r-3);
+  padding: 24px 16px;
+  text-align: center;
+  background: var(--paper-2);
+  color: var(--ink-3);
+}
+
+.rt-emb-tag-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.rt-emb-tag-chip {
+  background: var(--paper-2);
+  border: 1px solid var(--hair-1);
+  padding: 4px 8px;
+  border-radius: var(--r-2);
+  font-size: 11px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+.rt-emb-tag-chip:hover {
+  background: var(--brand-50);
+  border-color: var(--brand-700);
+  color: var(--brand-700);
+}
+
+.rt-emb-linked-note {
+  margin-top: 14px;
+  padding: 10px 12px;
+  background: var(--brand-50);
+  border: 1px solid var(--brand-100);
+  border-radius: var(--r-2);
+  font-size: 12px;
+  color: var(--brand-700);
+  display: flex; align-items: center; gap: 8px;
+}
+.rt-emb-linked-note svg { flex-shrink: 0; }
+
+.rt-emb-soon-card {
+  display: flex; gap: 10px;
+  padding: 12px;
+  background: var(--accent);
+  border: 1px solid var(--accent-deep);
+  border-radius: var(--r-3);
+  color: var(--accent-ink);
+}
+.rt-emb-soon-card svg { flex-shrink: 0; margin-top: 2px; }
+
+.rt-emb-range {
+  width: 100%;
+  margin-top: 4px;
+  accent-color: var(--brand-700);
+}
+.rt-emb-range-marks {
+  display: flex; justify-content: space-between;
+  font-size: 10px;
+  color: var(--ink-4);
+  margin-top: 4px;
+}
+
+/* ── Mini email preview in flow builder (after save) ───────────────────── */
+.rt-email-preview-rendered {
+  background: #FFFFFF;
+  border: 1px solid var(--hair-1);
+  border-radius: var(--r-2);
+  padding: 12px 14px;
+  margin-top: 10px;
+  max-height: 200px;
+  overflow: hidden;
+  position: relative;
+}
+.rt-email-preview-rendered::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 36px;
+  background: linear-gradient(to bottom, transparent, #FFFFFF);
+  pointer-events: none;
+}
+.rt-emp-block { margin: 6px 0; font-family: var(--font-ui); }
+.rt-emp-logo { font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase; font-size: 10px; color: #14201A; }
+.rt-emp-heading { font-family: var(--font-display); font-size: 15px; line-height: 1.18; font-weight: 400; color: #14201A; }
+.rt-emp-paragraph { font-size: 11px; color: #5C625A; line-height: 1.5; }
+.rt-emp-button { display: inline-block; padding: 5px 10px; border-radius: 3px; font-size: 10px; }
+.rt-emp-image { height: 32px; background: repeating-linear-gradient(45deg, #F4EFE4 0, #F4EFE4 6px, #ECE6D6 6px, #ECE6D6 12px); border-radius: 2px; }
+.rt-emp-discount { border: 1px dashed; padding: 6px 8px; border-radius: 3px; text-align: center; font-size: 10px; }
+.rt-emp-discount-code { font-family: var(--font-mono); font-weight: 500; letter-spacing: 0.08em; }
+.rt-emp-divider { border-top: 1px solid #E4DDCB; }
+.rt-emp-footer { font-size: 9px; color: #B5B8AE; text-align: center; }

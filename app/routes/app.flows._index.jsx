@@ -22,7 +22,7 @@ export const loader = async ({ request }) => {
     prisma.journey.findMany({
       where: { shop, archivedAt: null },
       include: {
-        steps: { orderBy: { stepNumber: "asc" } },
+        steps: { where: { isArchived: false }, orderBy: { stepNumber: "asc" } },
       },
       orderBy: { updatedAt: "desc" },
     }),
@@ -86,7 +86,7 @@ export const action = async ({ request }) => {
     const id = String(fd.get("journeyId") || "");
     const src = await prisma.journey.findFirst({
       where: { id, shop },
-      include: { steps: { orderBy: { stepNumber: "asc" } } },
+      include: { steps: { where: { isArchived: false }, orderBy: { stepNumber: "asc" } } },
     });
     if (!src) return { ok: false };
     const copy = await prisma.journey.create({
