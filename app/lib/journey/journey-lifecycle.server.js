@@ -85,6 +85,23 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         discountPct: 0,
         isEnabled: true,
       });
+    } else if (s.nodeType === "push") {
+      rows.push({
+        nodeType: "push",
+        delayHours: cumulativeHours,
+        positionY: positionY++,
+        stepNumber: positionY,
+        subject: "",
+        previewText: "",
+        emailName: "",
+        templateStyle: "classic",
+        discountPct: 0,
+        isEnabled: s.isEnabled !== false,
+        pushTitle: s.pushTitle || "",
+        pushBody: s.pushBody || "",
+        pushIconUrl: s.pushIconUrl || "",
+        pushClickUrl: s.pushClickUrl || "",
+      });
     } else {
       rows.push({
         nodeType: "email",

@@ -104,27 +104,35 @@ function AppNav({ currentPath }) {
       )}
 
       {/* Collapse toggle */}
-      <div style={{ marginTop: "auto", paddingTop: 12, borderTop: "1px solid var(--hair-1)" }}>
+      <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--hair-1)" }}>
         <button
           onClick={() => setCollapsed((c) => !c)}
           title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
           style={{
             display: "flex",
             alignItems: "center",
-            justifyContent: "center",
+            gap: 8,
+            justifyContent: collapsed ? "center" : "flex-start",
             width: "100%",
-            padding: "8px 0",
+            padding: collapsed ? "8px 0" : "8px 10px",
             background: "none",
             border: "none",
             cursor: "pointer",
             color: "var(--ink-3)",
             borderRadius: "var(--r-2)",
+            fontSize: 13,
+            fontFamily: "inherit",
           }}
         >
           <IconChevron
             size={15}
-            style={{ transform: collapsed ? "rotate(0deg)" : "rotate(180deg)", transition: "transform 0.2s ease" }}
+            style={{
+              transform: collapsed ? "rotate(0deg)" : "rotate(180deg)",
+              transition: "transform 0.2s ease",
+              flexShrink: 0,
+            }}
           />
+          {!collapsed && <span>Collapse</span>}
         </button>
       </div>
     </aside>
