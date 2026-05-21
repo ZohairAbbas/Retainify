@@ -28,13 +28,27 @@
     return outputArray;
   }
 
+  // Called synchronously inside the click handler to capture the user-gesture
+  // context before any async work (fetch, etc.) drops it.
+  var _pendingPermission = null;
+  function primePermissionRequest() {
+    if (!("Notification" in window) || !("serviceWorker" in navigator) || !("PushManager" in window)) return;
+    if (Notification.permission === "granted" || Notification.permission === "denied") return;
+    _pendingPermission = Notification.requestPermission();
+  }
+
   function requestPushPermission(capturedEmail) {
     var vapidKey = config.vapidPublicKey;
     var subscribeUrl = config.pushSubscribeUrl;
     if (!vapidKey || !subscribeUrl) return;
     if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
 
-    Notification.requestPermission().then(function (permission) {
+    // Use the permission promise we started synchronously during the click,
+    // or check the already-resolved state if permission was previously granted.
+    var permPromise = _pendingPermission
+      || Promise.resolve(Notification.permission);
+
+    permPromise.then(function (permission) {
       if (permission !== "granted") return;
       navigator.serviceWorker.register("/apps/retainify/push-sw.js")
         .then(function () { return navigator.serviceWorker.ready; })
@@ -196,6 +210,7 @@
     }
     submitBtn.disabled = true;
     submitBtn.textContent = "Saving…";
+    primePermissionRequest();
 
     var endpoint = config.endpoint || "/apps/retainify/popup-signup";
     fetch(endpoint, {
