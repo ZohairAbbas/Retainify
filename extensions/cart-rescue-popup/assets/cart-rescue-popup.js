@@ -51,8 +51,10 @@
     permPromise.then(function (permission) {
       if (permission !== "granted") return;
       navigator.serviceWorker.register("/apps/retainify/push-sw", { scope: "/apps/retainify/" })
-        .then(function () { return navigator.serviceWorker.ready; })
         .then(function (reg) {
+          // Don't use serviceWorker.ready — it waits for a SW controlling
+          // the current page, which never happens since our scope is
+          // /apps/retainify/. Subscribe directly on the registration.
           return reg.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: urlBase64ToUint8Array(vapidKey),
