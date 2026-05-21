@@ -50,7 +50,7 @@
 
     permPromise.then(function (permission) {
       if (permission !== "granted") return;
-      navigator.serviceWorker.register("/apps/retainify/push-sw.js")
+      navigator.serviceWorker.register("/apps/retainify/push-sw")
         .then(function () { return navigator.serviceWorker.ready; })
         .then(function (reg) {
           return reg.pushManager.subscribe({
