@@ -45,6 +45,7 @@ model ShopSettings {
   // Onboarding
   onboardingStep   Int      @default(0) // 0=not started, 1=domain, 2=template, 3=done
   isActive         Boolean  @default(false)
+  pushEnabled      Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -216,12 +217,12 @@ model Journey {
   @@index([shop, status])
 }
 
-// One step within a journey (email send, time delay, or exit)
+// One step within a journey (email send, time delay, push, or exit)
 model JourneyStep {
   id            String   @id @default(cuid())
   journeyId     String
   stepNumber    Int
-  nodeType      String   @default("email") // email | delay | exit
+  nodeType      String   @default("email") // email | delay | exit | push
   positionY     Int      @default(0)
   delayHours    Float    @default(1)
   subject       String   @default("")
@@ -236,11 +237,17 @@ model JourneyStep {
   isArchived    Boolean  @default(false)
   emailBlocks   String   @default("[]")   // JSON array of block objects
   emailBrand    String   @default("{}")   // JSON brand kit object
+  // Push notification fields
+  pushTitle     String   @default("")
+  pushBody      String   @default("")
+  pushIconUrl   String   @default("")
+  pushClickUrl  String   @default("")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   jobs          JourneyJob[]
+  pushJobs      PushJob[]
 
   @@index([journeyId, stepNumber])
 }
@@ -273,6 +280,7 @@ model JourneyEnrollment {
 
   journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   jobs          JourneyJob[]
+  pushJobs      PushJob[]
 
   @@index([shop, contactEmail])
   @@index([journeyId])
@@ -297,6 +305,45 @@ model JourneyJob {
 
   enrollment      JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
   step            JourneyStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([shop, enrollmentId])
+}
+
+// Browser push subscriptions — one row per browser per shop
+model PushSubscription {
+  id             String    @id @default(cuid())
+  shop           String
+  endpoint       String
+  p256dh         String
+  auth           String
+  contactEmail   String?
+  anonId         String?
+  isActive       Boolean   @default(true)
+  subscribedAt   DateTime  @default(now())
+  unsubscribedAt DateTime?
+
+  @@unique([shop, endpoint])
+  @@index([shop, contactEmail])
+  @@index([shop, anonId])
+}
+
+// Scheduled push notification per push step per enrollment
+model PushJob {
+  id           String    @id @default(cuid())
+  shop         String
+  enrollmentId String
+  stepId       String
+  scheduledFor DateTime
+  status       String    @default("pending") // pending | processing | done | failed | cancelled
+  attempts     Int       @default(0)
+  lastError    String    @default("")
+  sentAt       DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  enrollment   JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step         JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
 
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])

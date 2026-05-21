@@ -56,6 +56,7 @@
   --node-split-ink:   #5A2E5A;   --node-split-bg:   #EAD6EA;
   --node-tag-ink:     #2A4A50;   --node-tag-bg:     #D6E6E8;
   --node-exit-ink:    #5A3F38;   --node-exit-bg:    #E4DAD7;
+  --node-push-ink:    #5B21B6;   --node-push-bg:    #EDE9FE;
 
   /* ── Type ─────────────────────────────────────────────────────────── */
   --font-display: "Instrument Serif", "Cambria", "Times New Roman", Georgia, serif;

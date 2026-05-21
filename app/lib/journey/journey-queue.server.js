@@ -55,11 +55,11 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
   }
 
   const steps = await prisma.journeyStep.findMany({
-    where: { journeyId, isArchived: false, isEnabled: true, nodeType: { in: ["email"] } },
+    where: { journeyId, isArchived: false, isEnabled: true, nodeType: { in: ["email", "push"] } },
     orderBy: { stepNumber: "asc" },
   });
   if (!steps.length) {
-    console.warn(`[enroll] journey ${journeyId} has no enabled email steps — skipping ${contactEmail}`);
+    console.warn(`[enroll] journey ${journeyId} has no enabled sendable steps — skipping ${contactEmail}`);
     return null;
   }
 
@@ -74,15 +74,32 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
   });
 
   const now = new Date();
-  await prisma.journeyJob.createMany({
-    data: steps.map((step) => ({
-      shop: journey.shop,
-      enrollmentId: enrollment.id,
-      stepId: step.id,
-      scheduledFor: new Date(now.getTime() + step.delayHours * 60 * 60 * 1000),
-      status: "pending",
-    })),
-  });
+  const emailSteps = steps.filter((s) => s.nodeType === "email");
+  const pushSteps = steps.filter((s) => s.nodeType === "push");
+
+  if (emailSteps.length) {
+    await prisma.journeyJob.createMany({
+      data: emailSteps.map((step) => ({
+        shop: journey.shop,
+        enrollmentId: enrollment.id,
+        stepId: step.id,
+        scheduledFor: new Date(now.getTime() + step.delayHours * 60 * 60 * 1000),
+        status: "pending",
+      })),
+    });
+  }
+
+  if (pushSteps.length) {
+    await prisma.pushJob.createMany({
+      data: pushSteps.map((step) => ({
+        shop: journey.shop,
+        enrollmentId: enrollment.id,
+        stepId: step.id,
+        scheduledFor: new Date(now.getTime() + step.delayHours * 60 * 60 * 1000),
+        status: "pending",
+      })),
+    });
+  }
 
   return enrollment;
 }

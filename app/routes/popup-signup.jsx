@@ -23,6 +23,7 @@ export const action = async ({ request }) => {
 
   const email = (body.email || "").trim().toLowerCase();
   const shop = (body.shop || "").trim();
+  const anonId = (body.anonId || "").trim() || null;
 
   if (!email || !shop) {
     return new Response(JSON.stringify({ ok: false }), { status: 400, headers: CORS });
@@ -73,6 +74,14 @@ export const action = async ({ request }) => {
   const from = `${storeName} <${fromEmail}>`;
 
   const html = renderConfirmationEmail({ storeName, logoUrl, brandColor, confirmUrl });
+
+  // Link any anonymous push subscriptions to this email — fire-and-forget
+  if (anonId) {
+    prisma.pushSubscription.updateMany({
+      where: { shop, anonId, contactEmail: null },
+      data: { contactEmail: email },
+    }).catch(() => {});
+  }
 
   // Fire-and-forget — don't block the popup response
   sendEmail({

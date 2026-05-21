@@ -4,6 +4,64 @@
   var config = window.__retainifyPopup || {};
   var STORAGE_KEY = "retainify_popup_shown";
   var SESSION_KEY = "retainify_popup_session";
+  var ANON_KEY = "__rt_anon";
+
+  // Ensure an anonymous ID exists for push subscription linkage
+  function getAnonId() {
+    var id = localStorage.getItem(ANON_KEY);
+    if (!id) {
+      id = (typeof crypto !== "undefined" && crypto.randomUUID)
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem(ANON_KEY, id);
+    }
+    return id;
+  }
+
+  // Standard VAPID key conversion helper
+  function urlBase64ToUint8Array(base64String) {
+    var padding = "=".repeat((4 - (base64String.length % 4)) % 4);
+    var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    var rawData = atob(base64);
+    var outputArray = new Uint8Array(rawData.length);
+    for (var i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+
+  function requestPushPermission(capturedEmail) {
+    var vapidKey = config.vapidPublicKey;
+    var subscribeUrl = config.pushSubscribeUrl;
+    if (!vapidKey || !subscribeUrl) return;
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+
+    Notification.requestPermission().then(function (permission) {
+      if (permission !== "granted") return;
+      navigator.serviceWorker.register("/apps/retainify/push-sw.js")
+        .then(function () { return navigator.serviceWorker.ready; })
+        .then(function (reg) {
+          return reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(vapidKey),
+          });
+        })
+        .then(function (sub) {
+          var raw = sub.toJSON();
+          return fetch(subscribeUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              shop: config.shop,
+              endpoint: raw.endpoint,
+              p256dh: raw.keys.p256dh,
+              auth: raw.keys.auth,
+              anonId: getAnonId(),
+              contactEmail: capturedEmail || null,
+            }),
+          });
+        })
+        .catch(function () { /* silent — push is enhancement, not critical */ });
+    });
+  }
 
   // Don't show if already submitted or shown this session
   if (localStorage.getItem(STORAGE_KEY) || sessionStorage.getItem(SESSION_KEY)) return;
@@ -143,10 +201,10 @@
     fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: email, shop: config.shop }),
+      body: JSON.stringify({ email: email, shop: config.shop, anonId: getAnonId() }),
     })
       .then(function (r) { return r.json(); })
-      .then(function (data) {
+      .then(function () {
         localStorage.setItem(STORAGE_KEY, "1");
         var form = document.getElementById("rp-form");
         var fine = document.getElementById("rp-fine");
@@ -158,6 +216,7 @@
             "</div>";
         }
         if (fine) fine.remove();
+        requestPushPermission(email);
         setTimeout(closeModal, 3000);
       })
       .catch(function () {

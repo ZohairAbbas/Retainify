@@ -106,6 +106,17 @@ function expandCanvasNodes(steps) {
       nodes.push({ kind: "delay", id: s.id, hours: s.delayHours });
     } else if (s.nodeType === "exit") {
       nodes.push({ kind: "exit", id: s.id });
+    } else if (s.nodeType === "push") {
+      nodes.push({
+        kind: "push",
+        id: s.id,
+        pushTitle: s.pushTitle,
+        pushBody: s.pushBody,
+        pushIconUrl: s.pushIconUrl,
+        pushClickUrl: s.pushClickUrl,
+        delayHours: s.delayHours,
+        isEnabled: s.isEnabled,
+      });
     } else {
       nodes.push({
         kind: "email",
@@ -152,6 +163,17 @@ export const action = async ({ request, params }) => {
         }
         if (n.kind === "exit") {
           return { nodeType: "exit" };
+        }
+        if (n.kind === "push") {
+          return {
+            nodeType: "push",
+            delayHours: Number(n.delayHours) || 0,
+            isEnabled: n.isEnabled !== false,
+            pushTitle: n.pushTitle || "",
+            pushBody: n.pushBody || "",
+            pushIconUrl: n.pushIconUrl || "",
+            pushClickUrl: n.pushClickUrl || "",
+          };
         }
         return {
           nodeType: "email",
@@ -249,9 +271,22 @@ export default function FlowBuilder() {
   }
 
   function insertNode(afterIndex, kind) {
-    const newNode = kind === "delay"
-      ? { kind: "delay", id: `tmp-${Date.now()}`, hours: 24 }
-      : {
+    let newNode;
+    if (kind === "delay") {
+      newNode = { kind: "delay", id: `tmp-${Date.now()}`, hours: 24 };
+    } else if (kind === "push") {
+      newNode = {
+        kind: "push",
+        id: `tmp-${Date.now()}`,
+        pushTitle: "",
+        pushBody: "",
+        pushIconUrl: "",
+        pushClickUrl: "",
+        delayHours: 1,
+        isEnabled: true,
+      };
+    } else {
+      newNode = {
           kind: "email",
           id: `tmp-${Date.now()}`,
           stepNumber: 0,
@@ -262,6 +297,7 @@ export default function FlowBuilder() {
           discountPct: 0,
           isEnabled: true,
         };
+    }
     setNodes((arr) => {
       const next = [...arr];
       next.splice(afterIndex + 1, 0, newNode);
@@ -548,6 +584,33 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
     );
   }
 
+  if (node.kind === "push") {
+    return (
+      <div
+        className={`rt-node rt-node-push${selected ? " rt-selected" : ""}`}
+        onClick={onSelect}
+      >
+        <div className="rt-node-head">
+          <div className="rt-node-glyph rt-tint-push"><Icons.Bell size={14} /></div>
+          <div className="rt-node-title">{node.pushTitle || "Push Notification"}</div>
+          <div className="rt-node-actions">
+            <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
+              <Icons.Copy size={13} />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Icons.Trash size={13} />
+            </button>
+          </div>
+        </div>
+        {node.pushBody && (
+          <div className="rt-node-body">
+            <div className="rt-node-line muted">{node.pushBody.slice(0, 80)}</div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   // Email node
   return (
     <div
@@ -670,6 +733,7 @@ function InsertMenu({ open, onClose, onAdd }) {
       <div className="rt-insert-menu">
         <div className="t-micro muted rt-insert-heading">Send</div>
         {item("Mail", "Email", "email")}
+        {item("Bell", "Push notification", "push")}
         {item("Sms", "SMS message", "sms", true)}
         <div className="t-micro muted rt-insert-heading">Timing</div>
         {item("Clock", "Wait (delay)", "delay")}
@@ -876,6 +940,77 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
               From: {settings.senderName} &lt;{settings.senderEmail || "noreply@..."}&gt;
             </div>
           )}
+        </div>
+      </div>
+    );
+  }
+
+  if (node.kind === "push") {
+    return (
+      <div className="rt-ins">
+        <div className="rt-ins-head">
+          <div className="rt-node-glyph rt-tint-push"><Icons.Bell size={14} /></div>
+          <div>
+            <div className="t-micro muted">Push notification</div>
+            <div className="t-h2" style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>
+              {node.pushTitle || "Push Notification"}
+            </div>
+          </div>
+        </div>
+
+        <div className="rt-ins-section">
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Content</div>
+          <label className="field-label">Title</label>
+          <input
+            className="input"
+            value={node.pushTitle || ""}
+            onChange={(e) => onChange({ pushTitle: e.target.value })}
+            maxLength={65}
+          />
+          <div className="field-help">{65 - (node.pushTitle || "").length} characters remaining</div>
+
+          <label className="field-label" style={{ marginTop: 16 }}>Body</label>
+          <textarea
+            className="input"
+            rows={3}
+            value={node.pushBody || ""}
+            onChange={(e) => onChange({ pushBody: e.target.value })}
+            maxLength={200}
+          />
+
+          <label className="field-label" style={{ marginTop: 16 }}>Icon URL <span className="faint">(optional)</span></label>
+          <input
+            className="input"
+            value={node.pushIconUrl || ""}
+            onChange={(e) => onChange({ pushIconUrl: e.target.value })}
+            placeholder="https://..."
+          />
+          <div className="field-help">Defaults to store favicon if empty.</div>
+
+          <label className="field-label" style={{ marginTop: 16 }}>Click URL <span className="faint">(optional)</span></label>
+          <input
+            className="input"
+            value={node.pushClickUrl || ""}
+            onChange={(e) => onChange({ pushClickUrl: e.target.value })}
+            placeholder="Leave blank to use cart recovery link"
+          />
+        </div>
+
+        <div className="rt-ins-section">
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Timing</div>
+          <DelayEditor node={{ hours: node.delayHours }} onChange={(p) => onChange({ delayHours: p.hours })} />
+        </div>
+
+        <div className="rt-ins-section">
+          <label className="rt-toggle">
+            <input
+              type="checkbox"
+              checked={node.isEnabled !== false}
+              onChange={() => onChange({ isEnabled: node.isEnabled === false })}
+            />
+            <span className="rt-toggle-switch" />
+            <span>Step enabled</span>
+          </label>
         </div>
       </div>
     );

@@ -97,6 +97,8 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         templateStyle: s.templateStyle || "classic",
         discountPct: Number(s.discountPct) || 0,
         isEnabled: s.isEnabled !== false,
+        emailBlocks: s.emailBlocks || "[]",
+        emailBrand: s.emailBrand || "{}",
       });
     }
   }

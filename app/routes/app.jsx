@@ -1,9 +1,10 @@
+import { useState } from "react";
 import { Outlet, useLoaderData, useLocation, useRouteError } from "react-router";
 import { Link } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
-import Icons from "../components/ui/Icons.jsx";
+import Icons, { IconChevron } from "../components/ui/Icons.jsx";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
@@ -14,6 +15,7 @@ export const loader = async ({ request }) => {
 const NAV_ACTIVE = [
   { id: "home",     label: "Dashboard", href: "/app",          icon: "Home" },
   { id: "flows",    label: "Flows",     href: "/app/flows",    icon: "Flow" },
+  { id: "push",     label: "Push",      href: "/app/push",     icon: "Bell" },
   { id: "popup",    label: "Popup",     href: "/app/popup",    icon: "Tab" },
   { id: "settings", label: "Settings", href: "/app/settings", icon: "Settings" },
 ];
@@ -26,21 +28,34 @@ const NAV_SOON = [
 ];
 
 function AppNav({ currentPath }) {
+  const [collapsed, setCollapsed] = useState(false);
+
   return (
     <aside style={{
-      width: 220,
+      width: collapsed ? 48 : 220,
       background: "var(--paper-2)",
       borderRight: "1px solid var(--hair-1)",
       display: "flex",
       flexDirection: "column",
       minHeight: "100vh",
-      padding: "12px 8px",
+      padding: "12px 4px",
       flexShrink: 0,
+      transition: "width 0.2s ease",
+      overflow: "hidden",
     }}>
       {/* App mark */}
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 10px 16px" }}>
-        <span className="rt-app-mark">R</span>
-        <span style={{ fontWeight: 600, fontSize: 13, color: "var(--ink-1)" }}>Retainify</span>
+      <div style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 6px 16px",
+        overflow: "hidden",
+        whiteSpace: "nowrap",
+      }}>
+        <span className="rt-app-mark" style={{ flexShrink: 0 }}>R</span>
+        {!collapsed && (
+          <span style={{ fontWeight: 600, fontSize: 13, color: "var(--ink-1)" }}>Retainify</span>
+        )}
       </div>
 
       {/* Active nav items */}
@@ -55,33 +70,62 @@ function AppNav({ currentPath }) {
             <Link
               key={n.id}
               to={n.href}
+              title={collapsed ? n.label : undefined}
               className={`rt-subnav-item${active ? " rt-on" : ""}`}
+              style={collapsed ? { justifyContent: "center", padding: "8px 0" } : undefined}
             >
-              {Icon && <Icon size={15} />}
-              <span>{n.label}</span>
+              {Icon && <Icon size={15} style={{ flexShrink: 0 }} />}
+              {!collapsed && <span>{n.label}</span>}
             </Link>
           );
         })}
       </div>
 
       {/* Soon items */}
-      <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--hair-1)" }}>
-        <div className="t-micro muted" style={{ padding: "4px 10px 8px" }}>Coming soon</div>
-        {NAV_SOON.map((n) => (
-          <span
-            key={n.id}
-            className="rt-subnav-item"
-            style={{ color: "var(--ink-4)", cursor: "default" }}
-          >
-            <span>{n.label}</span>
+      {!collapsed && (
+        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--hair-1)" }}>
+          <div className="t-micro muted" style={{ padding: "4px 10px 8px" }}>Coming soon</div>
+          {NAV_SOON.map((n) => (
             <span
-              className="pill soon"
-              style={{ marginLeft: "auto", height: 16, fontSize: 9, padding: "0 5px" }}
+              key={n.id}
+              className="rt-subnav-item"
+              style={{ color: "var(--ink-4)", cursor: "default" }}
             >
-              Soon
+              <span>{n.label}</span>
+              <span
+                className="pill soon"
+                style={{ marginLeft: "auto", height: 16, fontSize: 9, padding: "0 5px" }}
+              >
+                Soon
+              </span>
             </span>
-          </span>
-        ))}
+          ))}
+        </div>
+      )}
+
+      {/* Collapse toggle */}
+      <div style={{ marginTop: "auto", paddingTop: 12, borderTop: "1px solid var(--hair-1)" }}>
+        <button
+          onClick={() => setCollapsed((c) => !c)}
+          title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            width: "100%",
+            padding: "8px 0",
+            background: "none",
+            border: "none",
+            cursor: "pointer",
+            color: "var(--ink-3)",
+            borderRadius: "var(--r-2)",
+          }}
+        >
+          <IconChevron
+            size={15}
+            style={{ transform: collapsed ? "rotate(0deg)" : "rotate(180deg)", transition: "transform 0.2s ease" }}
+          />
+        </button>
       </div>
     </aside>
   );

@@ -9,6 +9,8 @@
     shop: {{ shop.permanent_domain | json }},
     endpoint: {{ routes.root_url | append: "apps/retainify/popup-signup" | json }},
     configEndpoint: {{ routes.root_url | append: "apps/retainify/popup-config" | json }},
+    pushSubscribeUrl: {{ routes.root_url | append: "apps/retainify/push-subscribe" | json }},
+    vapidPublicKey: "BFcRNuuEtbWAGL3uEFGJbWIIUplpt5h4mtPTc0W-tP0tM98J7EWRovwkdZtqpbk4uREjABdkG1X-w_BjklgDOwk",
   };
 </script>
 {{ 'cart-rescue-popup.js' | asset_url | script_tag }}
