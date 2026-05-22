@@ -120,14 +120,19 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
     }
   }
 
-  // JourneyJob cascades on JourneyStep delete, so blindly wiping every step
-  // would silently kill in-flight emails for contacts already enrolled in the
-  // published version. Steps still referenced by a job are *archived* instead
-  // of deleted — kept so their jobs survive, but hidden from the builder
-  // canvas and step counts (all reads filter isArchived: false). Steps with no
-  // jobs are safe to delete outright.
+  // JourneyJob AND PushJob both cascade on JourneyStep delete, so blindly
+  // wiping every step would silently kill in-flight emails for contacts
+  // already enrolled AND erase historical push send records. Steps still
+  // referenced by *either* relation are *archived* instead of deleted — kept
+  // so their jobs survive, but hidden from the builder canvas and step counts
+  // (all reads filter isArchived: false). Steps with no jobs are safe to
+  // delete outright.
   const stepsWithJobs = await prisma.journeyStep.findMany({
-    where: { journeyId, isArchived: false, jobs: { some: {} } },
+    where: {
+      journeyId,
+      isArchived: false,
+      OR: [{ jobs: { some: {} } }, { pushJobs: { some: {} } }],
+    },
     select: { id: true },
   });
   const archiveIds = stepsWithJobs.map((s) => s.id);

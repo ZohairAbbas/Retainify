@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
+import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { sendPushNotification } from "../lib/push/web-push.server.js";
@@ -29,7 +31,7 @@ export const action = async ({ request }) => {
       create: { shop, pushEnabled: true },
       update: { pushEnabled: !current?.pushEnabled },
     });
-    return { ok: true };
+    return { ok: true, toggled: true };
   }
 
   if (intent === "send-test") {
@@ -67,117 +69,281 @@ export const action = async ({ request }) => {
 
 export default function PushPage() {
   const { settings, subCount } = useLoaderData();
-  const fetcher = useFetcher();
+  const toggleFetcher = useFetcher();
+  const testFetcher = useFetcher();
 
   const pushEnabled = settings.pushEnabled ?? false;
-  const saving = fetcher.state !== "idle";
-  const testResult = fetcher.data;
+  const togglePending = toggleFetcher.state !== "idle";
+  const sending = testFetcher.state !== "idle";
+  const testResult = testFetcher.data;
 
-  function toggle() {
-    const fd = new FormData();
-    fd.set("intent", "toggle-push-enabled");
-    fetcher.submit(fd, { method: "post" });
+  const [title, setTitle] = useState("Hello from Retainify");
+  const [body, setBody] = useState("Your cart is waiting for you.");
+  const [url, setUrl] = useState("/");
+
+  function toggleEnabled() {
+    toggleFetcher.submit({ intent: "toggle-push-enabled" }, { method: "post" });
   }
 
-  function sendTest(e) {
-    e.preventDefault();
-    fetcher.submit(e.currentTarget, { method: "post" });
+  function sendTest() {
+    testFetcher.submit(
+      { intent: "send-test", title, body, url },
+      { method: "post" },
+    );
   }
 
   return (
-    <div className="rt-page-shell">
-      <div className="rt-page-header">
+    <div className="rt-page">
+      <header className="rt-page-head">
         <div>
-          <h1 className="t-h1">Push Notifications</h1>
-          <p className="t-small muted" style={{ marginTop: 4 }}>
-            Send browser push notifications to your subscribers.
-          </p>
+          <div className="t-micro muted" style={{ marginBottom: 8 }}>Retainify</div>
+          <h1 className="t-display-2" style={{ margin: 0 }}>Push</h1>
         </div>
-      </div>
+      </header>
 
-      <div className="rt-page-body" style={{ maxWidth: 680 }}>
-        {/* Status card */}
-        <div className="card" style={{ marginBottom: 20 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-            <div>
-              <div className="t-h3" style={{ marginBottom: 4 }}>Push channel</div>
-              <div className="t-small muted">
-                When enabled, the popup will prompt visitors for push permission after email capture.
-              </div>
-            </div>
-            <label className="rt-toggle" style={{ flexShrink: 0, marginLeft: 24 }}>
-              <input type="checkbox" checked={pushEnabled} onChange={toggle} disabled={saving} />
-              <span className="rt-toggle-switch" />
-            </label>
-          </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 24, alignItems: "start" }}>
+        {/* Left: form */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
-          <div style={{ marginTop: 20, display: "flex", gap: 32 }}>
-            <div>
-              <div className="t-micro muted">Active subscribers</div>
-              <div className="t-h2 t-mono" style={{ marginTop: 4 }}>{subCount}</div>
-            </div>
-            <div>
-              <div className="t-micro muted">Status</div>
-              <div style={{ marginTop: 4 }}>
-                <span className={`pill ${pushEnabled ? "active" : "draft"}`}>
+          {/* Status */}
+          <section className="rt-form-section">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <div className="t-micro muted" style={{ marginBottom: 4 }}>Status</div>
+                <div className="t-body" style={{ fontWeight: 500 }}>
                   {pushEnabled ? "Enabled" : "Disabled"}
-                </span>
+                </div>
+                <div className="t-small muted" style={{ marginTop: 2 }}>
+                  {pushEnabled
+                    ? "The popup will prompt visitors for push permission after email capture."
+                    : "Toggle on to start collecting push subscribers from your popup."}
+                </div>
+              </div>
+              <label className="rt-toggle">
+                <input
+                  type="checkbox"
+                  checked={pushEnabled}
+                  onChange={toggleEnabled}
+                  disabled={togglePending}
+                />
+                <span className="rt-toggle-switch" />
+              </label>
+            </div>
+          </section>
+
+          {/* Subscribers */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>Subscribers</div>
+            <div style={{ display: "flex", gap: 48 }}>
+              <div>
+                <div className="t-display-2 t-mono" style={{ lineHeight: 1, margin: 0 }}>{subCount}</div>
+                <div className="t-small muted" style={{ marginTop: 6 }}>
+                  Active push subscriptions
+                </div>
               </div>
             </div>
-          </div>
-        </div>
+          </section>
 
-        {/* Setup instructions */}
-        <div className="card" style={{ marginBottom: 20 }}>
-          <div className="t-h3" style={{ marginBottom: 8 }}>How it works</div>
-          <ol style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 8 }} className="t-small muted">
-            <li>Make sure the <strong>Retainify Popup</strong> app embed block is enabled in your theme (Online Store → Themes → Customize → App embeds).</li>
-            <li>When a visitor submits their email in the popup, they'll be prompted to allow push notifications.</li>
-            <li>Add a <strong>Push Notification</strong> step to any flow to send pushes to enrolled subscribers.</li>
-          </ol>
-        </div>
+          {/* How it works */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>How it works</div>
+            <ol style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 10 }} className="t-small">
+              <li className="muted">
+                Make sure the <strong style={{ color: "var(--ink-1)" }}>Retainify Popup</strong> app embed is enabled in your theme.
+              </li>
+              <li className="muted">
+                When a visitor submits their email in the popup, they'll be prompted to allow browser push notifications.
+              </li>
+              <li className="muted">
+                Add a <strong style={{ color: "var(--ink-1)" }}>Push Notification</strong> step to any flow to send pushes to enrolled subscribers.
+              </li>
+            </ol>
+          </section>
 
-        {/* Test notification */}
-        <div className="card">
-          <div className="t-h3" style={{ marginBottom: 4 }}>Send a test notification</div>
-          <div className="t-small muted" style={{ marginBottom: 16 }}>
-            Sends to up to 5 active subscribers for this shop.
-          </div>
-          <fetcher.Form method="post" onSubmit={sendTest}>
-            <input type="hidden" name="intent" value="send-test" />
-            <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {/* Test notification */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>Send a test notification</div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
               <div>
                 <label className="field-label">Title</label>
-                <input className="input" name="title" defaultValue="Hello from Retainify" maxLength={65} />
+                <input
+                  className="input"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  maxLength={65}
+                />
+                <div className="field-help">{65 - title.length} characters remaining</div>
               </div>
               <div>
                 <label className="field-label">Body</label>
-                <input className="input" name="body" defaultValue="Your cart is waiting for you." maxLength={200} />
+                <input
+                  className="input"
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  maxLength={200}
+                />
               </div>
               <div>
                 <label className="field-label">Click URL</label>
-                <input className="input" name="url" defaultValue="/" placeholder="/" />
+                <input
+                  className="input"
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  placeholder="/"
+                />
+                <div className="field-help">Where the visitor lands when they tap the notification.</div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <button className="btn btn-primary" type="submit" disabled={saving || subCount === 0}>
-                  <Icons.Send size={14} /> Send test
-                </button>
-                {subCount === 0 && (
-                  <span className="t-small muted">No subscribers yet — accept push permission in your storefront first.</span>
-                )}
-              </div>
+
               {testResult?.ok === true && testResult.sent !== undefined && (
-                <div className="t-small" style={{ color: "var(--success-ink)" }}>
+                <div
+                  className="t-small"
+                  style={{
+                    background: "var(--success-bg)",
+                    color: "var(--success-ink)",
+                    padding: "8px 12px",
+                    borderRadius: "var(--r-2)",
+                  }}
+                >
                   Sent to {testResult.sent} subscriber{testResult.sent !== 1 ? "s" : ""}.
                 </div>
               )}
               {testResult?.ok === false && testResult.error && (
-                <div className="t-small" style={{ color: "var(--danger-ink)" }}>{testResult.error}</div>
+                <div
+                  className="t-small"
+                  style={{
+                    background: "var(--danger-bg)",
+                    color: "var(--danger-ink)",
+                    padding: "8px 12px",
+                    borderRadius: "var(--r-2)",
+                  }}
+                >
+                  {testResult.error}
+                </div>
               )}
             </div>
-          </fetcher.Form>
+          </section>
+
+          <div style={{ display: "flex", justifyContent: "flex-end" }}>
+            <button
+              className="btn btn-primary"
+              onClick={sendTest}
+              disabled={sending || subCount === 0}
+            >
+              {Icons.Send && <Icons.Send size={14} />}
+              {sending ? "Sending…" : "Send test"}
+            </button>
+          </div>
+        </div>
+
+        {/* Right: live preview */}
+        <div style={{ position: "sticky", top: 16 }}>
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Live preview</div>
+          <div style={{
+            background: "var(--ink-4)",
+            borderRadius: "var(--r-3)",
+            padding: "32px 16px",
+            minHeight: 480,
+            display: "flex",
+            alignItems: "flex-start",
+            justifyContent: "center",
+          }}>
+            <NotificationPreview title={title} body={body} url={url} />
+          </div>
         </div>
       </div>
     </div>
   );
 }
+
+function NotificationPreview({ title, body, url }) {
+  return (
+    <div
+      style={{
+        background: "#FFFFFF",
+        borderRadius: 10,
+        padding: "12px 14px",
+        width: "100%",
+        maxWidth: 340,
+        boxShadow: "0 6px 18px rgba(0,0,0,.22)",
+        fontFamily: "var(--font-ui)",
+        display: "flex",
+        gap: 12,
+        alignItems: "flex-start",
+        marginTop: 8,
+      }}
+    >
+      {/* Icon block */}
+      <div
+        style={{
+          width: 40,
+          height: 40,
+          borderRadius: 8,
+          background: "var(--node-push-bg)",
+          color: "var(--node-push-ink)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexShrink: 0,
+        }}
+      >
+        {Icons.Bell && <Icons.Bell size={20} />}
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "baseline",
+            gap: 8,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 13,
+              fontWeight: 600,
+              color: "#111",
+              lineHeight: 1.25,
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+          >
+            {title || "Notification"}
+          </div>
+          <div style={{ fontSize: 11, color: "#9aa0a6", flexShrink: 0 }}>now</div>
+        </div>
+        <div
+          style={{
+            fontSize: 12,
+            color: "#5f6368",
+            marginTop: 4,
+            lineHeight: 1.4,
+            display: "-webkit-box",
+            WebkitLineClamp: 2,
+            WebkitBoxOrient: "vertical",
+            overflow: "hidden",
+          }}
+        >
+          {body || "Push notification body text."}
+        </div>
+        <div
+          style={{
+            fontSize: 11,
+            color: "#9aa0a6",
+            marginTop: 6,
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {(url && url.startsWith("http") ? new URL(url).hostname : "yourstore.com")}
+          {url && !url.startsWith("http") && url}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export const headers = (headersArgs) => boundary.headers(headersArgs);
