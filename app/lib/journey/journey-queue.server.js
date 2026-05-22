@@ -44,12 +44,16 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
     // exitReason "" is NOT a reliable in-flight signal: a journey ending in delay+exit
     // never sets exitReason until every job completes, so the old check blocked
     // re-entry permanently.
-    const since = new Date(Date.now() - 5 * 60 * 1000);
+    //
+    // Window is 30s: Shopify's orders/create + orders/paid double-fire is observed
+    // within ~3-10s in practice. A longer window blocks legitimate repeat orders
+    // (e.g. customer placing two orders 2-3 minutes apart).
+    const since = new Date(Date.now() - 30 * 1000);
     const recent = await prisma.journeyEnrollment.findFirst({
       where: { journeyId, contactEmail, enrolledAt: { gt: since } },
     });
     if (recent) {
-      console.warn(`[enroll] ${contactEmail} enrolled in ${journeyId} <5min ago — skipping duplicate`);
+      console.warn(`[enroll] ${contactEmail} enrolled in ${journeyId} <30s ago — skipping duplicate webhook`);
       return recent;
     }
   }

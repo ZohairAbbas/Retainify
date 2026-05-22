@@ -80,7 +80,9 @@ async function processPushJob(job) {
   });
 
   if (!subscriptions.length) {
-    // No subscription for this contact — not a failure, just skip
+    console.warn(
+      `[push-worker] job=${job.id} no active subscriptions for contactEmail=${enrollment.contactEmail} on shop=${job.shop} — skipping`,
+    );
     await markPushJobDone(job.id);
     return;
   }
@@ -98,17 +100,25 @@ async function processPushJob(job) {
   };
 
   let anySuccess = false;
+  let anyFailure = false;
   let lastError = "";
 
   for (const sub of subscriptions) {
+    let host = "?";
+    try { host = new URL(sub.endpoint).host; } catch (_) {}
     const result = await sendPushNotification(
       { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
       pushPayload,
     );
     if (result.ok) {
       anySuccess = true;
+      console.log(`[push-worker] job=${job.id} sub=${sub.id} host=${host} OK`);
     } else {
+      anyFailure = true;
       lastError = result.error || "unknown";
+      console.warn(
+        `[push-worker] job=${job.id} sub=${sub.id} host=${host} FAIL gone=${!!result.gone} error=${lastError}`,
+      );
       if (result.gone) {
         // Subscription expired — deactivate it
         await prisma.pushSubscription.update({
@@ -119,10 +129,14 @@ async function processPushJob(job) {
     }
   }
 
-  if (anySuccess || subscriptions.length > 0) {
+  console.log(
+    `[push-worker] job=${job.id} summary subs=${subscriptions.length} ok=${anySuccess} fail=${anyFailure}`,
+  );
+
+  if (anySuccess) {
     await markPushJobDone(job.id, { sentAt: new Date() });
   } else {
-    await markPushJobFailed(job.id, lastError);
+    await markPushJobFailed(job.id, lastError || "all subscriptions failed");
   }
 }
 
