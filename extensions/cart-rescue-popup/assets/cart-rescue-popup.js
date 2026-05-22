@@ -75,7 +75,12 @@
             }),
           });
         })
-        .catch(function () { /* silent — push is enhancement, not critical */ });
+        .catch(function (err) {
+          try {
+            var msg = (err && (err.name + ": " + err.message)) || "unknown";
+            new Image().src = "/apps/retainify/push-sw?err=" + encodeURIComponent(msg);
+          } catch (_) {}
+        });
     });
   }
 
