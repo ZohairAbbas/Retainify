@@ -52,9 +52,20 @@
       if (permission !== "granted") return;
       navigator.serviceWorker.register("/apps/retainify/push-sw", { scope: "/apps/retainify/" })
         .then(function (reg) {
-          // Don't use serviceWorker.ready — it waits for a SW controlling
-          // the current page, which never happens since our scope is
-          // /apps/retainify/. Subscribe directly on the registration.
+          // Wait for the SW to reach the "activated" state before subscribing.
+          // Mobile Chrome's install/activate cycle is slower than desktop's; calling
+          // pushManager.subscribe() before activation rejects with
+          // "Subscription failed - no active Service Worker".
+          if (reg.active) return reg;
+          var worker = reg.installing || reg.waiting;
+          if (!worker) return reg;
+          return new Promise(function (resolve) {
+            worker.addEventListener("statechange", function () {
+              if (worker.state === "activated") resolve(reg);
+            });
+          });
+        })
+        .then(function (reg) {
           return reg.pushManager.subscribe({
             userVisibleOnly: true,
             applicationServerKey: urlBase64ToUint8Array(vapidKey),
