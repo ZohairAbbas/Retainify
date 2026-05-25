@@ -108,7 +108,6 @@
   // ── Config fetch ────────────────────────────────────────────────────────
   var triggered = false;
   var _configReady = false;
-  var _remoteConfig = null;
   var _templateId = "editorial";
   var _tplData = {};
   var _frequency = "session";
@@ -123,7 +122,6 @@
         if (remote.enabled === false) {
           triggered = true; // suppress entirely
         } else {
-          _remoteConfig = remote;
           _templateId = remote.template || "editorial";
           _tplData = remote.config || {};
           _frequency = _tplData.frequency || "session";
@@ -176,8 +174,7 @@
   }
 
   // Shared overlay + close handling
-  function mountOverlay(innerHTML, opts) {
-    opts = opts || {};
+  function mountOverlay(innerHTML) {
     var overlay = document.createElement("div");
     overlay.id = "rt-overlay";
     overlay.style.cssText =
@@ -247,13 +244,16 @@
         .then(function (r) { return r.json(); })
         .then(function () {
           localStorage.setItem(STORAGE_KEY_FOREVER, "1");
-          if (status) {
-            status.innerHTML =
-              "<strong>Almost there!</strong><br/>Check your inbox to confirm your email and get your discount.";
-            status.style.display = "block";
-          }
           requestPushPermission(email);
-          setTimeout(close, 3000);
+          var spinMs = (_templateId === "wheel") ? spinWheel(modal) : 0;
+          setTimeout(function () {
+            if (status) {
+              status.innerHTML =
+                "<strong>Almost there!</strong><br/>Check your inbox to confirm your email and get your discount.";
+              status.style.display = "block";
+            }
+            setTimeout(close, 3000);
+          }, spinMs);
         })
         .catch(function () {
           btn.disabled = false;
@@ -287,7 +287,7 @@
       ".rt-tpl-editorial-mast{position:absolute;top:18px;left:18px;color:#F4EDDE;font-family:'Instrument Serif',serif;font-size:14px;letter-spacing:.1em}" +
       ".rt-tpl-editorial-body{padding:38px 36px 32px;position:relative}" +
       ".rt-tpl-editorial-rule{font-size:10px;letter-spacing:.32em;text-transform:uppercase;color:var(--ed-accent);margin-bottom:18px;font-weight:500}" +
-      ".rt-tpl-editorial-h{font-family:'Instrument Serif','DM Serif Display',serif;font-size:44px;line-height:.98;margin:0 0 12px;letter-spacing:-.01em}" +
+      ".rt-tpl-editorial-h{font-family:'Instrument Serif','DM Serif Display',serif;font-size:44px;line-height:.98;margin:0 0 12px;letter-spacing:-.01em;color:#1F2A1E}" +
       ".rt-tpl-editorial-h em{font-style:italic;color:var(--ed-accent)}" +
       ".rt-tpl-editorial-p{font-size:13px;line-height:1.6;color:#4A4232;margin:0 0 22px;max-width:280px}" +
       ".rt-tpl-editorial-input{width:100%;height:40px;padding:0 14px;background:transparent;border:none;border-bottom:1px solid #1F2A1E;font-family:inherit;font-size:13px;color:#1F2A1E;outline:none;margin-bottom:14px}" +
@@ -332,7 +332,7 @@
       "@keyframes rt-brutalmarquee{from{transform:translateX(0)}to{transform:translateX(-50%)}}" +
       ".rt-tpl-brutal-body{padding:28px 32px 30px}" +
       ".rt-tpl-brutal-eyebrow{display:inline-block;background:var(--br-ink);color:var(--br-bg);font-family:'Archivo Black',sans-serif;font-size:11px;letter-spacing:.18em;padding:4px 10px;margin-bottom:18px}" +
-      ".rt-tpl-brutal-h{font-family:'Archivo Black',sans-serif;font-size:72px;line-height:.86;letter-spacing:-.04em;margin:0 0 4px;text-transform:uppercase}" +
+      ".rt-tpl-brutal-h{font-family:'Archivo Black',sans-serif;font-size:72px;line-height:.86;letter-spacing:-.04em;margin:0 0 4px;text-transform:uppercase;color:var(--br-ink)}" +
       ".rt-tpl-brutal-h .pct{display:inline-block;transform:translateY(6px) rotate(-4deg)}" +
       ".rt-tpl-brutal-sub{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;line-height:1.3;margin:14px 0 22px;text-transform:uppercase;letter-spacing:.04em;max-width:380px}" +
       ".rt-tpl-brutal-form{display:flex;gap:0}" +
@@ -394,7 +394,7 @@
     injectCss("rt-tpl-wheel-css",
       ".rt-tpl-wheel{width:640px;max-width:calc(100vw - 32px);background:radial-gradient(circle at 20% 0%,rgba(255,255,255,.18),transparent 50%),radial-gradient(circle at 80% 100%,rgba(255,210,80,.18),transparent 50%),linear-gradient(155deg,#2A1B4E 0%,#4E2570 50%,#6E2D7B 100%);color:#FFF1D2;font-family:'Geist',sans-serif;display:grid;grid-template-columns:280px 1fr;border-radius:18px;overflow:hidden;position:relative;box-shadow:0 30px 70px rgba(40,20,70,.4),inset 0 0 0 1px rgba(255,255,255,.06)}" +
       ".rt-tpl-wheel-left{padding:32px 0 32px 32px;position:relative;display:flex;align-items:center;justify-content:center}" +
-      ".rt-tpl-wheel-disc{position:relative;width:240px;height:240px;border-radius:50%;box-shadow:0 0 0 8px rgba(255,255,255,.12),0 0 0 12px rgba(0,0,0,.2);overflow:hidden;transform:translateX(-30px)}" +
+      ".rt-tpl-wheel-disc{position:relative;width:240px;height:240px;border-radius:50%;box-shadow:0 0 0 8px rgba(255,255,255,.12),0 0 0 12px rgba(0,0,0,.2);overflow:hidden;transform:translateX(-30px);transition:transform 3.6s cubic-bezier(.17,.67,.21,1)}" +
       ".rt-tpl-wheel-svg{position:absolute;inset:0;width:100%;height:100%}" +
       ".rt-tpl-wheel-hub{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:34px;height:34px;border-radius:50%;background:radial-gradient(circle,#fff 0%,#FFD58A 100%);box-shadow:0 0 0 4px rgba(0,0,0,.4),0 2px 6px rgba(0,0,0,.3);z-index:2}" +
       ".rt-tpl-wheel-pointer{position:absolute;top:50%;right:-10px;transform:translateY(-50%);width:28px;height:28px;background:#FFD58A;clip-path:polygon(0 50%,100% 0,100% 100%);z-index:3}" +
@@ -409,12 +409,14 @@
       ".rt-tpl-wheel [data-rt-status]{display:none;color:#FFF1D2;font-size:13px;margin-top:12px;text-align:center}"
     );
 
-    return '<div class="rt-tpl-wheel">' +
+    var sliceLabels = slices.map(function (s) { return String(s.label || ""); });
+
+    return '<div class="rt-tpl-wheel" data-rt-wheel data-rt-slice-count="' + total + '" data-rt-slice-labels="' + escapeHtml(JSON.stringify(sliceLabels)) + '" data-rt-discount="' + escapeHtml(d.discount || "") + '">' +
       '<button class="rt-tpl-wheel-close" data-rt-close aria-label="Close">' +
         '<svg width="10" height="10" viewBox="0 0 10 10"><path d="M2 2l6 6M8 2L2 8" stroke="currentColor" stroke-width="1.4" fill="none"/></svg>' +
       '</button>' +
       '<div class="rt-tpl-wheel-left">' +
-        '<div class="rt-tpl-wheel-disc">' +
+        '<div class="rt-tpl-wheel-disc" data-rt-disc>' +
           '<svg class="rt-tpl-wheel-svg" viewBox="0 0 200 200">' + wedges + '<circle cx="100" cy="100" r="99" fill="none" stroke="rgba(0,0,0,.2)" stroke-width="1"/></svg>' +
           '<div class="rt-tpl-wheel-hub"></div>' +
         '</div>' +
@@ -486,7 +488,7 @@
       ".rt-tpl-holiday-body{padding:40px 44px 36px;position:relative}" +
       ".rt-tpl-holiday-eyebrow{display:flex;align-items:center;gap:10px;font-family:'DM Serif Display',serif;font-style:italic;font-size:14px;color:var(--hd-accent);margin-bottom:12px;letter-spacing:.02em}" +
       ".rt-tpl-holiday-eyebrow::before,.rt-tpl-holiday-eyebrow::after{content:'';flex:1;height:1px;background:var(--hd-accent);opacity:.6}" +
-      ".rt-tpl-holiday-h{font-family:'DM Serif Display','Instrument Serif',serif;font-size:46px;line-height:1;text-align:center;margin:0 0 8px;letter-spacing:-.005em}" +
+      ".rt-tpl-holiday-h{font-family:'DM Serif Display','Instrument Serif',serif;font-size:46px;line-height:1;text-align:center;margin:0 0 8px;letter-spacing:-.005em;color:var(--hd-ink)}" +
       ".rt-tpl-holiday-h em{font-style:italic;color:var(--hd-accent)}" +
       ".rt-tpl-holiday-p{text-align:center;font-size:13px;line-height:1.55;margin:0 auto 24px;max-width:360px;opacity:.78}" +
       ".rt-tpl-holiday-countdown{display:flex;justify-content:center;gap:8px;margin:0 0 24px}" +
@@ -524,6 +526,43 @@
     '</div>';
 
     return html;
+  }
+
+  // Pick the slice whose label contains the merchant's discount %, fall back to 0.
+  function pickWheelSlice(labels, discount) {
+    if (!Array.isArray(labels) || !labels.length) return 0;
+    var target = String(discount);
+    for (var i = 0; i < labels.length; i++) {
+      var m = labels[i].match(/(\d+)\s*%/);
+      if (m && m[1] === target) return i;
+    }
+    return 0;
+  }
+
+  // Spin the wheel disc so the chosen slice lands at the pointer (3 o'clock).
+  // Returns the duration in ms so callers can chain post-spin UI.
+  function spinWheel(modal) {
+    var wheel = modal.querySelector("[data-rt-wheel]");
+    var disc = modal.querySelector("[data-rt-disc]");
+    if (!wheel || !disc) return 0;
+    var total = parseInt(wheel.getAttribute("data-rt-slice-count"), 10) || 6;
+    var labels;
+    try { labels = JSON.parse(wheel.getAttribute("data-rt-slice-labels") || "[]"); } catch (_) { labels = []; }
+    var discount = wheel.getAttribute("data-rt-discount") || "";
+    var winnerIdx = pickWheelSlice(labels, discount);
+
+    var sliceAngle = 360 / total;
+    // Slice center angle measured clockwise from 12 o'clock.
+    var centerFromTop = (winnerIdx + 0.5) * sliceAngle;
+    // Pointer sits at 3 o'clock = 90° clockwise from 12. Rotate the disc so the
+    // slice center lands there: rotation = 90 - centerFromTop (mod 360),
+    // plus 5 full spins for visual punch.
+    var rest = ((90 - centerFromTop) % 360 + 360) % 360;
+    var finalDeg = 360 * 5 + rest;
+    var DURATION = 3600;
+    // Keep the existing translateX(-30px) offset from CSS while we spin.
+    disc.style.transform = "translateX(-30px) rotate(" + finalDeg + "deg)";
+    return DURATION;
   }
 
   function wireCountdown(modal) {

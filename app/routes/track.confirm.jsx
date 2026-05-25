@@ -57,7 +57,8 @@ export const loader = async ({ request }) => {
   // Generate discount code
   let discountCode = "";
   const popupSettings = await prisma.popupSettings.findUnique({ where: { shop } });
-  const discountPct = popupSettings?.discountPct ?? 10;
+  const configDiscount = popupSettings?.config?.discount;
+  const discountPct = Number.isFinite(configDiscount) ? configDiscount : (popupSettings?.discountPct ?? 10);
 
   try {
     discountCode = await createDiscountCode(shop, discountPct);

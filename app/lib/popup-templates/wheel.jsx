@@ -107,7 +107,7 @@ export function EditorWheel({ data, onUpdate }) {
       <div className="rt-pop-section">
         <div className="rt-pop-section-h">Wheel slices</div>
         <div className="field-help" style={{ marginBottom: 10 }}>
-          Six prizes; first one is awarded on landing. Use “TRY AGAIN” to add risk.
+          The wheel always lands on the slice whose label matches your discount % below (e.g. <code>15% OFF</code> wins when <strong>Discount</strong> = 15). Other slices are decorative — use them to add suspense.
         </div>
         {slices.map((s, i) => (
           <div key={i} className="rt-wheel-slice-row">
