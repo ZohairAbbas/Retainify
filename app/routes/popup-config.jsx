@@ -26,15 +26,21 @@ export const loader = async ({ request }) => {
     return new Response(JSON.stringify({ enabled: false }), { status: 200, headers: HEADERS });
   }
 
+  const config = settings.config || null;
+  const template = settings.template || "editorial";
+
   return new Response(
     JSON.stringify({
       enabled: true,
+      template,
+      config,
+      // Legacy fields — kept for any old extension build still in the wild.
       headline: settings.headline,
       bodyText: settings.bodyText,
       buttonText: settings.buttonText,
       brandColor: settings.brandColor,
       logoUrl: settings.logoUrl,
-      discountPct: settings.discountPct,
+      discountPct: config?.discount ?? settings.discountPct,
       delayMs: settings.delayMs,
     }),
     { status: 200, headers: HEADERS },

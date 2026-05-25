@@ -38,7 +38,13 @@ type Pages = {
   "/track/unsubscribe": {
     params: {};
   };
+  "/push-unsubscribe": {
+    params: {};
+  };
   "/webhooks/orders": {
+    params: {};
+  };
+  "/push-subscribe": {
     params: {};
   };
   "/track/confirm": {
@@ -56,6 +62,9 @@ type Pages = {
   "/auth/login": {
     params: {};
   };
+  "/push-sw": {
+    params: {};
+  };
   "/auth/*": {
     params: {
       "*": string;
@@ -67,19 +76,27 @@ type Pages = {
   "/app/preview/email": {
     params: {};
   };
+  "/app/flows": {
+    params: {};
+  };
+  "/app/playbook/:id": {
+    params: {
+      "id": string;
+    };
+  };
   "/app/additional": {
     params: {};
   };
   "/app/onboarding": {
     params: {};
   };
-  "/app/playbooks": {
-    params: {};
-  };
-  "/app/playbooks/:id": {
+  "/app/flows/:id": {
     params: {
       "id": string;
     };
+  };
+  "/app/playbooks": {
+    params: {};
   };
   "/app/settings": {
     params: {};
@@ -90,12 +107,15 @@ type Pages = {
   "/app/popup": {
     params: {};
   };
+  "/app/push": {
+    params: {};
+  };
 };
 
 type RouteFiles = {
   "root.jsx": {
     id: "root";
-    page: "/" | "/webhooks/customers/data_request" | "/webhooks/app/scopes_update" | "/webhooks/customers/create" | "/webhooks/customers/redact" | "/webhooks/app/uninstalled" | "/webhooks/shop/redact" | "/webhooks/checkouts" | "/track/unsubscribe" | "/webhooks/orders" | "/track/confirm" | "/popup-config" | "/popup-signup" | "/track/click" | "/auth/login" | "/auth/*" | "/app" | "/app/preview/email" | "/app/additional" | "/app/onboarding" | "/app/playbooks" | "/app/playbooks/:id" | "/app/settings" | "/app/journey" | "/app/popup";
+    page: "/" | "/webhooks/customers/data_request" | "/webhooks/app/scopes_update" | "/webhooks/customers/create" | "/webhooks/customers/redact" | "/webhooks/app/uninstalled" | "/webhooks/shop/redact" | "/webhooks/checkouts" | "/track/unsubscribe" | "/push-unsubscribe" | "/webhooks/orders" | "/push-subscribe" | "/track/confirm" | "/popup-config" | "/popup-signup" | "/track/click" | "/auth/login" | "/push-sw" | "/auth/*" | "/app" | "/app/preview/email" | "/app/flows" | "/app/playbook/:id" | "/app/additional" | "/app/onboarding" | "/app/flows/:id" | "/app/playbooks" | "/app/settings" | "/app/journey" | "/app/popup" | "/app/push";
   };
   "routes/webhooks.customers.data_request.jsx": {
     id: "routes/webhooks.customers.data_request";
@@ -129,9 +149,17 @@ type RouteFiles = {
     id: "routes/track.unsubscribe";
     page: "/track/unsubscribe";
   };
+  "routes/push-unsubscribe.jsx": {
+    id: "routes/push-unsubscribe";
+    page: "/push-unsubscribe";
+  };
   "routes/webhooks.orders.jsx": {
     id: "routes/webhooks.orders";
     page: "/webhooks/orders";
+  };
+  "routes/push-subscribe.jsx": {
+    id: "routes/push-subscribe";
+    page: "/push-subscribe";
   };
   "routes/track.confirm.jsx": {
     id: "routes/track.confirm";
@@ -153,6 +181,10 @@ type RouteFiles = {
     id: "routes/auth.login";
     page: "/auth/login";
   };
+  "routes/push-sw.jsx": {
+    id: "routes/push-sw";
+    page: "/push-sw";
+  };
   "routes/auth.$.jsx": {
     id: "routes/auth.$";
     page: "/auth/*";
@@ -163,11 +195,19 @@ type RouteFiles = {
   };
   "routes/app.jsx": {
     id: "routes/app";
-    page: "/app" | "/app/preview/email" | "/app/additional" | "/app/onboarding" | "/app/playbooks" | "/app/playbooks/:id" | "/app/settings" | "/app/journey" | "/app/popup";
+    page: "/app" | "/app/preview/email" | "/app/flows" | "/app/playbook/:id" | "/app/additional" | "/app/onboarding" | "/app/flows/:id" | "/app/playbooks" | "/app/settings" | "/app/journey" | "/app/popup" | "/app/push";
   };
   "routes/app.preview.email.jsx": {
     id: "routes/app.preview.email";
     page: "/app/preview/email";
+  };
+  "routes/app.flows._index.jsx": {
+    id: "routes/app.flows._index";
+    page: "/app/flows";
+  };
+  "routes/app.playbook.$id.jsx": {
+    id: "routes/app.playbook.$id";
+    page: "/app/playbook/:id";
   };
   "routes/app.additional.jsx": {
     id: "routes/app.additional";
@@ -177,13 +217,13 @@ type RouteFiles = {
     id: "routes/app.onboarding";
     page: "/app/onboarding";
   };
+  "routes/app.flows.$id.jsx": {
+    id: "routes/app.flows.$id";
+    page: "/app/flows/:id";
+  };
   "routes/app.playbooks.jsx": {
     id: "routes/app.playbooks";
-    page: "/app/playbooks" | "/app/playbooks/:id";
-  };
-  "routes/app.playbooks.$id.jsx": {
-    id: "routes/app.playbooks.$id";
-    page: "/app/playbooks/:id";
+    page: "/app/playbooks";
   };
   "routes/app.settings.jsx": {
     id: "routes/app.settings";
@@ -201,6 +241,10 @@ type RouteFiles = {
     id: "routes/app.popup";
     page: "/app/popup";
   };
+  "routes/app.push.jsx": {
+    id: "routes/app.push";
+    page: "/app/push";
+  };
 };
 
 type RouteModules = {
@@ -213,22 +257,28 @@ type RouteModules = {
   "routes/webhooks.shop.redact": typeof import("./app/routes/webhooks.shop.redact.jsx");
   "routes/webhooks.checkouts": typeof import("./app/routes/webhooks.checkouts.jsx");
   "routes/track.unsubscribe": typeof import("./app/routes/track.unsubscribe.jsx");
+  "routes/push-unsubscribe": typeof import("./app/routes/push-unsubscribe.jsx");
   "routes/webhooks.orders": typeof import("./app/routes/webhooks.orders.jsx");
+  "routes/push-subscribe": typeof import("./app/routes/push-subscribe.jsx");
   "routes/track.confirm": typeof import("./app/routes/track.confirm.jsx");
   "routes/popup-config": typeof import("./app/routes/popup-config.jsx");
   "routes/popup-signup": typeof import("./app/routes/popup-signup.jsx");
   "routes/track.click": typeof import("./app/routes/track.click.jsx");
   "routes/auth.login": typeof import("./app/routes/auth.login/route.jsx");
+  "routes/push-sw": typeof import("./app/routes/push-sw.jsx");
   "routes/auth.$": typeof import("./app/routes/auth.$.jsx");
   "routes/_index": typeof import("./app/routes/_index/route.jsx");
   "routes/app": typeof import("./app/routes/app.jsx");
   "routes/app.preview.email": typeof import("./app/routes/app.preview.email.jsx");
+  "routes/app.flows._index": typeof import("./app/routes/app.flows._index.jsx");
+  "routes/app.playbook.$id": typeof import("./app/routes/app.playbook.$id.jsx");
   "routes/app.additional": typeof import("./app/routes/app.additional.jsx");
   "routes/app.onboarding": typeof import("./app/routes/app.onboarding.jsx");
+  "routes/app.flows.$id": typeof import("./app/routes/app.flows.$id.jsx");
   "routes/app.playbooks": typeof import("./app/routes/app.playbooks.jsx");
-  "routes/app.playbooks.$id": typeof import("./app/routes/app.playbooks.$id.jsx");
   "routes/app.settings": typeof import("./app/routes/app.settings.jsx");
   "routes/app.journey": typeof import("./app/routes/app.journey.jsx");
   "routes/app._index": typeof import("./app/routes/app._index.jsx");
   "routes/app.popup": typeof import("./app/routes/app.popup.jsx");
+  "routes/app.push": typeof import("./app/routes/app.push.jsx");
 };

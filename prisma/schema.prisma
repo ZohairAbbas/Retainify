@@ -180,6 +180,10 @@ model PopupSignup {
 model PopupSettings {
   id          String   @id @default(cuid())
   shop        String   @unique
+  enabled     Boolean  @default(true)
+  template    String   @default("editorial")
+  config      Json?
+  // Legacy columns — kept during storefront rollout, dropped in follow-up migration.
   headline    String   @default("Wait — don't go yet!")
   bodyText    String   @default("Enter your email and get 10% off your first order.")
   buttonText  String   @default("Get my discount")
@@ -187,7 +191,6 @@ model PopupSettings {
   logoUrl     String   @default("")
   discountPct Int      @default(10)
   delayMs     Int      @default(3000)
-  enabled     Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }
