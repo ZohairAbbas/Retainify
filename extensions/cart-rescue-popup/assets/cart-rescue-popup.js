@@ -105,6 +105,40 @@
 
   if (isSuppressed()) return;
 
+  // ── Webfont loader ──────────────────────────────────────────────────────
+  // Each template uses different families; load only what's needed so we don't
+  // bloat every storefront pageview with fonts the active popup won't use.
+  // Family list matches what the per-template CSS in renderXxx() references.
+  var FONT_FAMILIES_BY_TEMPLATE = {
+    editorial: ["Instrument Serif", "Geist:wght@400;500;700"],
+    brutalist: ["Archivo Black", "Space Grotesk:wght@400;700"],
+    wheel:     ["DM Serif Display:ital@0;1", "Geist:wght@400;500;700"],
+    sticker:   ["Caveat:wght@400;700", "Geist:wght@400;500;700", "Geist Mono"],
+    holiday:   ["DM Serif Display:ital@0;1", "Instrument Serif", "Geist:wght@400;500;700"],
+  };
+
+  var _fontsLoaded = false;
+  function loadTemplateFonts(templateId) {
+    if (_fontsLoaded) return;
+    _fontsLoaded = true;
+    var families = FONT_FAMILIES_BY_TEMPLATE[templateId] || FONT_FAMILIES_BY_TEMPLATE.editorial;
+    var preconnect1 = document.createElement("link");
+    preconnect1.rel = "preconnect";
+    preconnect1.href = "https://fonts.googleapis.com";
+    var preconnect2 = document.createElement("link");
+    preconnect2.rel = "preconnect";
+    preconnect2.href = "https://fonts.gstatic.com";
+    preconnect2.crossOrigin = "";
+    var fontLink = document.createElement("link");
+    fontLink.rel = "stylesheet";
+    fontLink.href = "https://fonts.googleapis.com/css2?" +
+      families.map(function (f) { return "family=" + f.replace(/ /g, "+"); }).join("&") +
+      "&display=swap";
+    document.head.appendChild(preconnect1);
+    document.head.appendChild(preconnect2);
+    document.head.appendChild(fontLink);
+  }
+
   // ── Config fetch ────────────────────────────────────────────────────────
   var triggered = false;
   var _configReady = false;
@@ -125,6 +159,7 @@
           _templateId = remote.template || "editorial";
           _tplData = remote.config || {};
           _frequency = _tplData.frequency || "session";
+          loadTemplateFonts(_templateId);
         }
         _configReady = true;
       })
