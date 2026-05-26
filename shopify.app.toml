@@ -37,7 +37,7 @@ api_version = "2025-01"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_checkouts,read_customers,read_orders,write_customers,write_discounts"
+scopes = "read_checkouts,read_customers,read_orders,read_products,write_customers,write_discounts,write_files"
 
 [auth]
 redirect_urls = [
