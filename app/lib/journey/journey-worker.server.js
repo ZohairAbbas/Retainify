@@ -103,7 +103,7 @@ async function processJourneyJob(job) {
     let brand = {};
     try { brand = JSON.parse(step.emailBrand || "{}"); } catch { brand = {}; }
     const [firstName, ...rest] = String(enrollment.contactName || "").trim().split(/\s+/);
-    html = renderVisualEmail({
+    html = await renderVisualEmail({
       blocks: parsedBlocks,
       brand,
       ctx: {
@@ -115,6 +115,7 @@ async function processJourneyJob(job) {
         unsubscribeUrl,
       },
       stepId: step.id,
+      shop,
     });
   } else {
     html = renderCartRescueEmail({

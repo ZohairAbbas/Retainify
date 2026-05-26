@@ -536,6 +536,156 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-emp-discount-code { font-family: var(--font-mono); font-weight: 500; letter-spacing: 0.08em; }
 .rt-emp-divider { border-top: 1px solid #E4DDCB; }
 .rt-emp-footer { font-size: 9px; color: #B5B8AE; text-align: center; }
+
+/* Image uploader states (inside image block inspector) */
+.rt-emb-uploader.rt-emb-uploader-drag {
+  border-color: var(--brand-700);
+  background: var(--brand-50);
+  color: var(--brand-700);
+}
+.rt-emb-uploader-error {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: var(--r-2);
+  background: var(--danger-bg);
+  color: var(--danger-ink);
+  font-size: 12px;
+}
+.rt-emb-image-preview {
+  border: 1px solid var(--hair-1);
+  border-radius: var(--r-3);
+  overflow: hidden;
+  background: var(--paper-3);
+}
+.rt-emb-image-preview img {
+  display: block;
+  width: 100%;
+  max-height: 240px;
+  object-fit: cover;
+}
+.rt-emb-image-preview-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px;
+  border-top: 1px solid var(--hair-1);
+  background: var(--paper-2);
+}
+
+/* Product picker modal */
+.rt-emb-pp-backdrop {
+  position: fixed; inset: 0;
+  background: rgba(20, 32, 26, 0.42);
+  backdrop-filter: blur(4px);
+  z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  animation: rt-fade-in 160ms var(--ease);
+}
+.rt-emb-pp {
+  background: var(--paper-3);
+  border-radius: var(--r-4);
+  box-shadow: 0 24px 64px rgba(20, 32, 26, 0.25);
+  width: 560px; max-width: calc(100vw - 32px);
+  max-height: 80vh;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+  animation: rt-pop-in 200ms var(--ease);
+}
+.rt-emb-pp-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 20px 24px;
+  border-bottom: 1px solid var(--hair-1);
+}
+.rt-emb-pp-search {
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 24px;
+  border-bottom: 1px solid var(--hair-1);
+  color: var(--ink-3);
+}
+.rt-emb-pp-search input {
+  flex: 1; background: transparent; border: 0; outline: none;
+  font-size: 14px; color: var(--ink-1);
+}
+.rt-emb-pp-results {
+  flex: 1; overflow-y: auto;
+  padding: 8px;
+  display: flex; flex-direction: column; gap: 2px;
+  min-height: 240px;
+}
+.rt-emb-pp-state {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+.rt-emb-pp-row {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%;
+  background: transparent; border: 1px solid transparent;
+  padding: 10px 12px;
+  border-radius: var(--r-3);
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--t-fast) var(--ease);
+}
+.rt-emb-pp-row:hover { background: var(--paper-2); }
+.rt-emb-pp-row.rt-on { background: var(--brand-50); border-color: var(--brand-100); }
+.rt-emb-pp-thumb {
+  width: 44px; height: 44px;
+  border-radius: var(--r-2);
+  background: var(--paper-2) center/cover;
+  border: 1px solid var(--hair-1);
+  display: flex; align-items: center; justify-content: center;
+  color: var(--ink-4);
+  flex-shrink: 0;
+}
+.rt-emb-pp-thumb.sm { width: 28px; height: 28px; }
+.rt-emb-pp-meta { flex: 1; min-width: 0; }
+.rt-emb-pp-title {
+  font-size: 13px; color: var(--ink-1); font-weight: 500;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.rt-emb-pp-price {
+  font-size: 12px; color: var(--ink-3);
+  font-family: var(--font-mono);
+  margin-top: 2px;
+}
+.rt-emb-pp-check {
+  width: 18px; height: 18px;
+  border-radius: 50%;
+  border: 1.5px solid var(--hair-3);
+  display: flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+  color: var(--on-brand);
+}
+.rt-emb-pp-check.rt-on { background: var(--brand-700); border-color: var(--brand-700); }
+.rt-emb-pp-foot {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 20px;
+  border-top: 1px solid var(--hair-1);
+  background: var(--paper-2);
+}
+
+/* Pinned products list inside product inspector */
+.rt-emb-pp-pinned-list {
+  display: flex; flex-direction: column; gap: 4px;
+  margin-top: 10px;
+}
+.rt-emb-pp-pinned {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  background: var(--paper-3);
+  border: 1px solid var(--hair-1);
+  border-radius: var(--r-2);
+}
+.rt-emb-pp-pinned .rt-emb-pp-title { flex: 1; font-size: 12px; }
+.rt-emb-pp-remove {
+  background: transparent; border: 0;
+  color: var(--ink-3); cursor: pointer;
+  padding: 4px;
+  border-radius: var(--r-2);
+}
+.rt-emb-pp-remove:hover { background: var(--paper-2); color: var(--ink-1); }
+
 /* Retainify — Popups
    New "Popups" section: gallery + per-template editor + storefront preview.
    Each template defines its OWN visual system; only chrome/editor uses Retainify tokens. */

@@ -35,7 +35,7 @@ function makeBlock(type, node) {
     case "heading":   return { id: bid(), type, html: "A new heading", level: 2, align: "left" };
     case "paragraph": return { id: bid(), type, html: "Write something compelling. <strong>Bold</strong> and <em>italic</em> work too.", align: "left" };
     case "button":    return { id: bid(), type, text: "Shop now", url: "#", align: "center", fill: "filled" };
-    case "image":     return { id: bid(), type, placeholder: true, label: "Drop an image", align: "full", height: 220 };
+    case "image":     return { id: bid(), type, src: "", alt: "", align: "full", height: 220 };
     case "spacer":    return { id: bid(), type, height: 32 };
     case "divider":   return { id: bid(), type, style: "solid" };
     case "product":   return { id: bid(), type, count: 3, showPrice: true };
@@ -48,7 +48,7 @@ function makeBlock(type, node) {
 function defaultBlocks(node) {
   const blocks = [
     { id: bid(), type: "logo", text: "YOUR STORE", align: "center", size: "medium" },
-    { id: bid(), type: "image", placeholder: true, label: "Hero image", align: "full", height: 240 },
+    { id: bid(), type: "image", src: "", alt: "", align: "full", height: 240 },
     { id: bid(), type: "heading", html: node.subject || "Welcome to the family", level: 1, align: "center" },
     { id: bid(), type: "paragraph", html: "Hi <strong>{first_name}</strong>, thanks for joining us. We hand-pick a few favourites each week — here's something we think you'll love.", align: "center" },
   ];
@@ -90,6 +90,16 @@ const BG_SWATCHES = [
 ];
 
 const MERGE_TAGS = ["{first_name}", "{last_name}", "{store_name}", "{discount_code}", "{cart_url}"];
+
+function formatPrice(amount, currency) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return String(amount || "");
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD" }).format(n);
+  } catch {
+    return `${currency || "$"} ${n.toFixed(2)}`;
+  }
+}
 
 // ── Block view (renders inside canvas) ─────────────────────────────────────
 function BlockView({ block, brand, isPreview, onInlineEdit }) {
@@ -148,18 +158,18 @@ function BlockView({ block, brand, isPreview, onInlineEdit }) {
     );
   }
   if (block.type === "image") {
-    if (block.placeholder) {
-      return (
-        <div className="rt-emb-image-placeholder" style={{ height: block.height }}>
-          <Icons.Image size={20} />
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, marginTop: 6 }}>{block.label || "Image"}</span>
-          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, marginTop: 2, color: "var(--ink-4)" }}>
-            {block.align === "full" ? "600 × " + block.height : ""}
-          </span>
-        </div>
-      );
+    if (block.src) {
+      return <img src={block.src} alt={block.alt || ""} style={{ width: "100%", display: "block" }} />;
     }
-    return <img src={block.src} alt={block.alt || ""} style={{ width: "100%", display: "block" }} />;
+    return (
+      <div className="rt-emb-image-placeholder" style={{ height: block.height }}>
+        <Icons.Image size={20} />
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, marginTop: 6 }}>{block.label || "Image"}</span>
+        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, marginTop: 2, color: "var(--ink-4)" }}>
+          Upload from the inspector →
+        </span>
+      </div>
+    );
   }
   if (block.type === "spacer") {
     return <div className="rt-emb-spacer" style={{ height: block.height }} />;
@@ -169,15 +179,27 @@ function BlockView({ block, brand, isPreview, onInlineEdit }) {
   }
   if (block.type === "product") {
     const cols = block.count || 3;
+    const pinned = block.products || [];
+    const slots = pinned.length > 0 ? pinned.slice(0, cols) : Array.from({ length: cols }).map(() => null);
     return (
       <div className="rt-emb-products" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
-        {Array.from({ length: cols }).map((_, i) => (
-          <div key={i} className="rt-emb-product">
-            <div className="rt-emb-product-img">
-              <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--ink-4)" }}>product {i + 1}</span>
+        {slots.map((p, i) => (
+          <div key={p?.id || i} className="rt-emb-product">
+            <div className="rt-emb-product-img" style={p?.image ? { background: `url(${p.image}) center/cover` } : undefined}>
+              {!p?.image && (
+                <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, color: "var(--ink-4)" }}>
+                  {p ? "no image" : "top seller " + (i + 1)}
+                </span>
+              )}
             </div>
-            <div className="rt-emb-product-name" style={{ fontFamily: fonts.body }}>Product name</div>
-            {block.showPrice && <div className="rt-emb-product-price" style={{ fontFamily: fonts.body }}>$48</div>}
+            <div className="rt-emb-product-name" style={{ fontFamily: fonts.body }}>
+              {p?.title || "Product name"}
+            </div>
+            {block.showPrice && (
+              <div className="rt-emb-product-price" style={{ fontFamily: fonts.body }}>
+                {p?.price ? formatPrice(p.price, p.currency) : "$48"}
+              </div>
+            )}
           </div>
         ))}
       </div>
@@ -320,6 +342,282 @@ function MergeTagsSection({ onInsert }) {
   );
 }
 
+// ── Image uploader (inside the image block inspector) ─────────────────────
+function ImageUploader({ block, onUpdate }) {
+  const fileInputRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+
+  async function uploadFile(file) {
+    if (!file) return;
+    setError("");
+    if (file.size > 4 * 1024 * 1024) { setError("File is larger than 4MB."); return; }
+    if (!/^image\/(jpeg|png|gif|webp|svg\+xml)$/.test(file.type)) {
+      setError("Use JPG, PNG, GIF, WebP or SVG.");
+      return;
+    }
+    setUploading(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("alt", block.alt || "");
+      const resp = await fetch("/app/api/upload", { method: "POST", body: fd });
+      const json = await resp.json();
+      if (!resp.ok || !json.ok) throw new Error(json.message || json.error || "Upload failed");
+      onUpdate({ src: json.url, width: json.width, height: json.height, alt: block.alt || "" });
+    } catch (err) {
+      setError(err.message || "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer?.files?.[0];
+    if (file) uploadFile(file);
+  }
+
+  return (
+    <div>
+      {block.src ? (
+        <div className="rt-emb-image-preview">
+          <img src={block.src} alt={block.alt || ""} />
+          <div className="rt-emb-image-preview-actions">
+            <button className="btn btn-secondary btn-sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
+              <Icons.Image size={13} /> Replace
+            </button>
+            <button className="btn btn-ghost btn-sm" onClick={() => onUpdate({ src: "", width: 0, height: 0 })}>
+              <Icons.Trash size={13} /> Remove
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div
+          className={`rt-emb-uploader${dragOver ? " rt-emb-uploader-drag" : ""}`}
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          onClick={() => !uploading && fileInputRef.current?.click()}
+          style={{ cursor: uploading ? "wait" : "pointer" }}
+        >
+          <Icons.Image size={20} />
+          <div className="t-small" style={{ marginTop: 8 }}>
+            {uploading ? "Uploading…" : "Drop an image or"}
+          </div>
+          {!uploading && (
+            <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
+              Browse files
+            </button>
+          )}
+          <div className="field-help" style={{ marginTop: 8 }}>JPG, PNG, GIF, WebP or SVG · up to 4MB</div>
+        </div>
+      )}
+      {error && <div className="rt-emb-uploader-error">{error}</div>}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+        style={{ display: "none" }}
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (f) uploadFile(f);
+          e.target.value = "";
+        }}
+      />
+    </div>
+  );
+}
+
+// ── Product picker modal ──────────────────────────────────────────────────
+function ProductPickerModal({ initialIds = [], onClose, onConfirm }) {
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(initialIds);
+  const [selectedMap, setSelectedMap] = useState({});
+
+  // Hydrate any pre-selected products so we can show them with image + title.
+  useEffect(() => {
+    if (!initialIds.length) return;
+    const params = new URLSearchParams();
+    initialIds.forEach((id) => params.append("id", id));
+    fetch(`/app/api/products?${params.toString()}`)
+      .then((r) => r.json())
+      .then((json) => {
+        if (!json.ok) return;
+        const map = {};
+        json.products.forEach((p) => { map[p.id] = p; });
+        setSelectedMap(map);
+      })
+      .catch(() => {});
+    // run once
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Debounced search
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setLoading(true);
+      const url = `/app/api/products?q=${encodeURIComponent(query)}`;
+      fetch(url)
+        .then((r) => r.json())
+        .then((json) => {
+          if (!json.ok) { setResults([]); return; }
+          setResults(json.products || []);
+        })
+        .catch(() => setResults([]))
+        .finally(() => setLoading(false));
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  function toggle(p) {
+    setSelectedMap((m) => ({ ...m, [p.id]: p }));
+    setSelectedIds((ids) => (ids.includes(p.id) ? ids.filter((x) => x !== p.id) : [...ids, p.id]));
+  }
+
+  function confirm() {
+    const products = selectedIds.map((id) => selectedMap[id]).filter(Boolean);
+    onConfirm({ ids: selectedIds, products });
+  }
+
+  return (
+    <div className="rt-emb-pp-backdrop" onClick={onClose}>
+      <div className="rt-emb-pp" onClick={(e) => e.stopPropagation()}>
+        <div className="rt-emb-pp-head">
+          <div>
+            <div className="t-micro muted">Pick products</div>
+            <div className="t-h2" style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>Your catalog</div>
+          </div>
+          <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close"><Icons.Close size={14} /></button>
+        </div>
+        <div className="rt-emb-pp-search">
+          <Icons.Search size={14} />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search products by title…"
+          />
+        </div>
+        <div className="rt-emb-pp-results">
+          {loading && <div className="rt-emb-pp-state">Searching…</div>}
+          {!loading && results.length === 0 && (
+            <div className="rt-emb-pp-state">No products found.</div>
+          )}
+          {!loading && results.map((p) => {
+            const checked = selectedIds.includes(p.id);
+            return (
+              <button key={p.id} className={`rt-emb-pp-row${checked ? " rt-on" : ""}`} onClick={() => toggle(p)}>
+                <div className="rt-emb-pp-thumb" style={p.image ? { background: `url(${p.image}) center/cover` } : undefined}>
+                  {!p.image && <Icons.Image size={14} />}
+                </div>
+                <div className="rt-emb-pp-meta">
+                  <div className="rt-emb-pp-title">{p.title}</div>
+                  <div className="rt-emb-pp-price">{p.price ? formatPrice(p.price, p.currency) : ""}</div>
+                </div>
+                <span className={`rt-emb-pp-check${checked ? " rt-on" : ""}`}>
+                  {checked && <Icons.Check size={12} />}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+        <div className="rt-emb-pp-foot">
+          <div className="t-small muted">{selectedIds.length} selected</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-secondary" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" onClick={confirm}>Use selected</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Product block inspector (right rail) ──────────────────────────────────
+function ProductBlockInspector({ block, onUpdate }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const pinned = block.products || [];
+  const mode = pinned.length > 0 ? "manual" : "auto";
+
+  function setMode(next) {
+    if (next === "auto") onUpdate({ products: [], productIds: [] });
+    else setPickerOpen(true);
+  }
+
+  function onPickerConfirm({ ids, products }) {
+    onUpdate({ productIds: ids, products });
+    setPickerOpen(false);
+  }
+
+  return (
+    <div className="rt-ins-section">
+      <label className="field-label">Columns</label>
+      <div className="rt-segmented">
+        {[2, 3, 4].map((n) => (
+          <button key={n} className={block.count === n ? "rt-seg-on" : ""} onClick={() => onUpdate({ count: n })}>{n}</button>
+        ))}
+      </div>
+
+      <label className="field-label" style={{ marginTop: 14 }}>Source</label>
+      <div className="rt-segmented">
+        <button className={mode === "auto" ? "rt-seg-on" : ""} onClick={() => setMode("auto")}>Top sellers</button>
+        <button className={mode === "manual" ? "rt-seg-on" : ""} onClick={() => setMode("manual")}>Pick products</button>
+      </div>
+
+      {mode === "auto" ? (
+        <div className="field-help" style={{ marginTop: 10 }}>
+          Filled from your last-30-day top sellers at send time.
+        </div>
+      ) : (
+        <div style={{ marginTop: 12 }}>
+          <div className="rt-emb-pp-pinned-list">
+            {pinned.map((p) => (
+              <div key={p.id} className="rt-emb-pp-pinned">
+                <div className="rt-emb-pp-thumb sm" style={p.image ? { background: `url(${p.image}) center/cover` } : undefined}>
+                  {!p.image && <Icons.Image size={11} />}
+                </div>
+                <div className="rt-emb-pp-title">{p.title}</div>
+                <button
+                  className="rt-emb-pp-remove"
+                  onClick={() => {
+                    const next = pinned.filter((x) => x.id !== p.id);
+                    onUpdate({ products: next, productIds: next.map((x) => x.id) });
+                  }}
+                  aria-label="Remove"
+                >
+                  <Icons.Close size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button className="btn btn-secondary btn-sm" style={{ marginTop: 10, width: "100%" }} onClick={() => setPickerOpen(true)}>
+            <Icons.Plus size={13} /> {pinned.length ? "Edit selection" : "Pick products"}
+          </button>
+        </div>
+      )}
+
+      <label className="rt-toggle" style={{ marginTop: 14 }}>
+        <input type="checkbox" checked={block.showPrice} onChange={(e) => onUpdate({ showPrice: e.target.checked })} />
+        <span className="rt-toggle-switch" />
+        <span>Show price</span>
+      </label>
+
+      {pickerOpen && (
+        <ProductPickerModal
+          initialIds={pinned.map((p) => p.id)}
+          onClose={() => setPickerOpen(false)}
+          onConfirm={onPickerConfirm}
+        />
+      )}
+    </div>
+  );
+}
+
 // ── Block inspector (right rail when block selected) ───────────────────────
 function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
   if (!block) return null;
@@ -401,14 +699,9 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
 
       {block.type === "image" && (
         <div className="rt-ins-section">
-          <div className="rt-emb-uploader">
-            <Icons.Image size={20} />
-            <div className="t-small" style={{ marginTop: 8 }}>Drop an image or</div>
-            <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }}>Browse media</button>
-            <div className="field-help" style={{ marginTop: 8 }}>JPG, PNG or GIF · up to 4MB</div>
-          </div>
-          <label className="field-label" style={{ marginTop: 16 }}>Placeholder label</label>
-          <input className="input" value={block.label} onChange={(e) => onUpdate({ label: e.target.value })} />
+          <ImageUploader block={block} onUpdate={onUpdate} />
+          <label className="field-label" style={{ marginTop: 14 }}>Alt text</label>
+          <input className="input" value={block.alt || ""} placeholder="Describe the image (for accessibility)" onChange={(e) => onUpdate({ alt: e.target.value })} />
           <label className="field-label" style={{ marginTop: 14 }}>Width</label>
           <div className="rt-segmented">
             {[["full", "Full bleed"], ["wide", "Wide"], ["small", "Inset"]].map(([k, l]) => (
@@ -440,20 +733,7 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
       )}
 
       {block.type === "product" && (
-        <div className="rt-ins-section">
-          <label className="field-label">Columns</label>
-          <div className="rt-segmented">
-            {[2, 3, 4].map((n) => (
-              <button key={n} className={block.count === n ? "rt-seg-on" : ""} onClick={() => onUpdate({ count: n })}>{n}</button>
-            ))}
-          </div>
-          <label className="rt-toggle" style={{ marginTop: 14 }}>
-            <input type="checkbox" checked={block.showPrice} onChange={(e) => onUpdate({ showPrice: e.target.checked })} />
-            <span className="rt-toggle-switch" />
-            <span>Show price</span>
-          </label>
-          <div className="field-help" style={{ marginTop: 10 }}>Products are pulled from your top sellers at send time.</div>
-        </div>
+        <ProductBlockInspector block={block} onUpdate={onUpdate} />
       )}
 
       {block.type === "discount" && (

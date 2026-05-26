@@ -69,11 +69,55 @@ function renderButton(b, brand, fonts, ctx) {
 }
 
 function renderImage(b) {
-  if (!b.src || b.placeholder) return null; // skip — caller logs
+  if (!b.src) return null; // skip — caller logs
   const align = b.align || "full";
   const width = align === "full" ? "100%" : align === "wide" ? "80%" : "50%";
   return `<tr><td align="center" style="padding:12px 0;">
     <img src="${escapeAttr(b.src)}" alt="${escapeAttr(b.alt || "")}" style="width:${width};max-width:100%;height:auto;display:block;border:0;" />
+  </td></tr>`;
+}
+
+function formatPriceServer(amount, currency) {
+  const n = Number(amount);
+  if (!Number.isFinite(n)) return String(amount || "");
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD" }).format(n);
+  } catch {
+    return `${currency || "$"} ${n.toFixed(2)}`;
+  }
+}
+
+function renderProductGrid(b, brand, fonts, ctx, products) {
+  if (!products || !products.length) return null;
+  const cols = Math.max(1, Math.min(4, Number(b.count) || 3));
+  const showPrice = b.showPrice !== false;
+  // Email-safe grid: outer table, single row, one td per column. Stacks via
+  // width:100% on narrow viewports because we set width="100%" on tds.
+  const cellWidthPct = Math.floor(100 / cols);
+  const visible = products.slice(0, cols);
+  const cells = visible.map((p) => {
+    const url = escapeAttr(p.url || "#");
+    const img = p.image
+      ? `<a href="${url}" style="text-decoration:none;display:block;">
+           <img src="${escapeAttr(p.image)}" alt="${escapeAttr(p.imageAlt || p.title || "")}"
+             style="width:100%;height:auto;display:block;border-radius:4px;border:0;" />
+         </a>`
+      : `<div style="aspect-ratio:1/1;background:#F4EFE4;border-radius:4px;"></div>`;
+    const priceHtml = showPrice && p.price
+      ? `<div style="font-family:${fonts.body};font-size:13px;color:#5C625A;">${formatPriceServer(p.price, p.currency)}</div>`
+      : "";
+    return `<td valign="top" width="${cellWidthPct}%" style="padding:6px;">
+      ${img}
+      <div style="margin-top:8px;font-family:${fonts.body};font-size:13px;color:#14201A;">
+        <a href="${url}" style="color:#14201A;text-decoration:none;">${escapeAttr(p.title || "")}</a>
+      </div>
+      ${priceHtml}
+    </td>`;
+  }).join("");
+  return `<tr><td style="padding:12px 0;">
+    <table width="100%" cellpadding="0" cellspacing="0" role="presentation">
+      <tr>${cells}</tr>
+    </table>
   </td></tr>`;
 }
 
@@ -115,18 +159,53 @@ const RENDERERS = {
   heading: renderHeading,
   paragraph: renderParagraph,
   button: renderButton,
-  image: (b) => renderImage(b),
-  spacer: (b) => renderSpacer(b),
-  divider: (b) => renderDivider(b),
+  image: renderImage,
+  spacer: renderSpacer,
+  divider: renderDivider,
   discount: renderDiscount,
   footer: renderFooter,
 };
 
-const UNSUPPORTED_REASONS = {
-  product: "product-grid-not-supported-server-side",
-};
+/**
+ * Resolve any `product` blocks ahead of the render loop. For each block:
+ *   - if `productIds` is non-empty → fetch those exact products
+ *   - else → fall back to top-sellers (cached per-shop for 1h)
+ *
+ * @param {Array} blocks
+ * @param {{ shop?: string }} resolveCtx
+ * @returns {Promise<Map<string, Array>>} blockId -> products[]
+ */
+async function resolveProductBlocks(blocks, resolveCtx) {
+  const out = new Map();
+  const productBlocks = blocks.filter((b) => b?.type === "product");
+  if (!productBlocks.length) return out;
 
-export function renderVisualEmail({ blocks, brand, ctx, stepId }) {
+  // Lazy import so renderer stays cheap when no product blocks are present.
+  const { getProductsByIds, getTopSellers } = await import("../shopify/products.server.js");
+
+  for (const b of productBlocks) {
+    try {
+      if (Array.isArray(b.productIds) && b.productIds.length) {
+        if (!resolveCtx.shop) { out.set(b.id, []); continue; }
+        const { unauthenticated } = await import("../../shopify.server.js");
+        const { admin } = await unauthenticated.admin(resolveCtx.shop);
+        const products = await getProductsByIds({ admin }, b.productIds);
+        out.set(b.id, products);
+      } else if (resolveCtx.shop) {
+        const products = await getTopSellers(resolveCtx.shop, b.count || 3);
+        out.set(b.id, products);
+      } else {
+        out.set(b.id, []);
+      }
+    } catch (err) {
+      console.error(`[email-render] product block ${b.id} resolve failed:`, err.message);
+      out.set(b.id, []);
+    }
+  }
+  return out;
+}
+
+export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
   const safeBrand = { ...DEFAULT_BRAND, ...(brand || {}) };
   const fonts = FONT_PAIRS[safeBrand.fontPair] || FONT_PAIRS.editorial;
 
@@ -135,8 +214,7 @@ export function renderVisualEmail({ blocks, brand, ctx, stepId }) {
   const skippedDetail = [];
   const mergeTagsUsed = new Set();
 
-  // Track merge tag usage by wrapping applyMergeTags
-  const ctxProxy = ctx; // ctx fields used directly; merge tags counted inline
+  const productMap = await resolveProductBlocks(blocks, { shop });
 
   const rowsArr = [];
   for (const b of blocks) {
@@ -145,25 +223,30 @@ export function renderVisualEmail({ blocks, brand, ctx, stepId }) {
       skippedDetail.push("missing-type");
       continue;
     }
-    if (b.type === "image" && (!b.src || b.placeholder)) {
+    if (b.type === "image" && !b.src) {
       skipped++;
       skippedDetail.push("image:no-src");
       continue;
     }
-    if (UNSUPPORTED_REASONS[b.type]) {
-      skipped++;
-      skippedDetail.push(`${b.type}:${UNSUPPORTED_REASONS[b.type]}`);
-      continue;
-    }
-    const fn = RENDERERS[b.type];
-    if (!fn) {
-      skipped++;
-      skippedDetail.push(`unknown:${b.type}`);
-      continue;
-    }
     let html = null;
     try {
-      html = fn(b, safeBrand, fonts, ctxProxy);
+      if (b.type === "product") {
+        const products = productMap.get(b.id) || [];
+        if (!products.length) {
+          skipped++;
+          skippedDetail.push("product:no-products");
+          continue;
+        }
+        html = renderProductGrid(b, safeBrand, fonts, ctx, products);
+      } else {
+        const fn = RENDERERS[b.type];
+        if (!fn) {
+          skipped++;
+          skippedDetail.push(`unknown:${b.type}`);
+          continue;
+        }
+        html = fn(b, safeBrand, fonts, ctx);
+      }
     } catch (err) {
       skipped++;
       skippedDetail.push(`${b.type}:throw:${err.message}`);
