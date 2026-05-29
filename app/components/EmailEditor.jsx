@@ -158,16 +158,33 @@ function BlockView({ block, brand, isPreview, onInlineEdit }) {
     );
   }
   if (block.type === "image") {
+    const widthPct = block.align === "wide" ? "80%" : block.align === "small" ? "50%" : "100%";
+    const wrapAlign = block.align === "full" ? "stretch" : "center";
     if (block.src) {
-      return <img src={block.src} alt={block.alt || ""} style={{ width: "100%", display: "block" }} />;
+      return (
+        <div style={{ display: "flex", justifyContent: wrapAlign }}>
+          <img
+            src={block.src}
+            alt={block.alt || ""}
+            style={{
+              width: widthPct,
+              height: block.height ? `${block.height}px` : "auto",
+              objectFit: block.height ? "cover" : "initial",
+              display: "block",
+            }}
+          />
+        </div>
+      );
     }
     return (
-      <div className="rt-emb-image-placeholder" style={{ height: block.height }}>
-        <Icons.Image size={20} />
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, marginTop: 6 }}>{block.label || "Image"}</span>
-        <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, marginTop: 2, color: "var(--ink-4)" }}>
-          Upload from the inspector →
-        </span>
+      <div style={{ display: "flex", justifyContent: wrapAlign }}>
+        <div className="rt-emb-image-placeholder" style={{ width: widthPct, height: block.height }}>
+          <Icons.Image size={20} />
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 11, marginTop: 6 }}>{block.label || "Image"}</span>
+          <span style={{ fontFamily: "var(--font-mono)", fontSize: 10, marginTop: 2, color: "var(--ink-4)" }}>
+            Upload from the inspector →
+          </span>
+        </div>
       </div>
     );
   }
@@ -931,7 +948,12 @@ export function RenderedBlockPreview({ node }) {
         if (b.type === "heading") return <div key={b.id} className="rt-emp-block rt-emp-heading" style={{ textAlign: b.align }}>{stripTags(b.html)}</div>;
         if (b.type === "paragraph") return <div key={b.id} className="rt-emp-block rt-emp-paragraph" style={{ textAlign: b.align }}>{stripTags(b.html).slice(0, 120)}{stripTags(b.html).length > 120 ? "…" : ""}</div>;
         if (b.type === "button") return <div key={b.id} className="rt-emp-block" style={{ textAlign: b.align }}><span className="rt-emp-button" style={{ background: b.fill === "filled" ? brand.accent : "transparent", color: b.fill === "filled" ? "#fff" : brand.accent, border: "1px solid " + brand.accent }}>{b.text}</span></div>;
-        if (b.type === "image") return <div key={b.id} className="rt-emp-block rt-emp-image" />;
+        if (b.type === "image") {
+          if (b.src) {
+            return <img key={b.id} src={b.src} alt={b.alt || ""} className="rt-emp-block" style={{ width: "100%", height: 48, objectFit: "cover", borderRadius: 2, display: "block" }} />;
+          }
+          return <div key={b.id} className="rt-emp-block rt-emp-image" />;
+        }
         if (b.type === "discount") return <div key={b.id} className="rt-emp-block rt-emp-discount" style={{ borderColor: brand.accent, color: brand.accent }}>{b.label} · <span className="rt-emp-discount-code">{b.code}</span></div>;
         if (b.type === "divider") return <div key={b.id} className="rt-emp-block rt-emp-divider" />;
         if (b.type === "spacer") return <div key={b.id} style={{ height: Math.min(b.height / 3, 16) }} />;

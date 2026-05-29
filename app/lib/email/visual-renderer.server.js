@@ -72,8 +72,9 @@ function renderImage(b) {
   if (!b.src) return null; // skip — caller logs
   const align = b.align || "full";
   const width = align === "full" ? "100%" : align === "wide" ? "80%" : "50%";
+  const heightCss = b.height ? `height:${Number(b.height)}px;object-fit:cover;` : "height:auto;";
   return `<tr><td align="center" style="padding:12px 0;">
-    <img src="${escapeAttr(b.src)}" alt="${escapeAttr(b.alt || "")}" style="width:${width};max-width:100%;height:auto;display:block;border:0;" />
+    <img src="${escapeAttr(b.src)}" alt="${escapeAttr(b.alt || "")}" style="width:${width};max-width:100%;${heightCss}display:block;border:0;" />
   </td></tr>`;
 }
 
