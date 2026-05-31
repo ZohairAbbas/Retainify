@@ -190,7 +190,7 @@ async function resolveProductBlocks(blocks, resolveCtx) {
         if (!resolveCtx.shop) { out.set(b.id, []); continue; }
         const { unauthenticated } = await import("../../shopify.server.js");
         const { admin } = await unauthenticated.admin(resolveCtx.shop);
-        const products = await getProductsByIds({ admin }, b.productIds);
+        const products = await getProductsByIds({ admin, shop: resolveCtx.shop }, b.productIds);
         out.set(b.id, products);
       } else if (resolveCtx.shop) {
         const products = await getTopSellers(resolveCtx.shop, b.count || 3);

@@ -66,13 +66,23 @@ const ORDERS_FOR_TOP_SELLERS = `#graphql
 const TOP_SELLERS_CACHE_MS = 60 * 60 * 1000; // 1 hour
 const topSellersCache = new Map(); // shop -> { ts, products }
 
-function shapeProduct(p) {
+function buildProductUrl(p, shop) {
+  if (p.onlineStoreUrl) return p.onlineStoreUrl;
+  if (!p.handle) return "";
+  // Fall back to the .myshopify.com domain when the Online Store sales channel
+  // doesn't expose a public URL (storefront not published or a custom domain
+  // isn't queryable here). `shop` is `<name>.myshopify.com`.
+  const host = shop ? `https://${shop}` : "";
+  return `${host}/products/${p.handle}`;
+}
+
+function shapeProduct(p, shop) {
   if (!p?.id) return null;
   return {
     id: p.id,
     title: p.title,
     handle: p.handle,
-    url: p.onlineStoreUrl || (p.handle ? `/products/${p.handle}` : ""),
+    url: buildProductUrl(p, shop),
     image: p.featuredImage?.url || "",
     imageAlt: p.featuredImage?.altText || p.title || "",
     price: p.priceRangeV2?.minVariantPrice?.amount || "",
@@ -91,7 +101,7 @@ function escapeQueryTerm(s) {
  * @param {string} q — search query (may be empty → returns most recent products)
  * @returns {Promise<Array>}
  */
-export async function searchProducts({ admin }, q, limit = 20) {
+export async function searchProducts({ admin, shop }, q, limit = 20) {
   const term = String(q || "").trim();
   const query = term ? `title:*${escapeQueryTerm(term)}*` : "";
   const resp = await admin.graphql(PRODUCTS_SEARCH, {
@@ -99,20 +109,20 @@ export async function searchProducts({ admin }, q, limit = 20) {
   });
   const json = await resp.json();
   const nodes = json.data?.products?.nodes || [];
-  return nodes.map(shapeProduct).filter(Boolean);
+  return nodes.map((p) => shapeProduct(p, shop)).filter(Boolean);
 }
 
 /**
  * Resolve pinned product IDs back to display data at send time.
  * Order is preserved. Missing IDs are silently dropped.
  */
-export async function getProductsByIds({ admin }, ids) {
+export async function getProductsByIds({ admin, shop }, ids) {
   const list = (ids || []).filter(Boolean);
   if (!list.length) return [];
   const resp = await admin.graphql(PRODUCTS_BY_IDS, { variables: { ids: list } });
   const json = await resp.json();
   const nodes = json.data?.nodes || [];
-  return nodes.map(shapeProduct).filter(Boolean);
+  return nodes.map((p) => shapeProduct(p, shop)).filter(Boolean);
 }
 
 /**
@@ -167,7 +177,7 @@ export async function getTopSellers(shop, count = 6) {
 
   const ranked = [...counts.values()]
     .sort((a, b) => b.qty - a.qty)
-    .map((x) => shapeProduct(x.product))
+    .map((x) => shapeProduct(x.product, shop))
     .filter(Boolean);
 
   topSellersCache.set(shop, { ts: Date.now(), products: ranked });
@@ -178,7 +188,7 @@ export async function getTopSellers(shop, count = 6) {
  * Top-sellers helper for code paths that already have an admin client.
  * Bypasses the cache because callers in the worker context have the client.
  */
-export async function getTopSellersWithAdmin({ admin }, count = 6) {
+export async function getTopSellersWithAdmin({ admin, shop }, count = 6) {
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
   const query = `created_at:>=${since} financial_status:paid`;
   const counts = new Map();
@@ -208,7 +218,7 @@ export async function getTopSellersWithAdmin({ admin }, count = 6) {
   }
   return [...counts.values()]
     .sort((a, b) => b.qty - a.qty)
-    .map((x) => shapeProduct(x.product))
+    .map((x) => shapeProduct(x.product, shop))
     .filter(Boolean)
     .slice(0, count);
 }

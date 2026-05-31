@@ -5,6 +5,7 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { getCartRescueStats, getEmailBreakdown } from "../lib/analytics/stats.server.js";
 import { seedJourneyTemplates } from "../lib/journey/journey-templates.server.js";
+import { OtherAppsCarousel } from "../components/OtherAppsCarousel.jsx";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -169,6 +170,11 @@ export default function Dashboard() {
             </div>
           </div>
         )}
+      </section>
+
+      <section style={{ marginTop: 32 }}>
+        <div className="t-micro muted" style={{ marginBottom: 12 }}>More apps from our team</div>
+        <OtherAppsCarousel currentHandle="retainify" />
       </section>
     </div>
   );
