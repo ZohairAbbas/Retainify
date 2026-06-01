@@ -43,36 +43,11 @@ model ShopSettings {
   verifiedDomain   String   @default("")
   domainVerified   Boolean  @default(false)
   // Onboarding
-  onboardingStep   Int      @default(0) // 0=not started, 1=domain, 2=template, 3=done
+  onboardingStep   Int      @default(0) // 0=not started, 1=sender saved, 2=done
   isActive         Boolean  @default(false)
   pushEnabled      Boolean  @default(false)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
-}
-
-// Journey configuration — one per shop
-model JourneySettings {
-  id              String   @id @default(cuid())
-  shop            String   @unique
-  templateStyle   String   @default("classic") // classic | bold | minimal
-  // Email 1
-  email1Enabled   Boolean  @default(true)
-  email1DelayHours Float   @default(1)
-  email1Subject   String   @default("You left something behind")
-  email1Body      String   @default("")
-  // Email 2
-  email2Enabled   Boolean  @default(true)
-  email2DelayHours Float   @default(24)
-  email2Subject   String   @default("Still thinking it over?")
-  email2Body      String   @default("")
-  // Email 3
-  email3Enabled   Boolean  @default(true)
-  email3DelayHours Float   @default(72)
-  email3Subject   String   @default("Last chance — 10% off")
-  email3Body      String   @default("")
-  email3DiscountPct Int    @default(10)
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
 }
 
 // Tracks an abandoned checkout session
@@ -91,63 +66,12 @@ model AbandonedCart {
   abandonedAt     DateTime @default(now())
   recoveredAt     DateTime?
   recoveredRevenue Float?
-  // Journey state
-  email1SentAt    DateTime?
-  email2SentAt    DateTime?
-  email3SentAt    DateTime?
-  discountCode    String   @default("")
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
-
-  emails          CartRescueEmail[]
-  jobs            EmailJob[]
 
   @@unique([shop, checkoutToken])
   @@index([shop, customerEmail])
   @@index([shop, recoveredAt])
-}
-
-// Individual email send record for analytics
-model CartRescueEmail {
-  id              String   @id @default(cuid())
-  shop            String
-  abandonedCartId String
-  emailNumber     Int      // 1, 2, or 3
-  to              String
-  subject         String
-  sentAt          DateTime?
-  openedAt        DateTime?
-  clickedAt       DateTime?
-  bounced         Boolean  @default(false)
-  unsubscribed    Boolean  @default(false)
-  // Resend message id for event webhooks
-  resendMessageId String   @default("")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  abandonedCart   AbandonedCart @relation(fields: [abandonedCartId], references: [id], onDelete: Cascade)
-
-  @@index([shop, sentAt])
-  @@index([resendMessageId])
-}
-
-// DB-backed job queue for delayed email sends
-model EmailJob {
-  id              String   @id @default(cuid())
-  shop            String
-  abandonedCartId String
-  emailNumber     Int      // 1, 2, or 3
-  scheduledFor    DateTime
-  status          String   @default("pending") // pending | processing | done | failed | cancelled
-  attempts        Int      @default(0)
-  lastError       String   @default("")
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
-
-  abandonedCart   AbandonedCart @relation(fields: [abandonedCartId], references: [id], onDelete: Cascade)
-
-  @@index([status, scheduledFor])
-  @@index([shop, abandonedCartId])
 }
 
 // Email suppression / unsubscribe list
