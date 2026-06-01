@@ -1,6 +1,5 @@
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
-import { scheduleCartRescueJobs } from "../lib/journey/queue.server.js";
 import { enrollContact } from "../lib/journey/journey-queue.server.js";
 
 export const action = async ({ request }) => {
@@ -82,31 +81,24 @@ export const action = async ({ request }) => {
       },
     });
 
-    // Schedule if shop is active and not already recovered
+    // Enroll in any published cart_abandoned journey, gated on the shop being
+    // active and the cart not already recovered.
     if (!cart.recoveredAt) {
       const settings = await prisma.shopSettings.findUnique({ where: { shop } });
       if (settings?.isActive) {
-        await scheduleCartRescueJobs(shop, cart.id);
-      }
-    }
-
-    // Enroll in any published cart_abandoned flow-builder journey. The legacy
-    // scheduleCartRescueJobs above only reads JourneySettings; this branch
-    // covers Journey rows authored in the flow builder (source='flows'),
-    // which would otherwise never fire for new carts.
-    if (!cart.recoveredAt) {
-      const journey = await prisma.journey.findFirst({
-        where: { shop, trigger: "cart_abandoned", status: "published" },
-      });
-      if (journey) {
-        await enrollContact(journey.id, email, customerName, {
-          cartId: cart.id,
-          checkoutToken,
-          recoveryUrl,
-          totalPrice: String(totalPrice || ""),
-          currency,
-          lineItems,
-        }).catch((err) => console.error("[webhook] cart_abandoned enroll failed:", err.message));
+        const journey = await prisma.journey.findFirst({
+          where: { shop, trigger: "cart_abandoned", status: "published" },
+        });
+        if (journey) {
+          await enrollContact(journey.id, email, customerName, {
+            cartId: cart.id,
+            checkoutToken,
+            recoveryUrl,
+            totalPrice: String(totalPrice || ""),
+            currency,
+            lineItems,
+          }).catch((err) => console.error("[webhook] cart_abandoned enroll failed:", err.message));
+        }
       }
     }
   }

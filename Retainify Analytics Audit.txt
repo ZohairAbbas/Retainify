@@ -1,0 +1,91 @@
+Claude: 
+Retainify analytics audit
+1. Where the numbers come from (the raw events)
+There are two parallel pipelines because the codebase has both the legacy Cart Rescue engine and the new Journey/Flow engine.
+
+Event	Legacy (CartRescueEmail)	Flow engine (JourneyJob)	Push (PushJob)
+Sent	sentAt set in worker.server.js after Resend accepts the send	sentAt set in journey-worker.server.js:155 after Resend accepts	sentAt set in push-worker.server.js:137 when at least one subscription accepted
+Opened	openedAt column exists — never written by any code path	openedAt column exists — never written by any code path	n/a (no equivalent for web push)
+Clicked	clickedAt written by track.click.jsx:21 when recipient hits /track/click?...	never written — flow emails do not use the click-tracking link wrapper	n/a
+Bounced	bounced boolean column — never written	n/a	n/a
+Unsubscribed	unsubscribed boolean column — never written; the EmailSuppression row is created instead by track.unsubscribe.jsx	same — suppression list only	unsubscribedAt on PushSubscription set by push-unsubscribe.jsx
+Recovered / Revenue	recoveredAt + recoveredRevenue set on AbandonedCart by webhooks.orders.jsx:23 when the order webhook matches an abandoned email	never attributed to journeys — code comment in journey-analytics.server.js:34 says "Phase 4 attribution wiring fills these in"	n/a
+Enrollments	n/a	JourneyEnrollment.enrolledAt set at the moment of enrollment	shared with email enrollment
+Completed / Skipped	n/a	JourneyJob.status = "done" / "cancelled"	PushJob.status same scheme
+2. Where the metrics are calculated
+Function	File	Inputs → outputs
+getCartRescueStats(shop, days=30)	stats.server.js:9	Aggregates CartRescueEmail, AbandonedCart, EmailJob, PopupSignup, EmailSuppression. Computes sent, opened, clicked, recoveredCount, recoveredRevenue, abandoned, pendingJobs, signups, suppressions. Rates: openRate = opened/sent, clickRate = clicked/sent, recoveryRate = recoveredCount/abandoned.
+getEmailBreakdown(shop, days=30)	stats.server.js:52	Per-email (1/2/3) split — {emailNumber, sent, opened, clicked}
+getStepStats(stepId, days=30)	journey-analytics.server.js:12	Counts JourneyJob rows where the corresponding timestamp is set in window. Returns delivered, opened, clicked, completed, skipped, openRate, clickRate, revenue=0, orders=0, orderRate=0 (the last three are hardcoded zeros)
+getJourneyStats(journeyId, days=30)	journey-analytics.server.js:40	Same as getStepStats but at flow level + enrollments from JourneyEnrollment
+getShopFlowStats(shop, days=30)	journey-analytics.server.js:64	Sums across all non-archived flows for the shop
+Inline computation	app.flows._index.jsx:35-42	The flows list duplicates getJourneyStats logic instead of reusing it — minor dup
+3. Where the numbers are displayed
+Surface	Metrics shown	Source
+Dashboard (app._index.jsx)	sent / opened / clicked / recovered / revenue / openRate / clickRate / recoveryRate + per-email breakdown	getCartRescueStats + getEmailBreakdown — legacy pipeline only, ignores Journey engine
+Flows list (app.flows._index.jsx)	delivered / opened / clicked per row	inline JourneyJob count
+Flow builder canvas card (app.flows.$id.jsx:71)	delivered / openRate / clickRate per email step (rendered as "Analytics" toggle on each node)	getStepStats
+4. The gaps
+These are the points that explain why your dashboard probably reads zeros:
+
+No open tracking anywhere. There is no tracking pixel emitted by templates.server.js or visual-renderer.server.js, and no Resend webhook route under app/routes/. The openedAt column exists in both CartRescueEmail and JourneyJob but nothing writes to it. The shipping product has the display path but no capture path.
+No click tracking in the flow engine. /track/click only updates CartRescueEmail, keyed by (shop, abandonedCartId, emailNumber). Flow emails sent through the Journey engine never get their clickedAt populated. They'd also need a different identifier (enrollmentId + stepId).
+No bounce / unsubscribe writeback to the per-email rows. bounced and unsubscribed columns are dead — Resend webhook events for email.bounced and email.complained aren't ingested.
+No revenue attribution for flows. Journey emails don't carry the metadata needed to attribute a later order back to a flow step. getStepStats returns hardcoded revenue: 0, orders: 0, orderRate: 0.
+No push delivery / interaction analytics. PushJob only has sentAt. Push doesn't have its own stats helper, so nothing in the UI surfaces push performance.
+Dashboard ignores flows. app/_index.jsx reads the legacy CartRescueEmail table only, so flows you build in the UI never show up in the headline numbers.
+If you want to fix the gaps, the smallest cohesive next step would be a Resend webhook route that handles email.delivered, email.opened, email.clicked, email.bounced, email.complained and updates whichever row matches by resendMessageId (column already exists on both CartRescueEmail and JourneyJob). That single route would light up opens, clicks, bounces and unsubscribes for both pipelines at once.
+
+User:
+ I got something interesting. An entry for abandonedCart was created while I was on checkout form. I completed the form, the row got updated with value written in recoveredAt, recoveredRevenue. Is this the reason the recovered carts are so high and also the recovered revenue?
+
+Claude:
+Yes — that's the bug. The flow is:
+
+Shopper enters their email on the checkout form → Shopify fires checkouts/create (and on every typed change in any field, checkouts/update). webhooks.checkouts.jsx writes a row to AbandonedCart immediately, the moment an email is present.
+Shopper completes checkout 30 seconds later → Shopify fires orders/create / orders/paid. webhooks.orders.jsx looks up that same checkoutToken, finds the row from step 1, and stamps it recoveredAt = now() + recoveredRevenue = orderTotal.
+So every successful checkout that took longer than the round-trip of one webhook (essentially every order) gets counted as a "recovered cart" — with the full order total booked as "revenue recovered."
+
+That's why your dashboard shows $680K recovered across 110 carts with a 72.8% rate. It's not measuring rescue performance, it's counting normal completed orders that briefly existed as an "abandoned" row.
+
+Real abandoned carts must satisfy two conditions:
+
+The checkout was created enough time ago that we actually attempted to send a rescue email
+The order was placed after a rescue email was sent (otherwise we deserve no credit)
+The cleanest semantic fix is: only count a recovery if at least one cart-rescue email was actually sent to that cart before the order arrived.
+
+To verify the scale of the false attribution on your data:
+
+
+-- True recoveries: rescue email sent BEFORE the order arrived
+SELECT COUNT(*) AS true_recoveries,
+       SUM(c."recoveredRevenue") AS true_revenue
+FROM "AbandonedCart" c
+WHERE c.shop = '0dscam-qn.myshopify.com'
+  AND c."recoveredAt" >= now() - interval '30 days'
+  AND EXISTS (
+    SELECT 1 FROM "CartRescueEmail" e
+    WHERE e."abandonedCartId" = c.id
+      AND e."sentAt" IS NOT NULL
+      AND e."sentAt" < c."recoveredAt"
+  );
+
+-- False recoveries: cart "recovered" without any email ever being sent
+SELECT COUNT(*) AS false_recoveries,
+       SUM(c."recoveredRevenue") AS false_revenue
+FROM "AbandonedCart" c
+WHERE c.shop = '0dscam-qn.myshopify.com'
+  AND c."recoveredAt" >= now() - interval '30 days'
+  AND NOT EXISTS (
+    SELECT 1 FROM "CartRescueEmail" e
+    WHERE e."abandonedCartId" = c.id
+      AND e."sentAt" IS NOT NULL
+      AND e."sentAt" < c."recoveredAt"
+  );
+Run that and you'll see how much of the $680K is real attribution versus checkout-form noise. I'd bet >90% is in the false bucket.
+
+Want me to fix this? Two reasonable shapes:
+
+Fix the metric only (1-line change in stats.server.js) — keep storing recoveredAt on every order, but only count it as "recovered" in stats when a rescue email preceded it. Cheapest, doesn't change the webhook behavior.
+Fix the data write too — only stamp recoveredAt/recoveredRevenue in webhooks.orders.jsx when the cart had a sent email before the order. Cleaner conceptually, but you lose the raw signal of "order matched an abandoned cart" if you ever want it later.
+I'd recommend the metric fix. Want me to apply it now, or hold and tackle this together with the Resend webhook work?
