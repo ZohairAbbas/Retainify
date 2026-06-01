@@ -235,6 +235,7 @@ model JourneyJob {
 
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
+  @@index([resendMessageId])
 }
 
 // Browser push subscriptions — one row per browser per shop
