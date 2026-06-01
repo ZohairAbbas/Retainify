@@ -17,7 +17,7 @@ export const loader = async ({ request }) => {
     getEmailBreakdown(shop, 30),
   ]);
 
-  if (!settings || settings.onboardingStep < 3) {
+  if (!settings || settings.onboardingStep < 2) {
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/app/onboarding")) {
       throw new Response(null, {
@@ -151,8 +151,8 @@ export default function Dashboard() {
               <div className="rt-tnum">CTR</div>
             </div>
             {breakdown.map((row) => (
-              <div key={row.emailNumber} className="rt-trow">
-                <div>Email {row.emailNumber}</div>
+              <div key={row.stepId} className="rt-trow">
+                <div>{row.label}</div>
                 <div className="rt-tnum t-mono">{fmt(row.sent)}</div>
                 <div className="rt-tnum t-mono">{fmt(row.opened)}</div>
                 <div className="rt-tnum t-mono">{fmt(row.clicked)}</div>

@@ -4,7 +4,6 @@
  */
 import prisma from "../../db.server.js";
 import { sendEmail } from "../email/resend.server.js";
-import { renderCartRescueEmail } from "../email/templates.server.js";
 import { renderVisualEmail } from "../email/visual-renderer.server.js";
 import { buildUnsubscribeUrl } from "../tracking/links.server.js";
 import { createDiscountCode } from "../shopify/discounts.server.js";
@@ -12,7 +11,6 @@ import {
   claimDueJourneyJobs,
   markJourneyJobDone,
   markJourneyJobFailed,
-  exitEnrollment,
 } from "./journey-queue.server.js";
 
 function isInQuietHours(quietStart, quietEnd, timezone) {
@@ -83,58 +81,33 @@ async function processJourneyJob(job) {
 
   const unsubscribeUrl = buildUnsubscribeUrl({ shop, email: enrollment.contactEmail });
 
-  // Parse payload for template context (cart items, order details, etc.)
+  // Parse enrollment payload for the {cart_url} merge tag (cart_abandoned trigger).
+  // Other triggers may attach other fields; only recoveryUrl is read here.
   let payload = {};
   try { payload = JSON.parse(enrollment.payload); } catch { /* empty */ }
 
-  const lineItems = payload.lineItems || [];
-  const totalPrice = payload.totalPrice || "";
-  const currency = payload.currency || "USD";
   const recoveryUrl = payload.recoveryUrl || "#";
 
-  // Use visual renderer when the step has authored blocks; otherwise fall back
-  // to the legacy cart-rescue template (which only knows hardcoded copy).
   let parsedBlocks = [];
   try { parsedBlocks = JSON.parse(step.emailBlocks || "[]"); } catch { parsedBlocks = []; }
-  const useVisual = Array.isArray(parsedBlocks) && parsedBlocks.length > 0;
+  let brand = {};
+  try { brand = JSON.parse(step.emailBrand || "{}"); } catch { brand = {}; }
+  const [firstName, ...rest] = String(enrollment.contactName || "").trim().split(/\s+/);
 
-  let html;
-  if (useVisual) {
-    let brand = {};
-    try { brand = JSON.parse(step.emailBrand || "{}"); } catch { brand = {}; }
-    const [firstName, ...rest] = String(enrollment.contactName || "").trim().split(/\s+/);
-    html = await renderVisualEmail({
-      blocks: parsedBlocks,
-      brand,
-      ctx: {
-        first_name: firstName || "",
-        last_name: rest.join(" "),
-        store_name: settings.senderName || "",
-        discount_code: discountCode || "",
-        cart_url: recoveryUrl || "",
-        unsubscribeUrl,
-      },
-      stepId: step.id,
-      shop,
-    });
-  } else {
-    html = renderCartRescueEmail({
-      style: step.templateStyle || "classic",
-      emailNumber: step.stepNumber,
-      customerName: enrollment.contactName,
-      lineItems,
-      totalPrice,
-      currency,
-      storeName: settings.senderName,
-      logoUrl: settings.logoUrl,
-      brandColor: settings.brandColor,
-      recoveryUrl,
+  const html = await renderVisualEmail({
+    blocks: parsedBlocks,
+    brand,
+    ctx: {
+      first_name: firstName || "",
+      last_name: rest.join(" "),
+      store_name: settings.senderName || "",
+      discount_code: discountCode || "",
+      cart_url: recoveryUrl || "",
       unsubscribeUrl,
-      merchantAddress: "",
-      discountCode,
-      customSubject: step.subject || undefined,
-    });
-  }
+    },
+    stepId: step.id,
+    shop,
+  });
 
   const subject = step.subject || defaultSubject(journey.trigger, step.stepNumber, settings.senderName);
   const from = `${settings.senderName} <${settings.senderEmail || process.env.RESEND_FROM_EMAIL || "noreply@retainify.app"}>`;

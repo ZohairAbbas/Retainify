@@ -7,6 +7,30 @@
  */
 import prisma from "../../db.server.js";
 
+// Default email blocks for steps the merchant never opened in the visual
+// editor. The journey worker always calls renderVisualEmail(), so we seed a
+// safe minimum here rather than depend on a legacy fallback at send time.
+// Merge tags are resolved by the renderer.
+function defaultEmailBlocks(subject) {
+  const bid = () => "b_" + Math.random().toString(36).slice(2, 7);
+  return JSON.stringify([
+    { id: bid(), type: "logo", text: "{store_name}", align: "center", size: "medium" },
+    { id: bid(), type: "heading", html: subject || "A message from {store_name}", level: 1, align: "left" },
+    { id: bid(), type: "paragraph", html: "Hi {first_name}, thanks for shopping with us.", align: "left" },
+    { id: bid(), type: "footer", storeName: "{store_name}", address: "", unsubscribe: true },
+  ]);
+}
+
+function isEmptyBlocks(raw) {
+  if (raw == null) return true;
+  try {
+    const parsed = JSON.parse(raw);
+    return !Array.isArray(parsed) || parsed.length === 0;
+  } catch {
+    return true;
+  }
+}
+
 export async function publishJourney(journeyId) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
@@ -103,6 +127,9 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         pushClickUrl: s.pushClickUrl || "",
       });
     } else {
+      const emailBlocks = isEmptyBlocks(s.emailBlocks)
+        ? defaultEmailBlocks(s.subject)
+        : s.emailBlocks;
       rows.push({
         nodeType: "email",
         delayHours: cumulativeHours,
@@ -114,7 +141,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         templateStyle: s.templateStyle || "classic",
         discountPct: Number(s.discountPct) || 0,
         isEnabled: s.isEnabled !== false,
-        emailBlocks: s.emailBlocks || "[]",
+        emailBlocks,
         emailBrand: s.emailBrand || "{}",
       });
     }

@@ -4,9 +4,8 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 
 // Legacy redirect: /app/journey was the Cart Rescue editor (one journey per shop).
-// After Phase 3 unification, Cart Rescue lives as a Journey row migrated by
-// migrate-cart-rescue.server.js. Redirect to its detail page if it exists,
-// otherwise to the Automations list.
+// Cart Rescue is now a regular Journey row. Redirect to it if a migrated
+// row exists (source='cart_rescue_legacy'), otherwise to the Automations list.
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;

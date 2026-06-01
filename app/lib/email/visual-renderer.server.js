@@ -2,8 +2,9 @@
  * Visual email renderer — converts JourneyStep.emailBlocks + emailBrand JSON
  * into inline-CSS, table-based email HTML.
  *
- * Activates when step.emailBlocks is a non-empty JSON array. Falls back to
- * legacy renderCartRescueEmail when blocks are empty.
+ * Every email JourneyStep is guaranteed by saveDraft() to have a non-empty
+ * emailBlocks array (defaultEmailBlocks() seeds one if the merchant never
+ * opened the editor), so this is the sole render path for journey emails.
  *
  * Mirrors the block schema authored by app/components/EmailEditor.jsx.
  */

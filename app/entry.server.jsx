@@ -4,14 +4,12 @@ import { ServerRouter } from "react-router";
 import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
-import { runWorker } from "./lib/journey/worker.server.js";
 import { runJourneyWorker } from "./lib/journey/journey-worker.server.js";
 import { runPushWorker } from "./lib/push/push-worker.server.js";
 
 // Poll all job queues every 60 seconds.
 if (typeof setInterval !== "undefined") {
   setInterval(() => {
-    runWorker().catch((err) => console.error("[worker] poll error:", err));
     runJourneyWorker().catch((err) => console.error("[journey-worker] poll error:", err));
     runPushWorker().catch((err) => console.error("[push-worker] poll error:", err));
   }, 60_000);

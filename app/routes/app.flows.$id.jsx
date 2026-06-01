@@ -3,48 +3,17 @@ import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-route
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
-import { renderCartRescueEmail } from "../lib/email/templates.server.js";
 import { saveDraft, publishJourney, pauseJourney, unpublishToDraft, archiveJourney } from "../lib/journey/journey-lifecycle.server.js";
 import { getStepStats } from "../lib/journey/journey-analytics.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
-const SAMPLE_LINE_ITEMS = [
-  {
-    title: "Sample Product",
-    variantTitle: "Default",
-    quantity: 1,
-    price: "$49.00",
-    imageUrl: "https://cdn.shopify.com/s/files/1/0533/2089/files/placeholder-images-product-1_medium.png",
-    productUrl: "#",
-  },
-];
-
 const EXIT_CRITERIA_OPTIONS = [
   { value: "order_placed", label: "Contact places an order" },
   { value: "cart_recovered", label: "Cart is recovered" },
   { value: "unsubscribed", label: "Contact unsubscribes" },
 ];
-
-function buildPreview({ style, stepNumber, settings, subject }) {
-  return renderCartRescueEmail({
-    style,
-    emailNumber: Math.min(Math.max(stepNumber, 1), 3),
-    customerName: "Alex",
-    lineItems: SAMPLE_LINE_ITEMS,
-    totalPrice: "$49.00",
-    currency: "USD",
-    storeName: settings?.senderName || "Your Store",
-    senderEmail: settings?.senderEmail || "noreply@yourstore.com",
-    logoUrl: settings?.logoUrl || "",
-    brandColor: settings?.brandColor || "#000000",
-    recoveryUrl: "#",
-    unsubscribeUrl: "#",
-    merchantAddress: "",
-    customSubject: subject || undefined,
-  });
-}
 
 export const loader = async ({ request, params }) => {
   const { session } = await authenticate.admin(request);
@@ -72,17 +41,6 @@ export const loader = async ({ request, params }) => {
     }
   }
 
-  const previews = {};
-  for (const step of journey.steps) {
-    if (step.nodeType !== "email") continue;
-    previews[step.id] = buildPreview({
-      style: step.templateStyle || "classic",
-      stepNumber: step.stepNumber,
-      settings,
-      subject: step.subject,
-    });
-  }
-
   return {
     journey: {
       ...journey,
@@ -91,7 +49,6 @@ export const loader = async ({ request, params }) => {
     canvasNodes,
     settings: settings ?? {},
     stats,
-    previews,
   };
 };
 
@@ -216,7 +173,7 @@ export const action = async ({ request, params }) => {
 };
 
 export default function FlowBuilder() {
-  const { journey, canvasNodes: initialNodes, settings, stats, previews } = useLoaderData();
+  const { journey, canvasNodes: initialNodes, settings, stats } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -464,7 +421,6 @@ export default function FlowBuilder() {
                       onDuplicate={() => duplicateNode(node.id)}
                       onDelete={() => deleteNode(node.id)}
                       stats={stats?.[node.id]}
-                      previewHtml={previews?.[node.id]}
                       showPreview={showPreview}
                       showAnalytics={showAnalytics}
                     />
@@ -519,7 +475,7 @@ export default function FlowBuilder() {
   );
 }
 
-function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, stats, previewHtml, showPreview, showAnalytics }) {
+function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, stats, showPreview, showAnalytics }) {
   const trig = TRIGGER_CONFIG[journey.trigger] || TRIGGER_CONFIG.customer_created;
   const TrigIcon = Icons[trig.icon];
 
