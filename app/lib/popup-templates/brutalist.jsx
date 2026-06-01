@@ -1,4 +1,4 @@
-import { TextField, PaletteRow, CommonTimingFields } from "./shared.jsx";
+import { TextField, PaletteRowWithCustom, CommonTimingFields } from "./shared.jsx";
 
 export const BRUTAL_PALETTES = {
   acid:     { id: "acid",     label: "Acid",     bg: "#0E0E0E", ink: "#E5FF36", shadow: "#E5FF36", colors: ["#0E0E0E", "#E5FF36"] },
@@ -7,8 +7,19 @@ export const BRUTAL_PALETTES = {
   mint:     { id: "mint",     label: "Mint",     bg: "#F0F0E8", ink: "#0E0E0E", shadow: "#3DBF7C", colors: ["#F0F0E8", "#0E0E0E", "#3DBF7C"] },
 };
 
+function resolveBrutalPalette(data) {
+  if (data.palette === "custom" && data.paletteCustom) {
+    return {
+      bg: data.paletteCustom.bg || "#0E0E0E",
+      ink: data.paletteCustom.ink || "#E5FF36",
+      shadow: data.paletteCustom.shadow || data.paletteCustom.ink || "#E5FF36",
+    };
+  }
+  return BRUTAL_PALETTES[data.palette] || BRUTAL_PALETTES.acid;
+}
+
 export function RenderBrutal({ data, scale }) {
-  const p = BRUTAL_PALETTES[data.palette] || BRUTAL_PALETTES.acid;
+  const p = resolveBrutalPalette(data);
   const marqueeText = data.marqueeText || "FREE SHIPPING · NEW DROPS WEEKLY · MEMBERS ONLY · ";
   return (
     <div
@@ -63,11 +74,18 @@ export function EditorBrutal({ data, onUpdate }) {
       </div>
       <div className="rt-pop-section">
         <div className="rt-pop-section-h">Palette</div>
-        <PaletteRow
+        <PaletteRowWithCustom
           label="Color combo"
           value={data.palette}
           onChange={(v) => onUpdate({ palette: v })}
           options={Object.values(BRUTAL_PALETTES)}
+          slots={[
+            { key: "bg", label: "Background", placeholder: "#0E0E0E" },
+            { key: "ink", label: "Ink / accent", placeholder: "#E5FF36" },
+            { key: "shadow", label: "Shadow", placeholder: "#E5FF36" },
+          ]}
+          customValue={data.paletteCustom}
+          onCustomChange={(v) => onUpdate({ paletteCustom: v })}
         />
       </div>
       <CommonTimingFields data={data} onUpdate={onUpdate} />

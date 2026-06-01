@@ -1,4 +1,4 @@
-import { TextField, SwatchRow, CommonTimingFields } from "./shared.jsx";
+import { TextField, SwatchRowWithCustom, GradientRowWithCustom, CommonTimingFields } from "./shared.jsx";
 
 export const EDITORIAL_IMAGES = {
   amber: "linear-gradient(135deg, #8B7355 0%, #5A4632 100%)",
@@ -15,8 +15,12 @@ export const EDITORIAL_ACCENTS = {
 };
 
 export function RenderEditorial({ data, scale }) {
-  const img = EDITORIAL_IMAGES[data.image] || EDITORIAL_IMAGES.amber;
-  const accent = EDITORIAL_ACCENTS[data.accent] || EDITORIAL_ACCENTS.burgundy;
+  const img = data.image === "custom" && data.imageCustom?.from && data.imageCustom?.to
+    ? `linear-gradient(135deg, ${data.imageCustom.from} 0%, ${data.imageCustom.to} 100%)`
+    : (EDITORIAL_IMAGES[data.image] || EDITORIAL_IMAGES.amber);
+  const accent = data.accent === "custom" && data.accentCustom
+    ? data.accentCustom
+    : (EDITORIAL_ACCENTS[data.accent] || EDITORIAL_ACCENTS.burgundy);
   return (
     <div
       className="tpl-editorial"
@@ -75,18 +79,22 @@ export function EditorEditorial({ data, onUpdate }) {
       </div>
       <div className="rt-pop-section">
         <div className="rt-pop-section-h">Style</div>
-        <SwatchRow
+        <GradientRowWithCustom
           label="Hero image"
           value={data.image}
           onChange={(v) => onUpdate({ image: v })}
           options={Object.entries(EDITORIAL_IMAGES).map(([k, v]) => ({ value: k, color: v, label: k }))}
-          help="Placeholder palettes. Upload your own image (coming soon)."
+          customValue={data.imageCustom}
+          onCustomChange={(v) => onUpdate({ imageCustom: v })}
+          help="Pick a preset, or choose Custom for your own gradient."
         />
-        <SwatchRow
+        <SwatchRowWithCustom
           label="Accent color"
           value={data.accent}
           onChange={(v) => onUpdate({ accent: v })}
           options={Object.entries(EDITORIAL_ACCENTS).map(([k, c]) => ({ value: k, color: c, label: k }))}
+          customValue={data.accentCustom}
+          onCustomChange={(v) => onUpdate({ accentCustom: v })}
         />
       </div>
       <CommonTimingFields data={data} onUpdate={onUpdate} />

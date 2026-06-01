@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { TextField, SelectField, PaletteRow, CommonTimingFields } from "./shared.jsx";
+import { TextField, SelectField, PaletteRowWithCustom, CommonTimingFields } from "./shared.jsx";
 
 export const HOLIDAY_PALETTES = {
   pine:     { id: "pine",     label: "Pine",     bg: "linear-gradient(180deg, #1A2E1F 0%, #0F1F15 100%)", bgSolid: "#1A2E1F", ink: "#F1E8C7", accent: "#D4A35A", line: "rgba(241,232,199,0.18)", colors: ["#1A2E1F", "#D4A35A", "#F1E8C7"] },
@@ -26,8 +26,31 @@ function useCountdown(targetHours) {
   return { h: pad(h), m: pad(m), s: pad(s) };
 }
 
+function hexToRgba(hex, alpha) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(String(hex || ""));
+  if (!m) return `rgba(241,232,199,${alpha})`;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`;
+}
+
+function resolveHolidayPalette(data) {
+  if (data.palette === "custom" && data.paletteCustom) {
+    const bg = data.paletteCustom.bg || "#1A2E1F";
+    const ink = data.paletteCustom.ink || "#F1E8C7";
+    const accent = data.paletteCustom.accent || "#D4A35A";
+    return {
+      bg: `linear-gradient(180deg, ${bg} 0%, ${bg} 100%)`,
+      bgSolid: bg,
+      ink,
+      accent,
+      line: hexToRgba(ink, 0.18),
+    };
+  }
+  return HOLIDAY_PALETTES[data.palette] || HOLIDAY_PALETTES.pine;
+}
+
 export function RenderHoliday({ data, scale }) {
-  const p = HOLIDAY_PALETTES[data.palette] || HOLIDAY_PALETTES.pine;
+  const p = resolveHolidayPalette(data);
   const c = useCountdown(parseInt(data.countdownHours || 24, 10));
   return (
     <div
@@ -109,11 +132,18 @@ export function EditorHoliday({ data, onUpdate }) {
       </div>
       <div className="rt-pop-section">
         <div className="rt-pop-section-h">Palette</div>
-        <PaletteRow
+        <PaletteRowWithCustom
           label="Color palette"
           value={data.palette}
           onChange={(v) => onUpdate({ palette: v })}
           options={Object.values(HOLIDAY_PALETTES)}
+          slots={[
+            { key: "bg", label: "Background", placeholder: "#1A2E1F" },
+            { key: "ink", label: "Text", placeholder: "#F1E8C7" },
+            { key: "accent", label: "Accent (CTA, countdown)", placeholder: "#D4A35A" },
+          ]}
+          customValue={data.paletteCustom}
+          onCustomChange={(v) => onUpdate({ paletteCustom: v })}
         />
       </div>
       <CommonTimingFields data={data} onUpdate={onUpdate} />
