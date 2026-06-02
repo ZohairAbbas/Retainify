@@ -46,6 +46,11 @@ const TEMPLATES = [
       entryFrequency: "no_reentry",
       exitCriteria: ["order_placed", "cart_recovered", "unsubscribed"],
       steps: [
+        // Industry-standard delay before the first nudge. Without this, the
+        // email can land while the customer is still typing their shipping
+        // address — annoying for the customer and polluting "recovery"
+        // attribution with checkouts that would have completed anyway.
+        { nodeType: "delay", delayHours: 1 },
         { nodeType: "email", emailName: "Reminder", subject: "You left something behind", previewText: "Pick up where you left off.", templateStyle: "classic", discountPct: 0, isEnabled: true },
         { nodeType: "delay", delayHours: 23 },
         { nodeType: "email", emailName: "Follow-up", subject: "Still thinking it over?", previewText: "", templateStyle: "classic", discountPct: 0, isEnabled: true },
