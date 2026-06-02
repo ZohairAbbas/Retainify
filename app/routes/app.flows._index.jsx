@@ -667,9 +667,6 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
                                 : `+${n.after || n.delayHours} ${n.afterUnit || "hours"}`}
                             </div>
                           </div>
-                          {(n.discount || n.discountPct) > 0 && (
-                            <span className="rt-discount">{n.discount || n.discountPct}% off</span>
-                          )}
                         </div>
                       );
                     }

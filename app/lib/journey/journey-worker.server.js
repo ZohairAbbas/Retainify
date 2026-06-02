@@ -69,16 +69,6 @@ async function processJourneyJob(job) {
     return;
   }
 
-  // Generate discount code if this step has one
-  let discountCode = "";
-  if (step.discountPct > 0) {
-    try {
-      discountCode = await createDiscountCode(shop, step.discountPct);
-    } catch (err) {
-      console.error("[journey-worker] discount code failed:", err.message);
-    }
-  }
-
   const unsubscribeUrl = buildUnsubscribeUrl({ shop, email: enrollment.contactEmail });
 
   // Parse enrollment payload for the {cart_url} merge tag (cart_abandoned trigger).
@@ -86,13 +76,28 @@ async function processJourneyJob(job) {
   let payload = {};
   try { payload = JSON.parse(enrollment.payload); } catch { /* empty */ }
 
-  const recoveryUrl = payload.recoveryUrl || "#";
+  const recoveryUrl = payload.recoveryUrl || "";
 
   let parsedBlocks = [];
   try { parsedBlocks = JSON.parse(step.emailBlocks || "[]"); } catch { parsedBlocks = []; }
   let brand = {};
   try { brand = JSON.parse(step.emailBrand || "{}"); } catch { brand = {}; }
   const [firstName, ...rest] = String(enrollment.contactName || "").trim().split(/\s+/);
+
+  // Discount handling: discount blocks are the single source of truth for
+  // "this email has a discount". The first discount block's percent drives a
+  // single createDiscountCode() call; the resulting code is exposed via the
+  // ctx.discount_code merge tag and used by the renderer for the block itself.
+  // If no discount block is present, no code is generated.
+  let discountCode = "";
+  const discountBlock = parsedBlocks.find((b) => b && b.type === "discount" && Number(b.percent) > 0);
+  if (discountBlock) {
+    try {
+      discountCode = await createDiscountCode(shop, Number(discountBlock.percent));
+    } catch (err) {
+      console.error("[journey-worker] discount code failed:", err.message);
+    }
+  }
 
   const html = await renderVisualEmail({
     blocks: parsedBlocks,
@@ -101,6 +106,7 @@ async function processJourneyJob(job) {
       first_name: firstName || "",
       last_name: rest.join(" "),
       store_name: settings.senderName || "",
+      store_url: `https://${shop}`,
       discount_code: discountCode || "",
       cart_url: recoveryUrl || "",
       unsubscribeUrl,

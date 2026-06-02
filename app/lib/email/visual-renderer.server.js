@@ -22,21 +22,28 @@ function escapeAttr(s) {
 }
 
 function applyMergeTags(html, ctx) {
-  if (!html) return "";
+  if (!html) return { out: "", used: [] };
   const used = [];
-  const out = String(html).replace(/\{(first_name|last_name|store_name|discount_code|cart_url)\}/g, (_, key) => {
+  const out = String(html).replace(/\{(first_name|last_name|store_name|discount_code|cart_url|store_url)\}/g, (_, key) => {
     used.push(key);
     return ctx[key] != null ? String(ctx[key]) : "";
   });
   return { out, used };
 }
 
-function renderLogo(b, brand, fonts) {
+// Plain-text merge-tag substitution for fields that aren't HTML (logo text,
+// footer store name/address, etc). Returns just the substituted string.
+function mergeText(text, ctx) {
+  return applyMergeTags(text, ctx).out;
+}
+
+function renderLogo(b, brand, fonts, ctx) {
   const sizes = { small: 14, medium: 18, large: 24 };
   const fontSize = sizes[b.size] || 18;
   const align = b.align || "center";
+  const text = mergeText(b.text || brand.logoText, ctx);
   return `<tr><td align="${align}" style="padding:0 0 16px;">
-    <div style="font-family:${fonts.display};font-size:${fontSize}px;letter-spacing:0.08em;text-transform:uppercase;color:#14201A;">${escapeAttr(b.text || brand.logoText)}</div>
+    <div style="font-family:${fonts.display};font-size:${fontSize}px;letter-spacing:0.08em;text-transform:uppercase;color:#14201A;">${escapeAttr(text)}</div>
   </td></tr>`;
 }
 
@@ -62,10 +69,16 @@ function renderButton(b, brand, fonts, ctx) {
   const filled = b.fill !== "outline";
   const align = b.align || "center";
   const { out: url } = applyMergeTags(b.url || "#", ctx);
+  const text = mergeText(b.text || "Shop now", ctx);
+  // If url resolved to empty (merge tag with no value, e.g. {cart_url} on a
+  // non-cart trigger), fall back to the storefront URL or '#'.
+  const safeUrl = url && url !== "{cart_url}" && url !== "{store_url}"
+    ? url
+    : (ctx.store_url || "#");
   const bg = filled ? brand.accent : "transparent";
   const color = filled ? "#FFFFFF" : brand.accent;
   return `<tr><td align="${align}" style="padding:16px 0;">
-    <a href="${escapeAttr(url)}" style="display:inline-block;padding:14px 28px;background:${bg};color:${color};border:1px solid ${brand.accent};border-radius:4px;font-family:${fonts.body};font-size:15px;font-weight:600;text-decoration:none;">${escapeAttr(b.text || "Shop now")}</a>
+    <a href="${escapeAttr(safeUrl)}" style="display:inline-block;padding:14px 28px;background:${bg};color:${color};border:1px solid ${brand.accent};border-radius:4px;font-family:${fonts.body};font-size:15px;font-weight:600;text-decoration:none;">${escapeAttr(text)}</a>
   </td></tr>`;
 }
 
@@ -132,11 +145,16 @@ function renderDivider(b) {
   return `<tr><td style="padding:12px 0;"><div style="border-top:1px ${style} #E5E0D5;"></div></td></tr>`;
 }
 
-function renderDiscount(b, brand, fonts) {
+function renderDiscount(b, brand, fonts, ctx) {
+  // The displayed code is the Shopify-generated one from ctx; the worker is
+  // responsible for calling createDiscountCode() and putting it on ctx before
+  // calling the renderer. If empty, the block gets skipped at the caller.
+  const code = ctx.discount_code || "";
+  const label = mergeText(b.label || "A gift for you", ctx);
   return `<tr><td align="center" style="padding:16px 0;">
     <div style="border:1px dashed ${brand.accent};border-radius:6px;padding:20px;text-align:center;">
-      <div style="font-family:${fonts.body};font-size:13px;color:${brand.accent};text-transform:uppercase;letter-spacing:0.08em;">${escapeAttr(b.label || "A gift for you")}</div>
-      <div style="font-family:'Courier New',monospace;font-size:24px;font-weight:700;color:#14201A;margin:8px 0;">${escapeAttr(b.code || "")}</div>
+      <div style="font-family:${fonts.body};font-size:13px;color:${brand.accent};text-transform:uppercase;letter-spacing:0.08em;">${escapeAttr(label)}</div>
+      <div style="font-family:'Courier New',monospace;font-size:24px;font-weight:700;color:#14201A;margin:8px 0;">${escapeAttr(code)}</div>
       <div style="font-family:${fonts.body};font-size:13px;color:#666;">${Number(b.percent) || 0}% off your order</div>
     </div>
   </td></tr>`;
@@ -146,10 +164,12 @@ function renderFooter(b, brand, fonts, ctx) {
   const unsubHtml = b.unsubscribe && ctx.unsubscribeUrl
     ? `<div style="margin-top:8px;"><a href="${escapeAttr(ctx.unsubscribeUrl)}" style="color:#999;text-decoration:underline;">Unsubscribe</a></div>`
     : "";
+  const storeName = mergeText(b.storeName || ctx.store_name || "", ctx);
+  const address = mergeText(b.address || "", ctx);
   return `<tr><td align="center" style="padding:24px 0 8px;">
     <div style="font-family:${fonts.body};font-size:12px;color:#999;line-height:1.6;">
-      <div style="font-weight:600;color:#666;">${escapeAttr(b.storeName || ctx.store_name || "")}</div>
-      <div>${escapeAttr(b.address || "")}</div>
+      <div style="font-weight:600;color:#666;">${escapeAttr(storeName)}</div>
+      <div>${escapeAttr(address)}</div>
       ${unsubHtml}
       <div style="margin-top:6px;font-size:11px;color:#CCC;">Powered by Retainify</div>
     </div>
@@ -228,6 +248,11 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
     if (b.type === "image" && !b.src) {
       skipped++;
       skippedDetail.push("image:no-src");
+      continue;
+    }
+    if (b.type === "discount" && !ctx.discount_code) {
+      skipped++;
+      skippedDetail.push("discount:no-code");
       continue;
     }
     let html = null;

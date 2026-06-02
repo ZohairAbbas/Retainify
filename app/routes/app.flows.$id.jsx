@@ -590,9 +590,6 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
           <span className="muted">Subject:</span>{" "}
           {node.subject || <em className="faint">No subject</em>}
         </div>
-        {node.discountPct > 0 && (
-          <span className="rt-discount">{node.discountPct}% discount</span>
-        )}
         {showPreview && (
           <div className="rt-node-preview">
             {node.emailBlocks?.length ? (
@@ -632,11 +629,6 @@ function EmailPreview({ node }) {
       <div className="rt-email-body">
         Hi Alex, thanks for joining us. We hand-pick a few favourites each week — here's something we think you'll love.
       </div>
-      {node.discountPct > 0 && (
-        <div className="rt-email-cta">
-          Use code <strong>SAVE{node.discountPct}</strong> for {node.discountPct}% off
-        </div>
-      )}
       <div className="rt-email-btn">Shop now</div>
     </div>
   );
@@ -862,22 +854,6 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
               {node.emailBlocks.length} block{node.emailBlocks.length !== 1 ? "s" : ""} — click to edit
             </div>
           )}
-        </div>
-
-        <div className="rt-ins-section">
-          <div className="t-micro muted" style={{ marginBottom: 12 }}>Offer</div>
-          <label className="field-label">Discount %</label>
-          <div className="rt-discount-input">
-            <input
-              className="input"
-              type="number"
-              min="0"
-              max="50"
-              value={node.discountPct || 0}
-              onChange={(e) => onChange({ discountPct: Number(e.target.value) || 0 })}
-            />
-            <span className="t-small muted">0 = no discount code</span>
-          </div>
         </div>
 
         <div className="rt-ins-section">
@@ -1153,17 +1129,6 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange }) {
                     className="input"
                     value={n.subject || ""}
                     onChange={(e) => onChange(n.id, { subject: e.target.value })}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">Discount %</label>
-                  <input
-                    className="input"
-                    type="number"
-                    min="0"
-                    max="50"
-                    value={n.discountPct || 0}
-                    onChange={(e) => onChange(n.id, { discountPct: Number(e.target.value) || 0 })}
                   />
                 </div>
                 <div>
