@@ -992,6 +992,18 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
 
   const selected = useMemo(() => blocks.find((b) => b.id === selectedId), [selectedId, blocks]);
 
+  // Warn when {discount_code} is referenced in any text block but there's no
+  // discount block in the email. Without a discount block the worker never
+  // calls createDiscountCode, so the merge tag substitutes to empty at send.
+  const discountTagOrphan = useMemo(() => {
+    const hasDiscountBlock = blocks.some((b) => b?.type === "discount");
+    if (hasDiscountBlock) return false;
+    return blocks.some((b) => {
+      const text = `${b?.html || ""} ${b?.text || ""} ${b?.url || ""}`;
+      return text.includes("{discount_code}");
+    });
+  }, [blocks]);
+
   const firstRun = useRef(true);
   useEffect(() => {
     if (firstRun.current) { firstRun.current = false; return; }
@@ -1103,6 +1115,30 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
         <div className="rt-builder-canvas rt-emb-builder">
           {selected && (
             <RichTextToolbar block={selected} onUpdate={(patch) => updateBlock(selected.id, patch)} />
+          )}
+          {discountTagOrphan && (
+            <div
+              role="alert"
+              style={{
+                background: "#FFF4DA",
+                border: "1px solid #E8C570",
+                color: "#7A4F00",
+                padding: "10px 14px",
+                borderRadius: 6,
+                margin: "0 0 12px",
+                fontSize: 13,
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+              }}
+            >
+              <Icons.Bolt size={14} />
+              <span>
+                You're using <code style={{ fontFamily: "var(--font-mono)" }}>{"{discount_code}"}</code> but
+                haven't added a Discount block. The code won't generate when this email sends.
+                Add a Discount block to enable it.
+              </span>
+            </div>
           )}
           <EmailCanvas
             blocks={blocks}

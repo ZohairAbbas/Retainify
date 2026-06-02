@@ -306,7 +306,7 @@ export default function FlowBuilder() {
     if (emailNode) {
       return (
         <EmailEditor
-          flow={{ name }}
+          flow={{ name, trigger: journey.trigger }}
           node={emailNode}
           onBack={() => setEmailEditorNodeId(null)}
           onSave={(updatedNode) => {
