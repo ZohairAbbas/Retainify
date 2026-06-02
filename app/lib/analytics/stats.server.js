@@ -21,6 +21,19 @@ async function cartAbandonedJourneyIds(shop) {
 
 /**
  * Headline stats for the dashboard over the last N days.
+ *
+ * Recovery attribution rule: an AbandonedCart only counts as recovered when
+ * at least one rescue email actually shipped for that contact between the
+ * cart's abandonedAt and its recoveredAt. Without this filter every completed
+ * checkout looks like a recovery, because AbandonedCart rows are created the
+ * moment a customer enters their email at checkout — long before any rescue
+ * was attempted. Same time-bracket protects against over-attribution from a
+ * stale enrollment on a prior cart.
+ *
+ * The "abandoned" denominator follows the same principle: we only count
+ * enrollments where a rescue email actually shipped, so fast-completing
+ * checkouts (enrolled at email-entry, completed seconds later before any
+ * delay elapsed) don't pollute the rate.
  */
 export async function getCartRescueStats(shop, days = 30) {
   const since = sinceDate(days);
@@ -29,7 +42,7 @@ export async function getCartRescueStats(shop, days = 30) {
 
   const stepFilter = { step: { journeyId: { in: journeyIds } } };
 
-  const [sent, opened, clicked, recovered, abandoned, pendingJobs, signups, suppressions] = await Promise.all([
+  const [sent, opened, clicked, abandoned, recoveredRows, pendingJobs, signups, suppressions] = await Promise.all([
     hasJourneys
       ? prisma.journeyJob.count({ where: { ...stepFilter, sentAt: { gte: since, not: null } } })
       : 0,
@@ -39,11 +52,41 @@ export async function getCartRescueStats(shop, days = 30) {
     hasJourneys
       ? prisma.journeyJob.count({ where: { ...stepFilter, clickedAt: { gte: since, not: null } } })
       : 0,
-    prisma.abandonedCart.findMany({
-      where: { shop, recoveredAt: { gte: since }, recoveredRevenue: { not: null } },
-      select: { recoveredRevenue: true, recoveredAt: true },
-    }),
-    prisma.abandonedCart.count({ where: { shop, createdAt: { gte: since } } }),
+    // Denominator: distinct enrollments in cart_abandoned journeys, enrolled
+    // within the window, where at least one rescue email actually shipped.
+    hasJourneys
+      ? prisma.journeyEnrollment.count({
+          where: {
+            shop,
+            journeyId: { in: journeyIds },
+            enrolledAt: { gte: since },
+            jobs: { some: { sentAt: { not: null } } },
+          },
+        })
+      : 0,
+    // Numerator: AbandonedCart rows recovered in the window, but ONLY when a
+    // rescue email fired for this contact between cart.abandonedAt and
+    // cart.recoveredAt. Raw SQL because Prisma can't express the cross-row
+    // time-bracket condition cleanly.
+    hasJourneys
+      ? prisma.$queryRaw`
+          SELECT c."recoveredRevenue"
+          FROM "AbandonedCart" c
+          WHERE c.shop = ${shop}
+            AND c."recoveredAt" >= ${since}
+            AND c."recoveredRevenue" IS NOT NULL
+            AND EXISTS (
+              SELECT 1
+              FROM "JourneyJob" j
+              JOIN "JourneyEnrollment" e ON e.id = j."enrollmentId"
+              WHERE e.shop = c.shop
+                AND e."contactEmail" = c."customerEmail"
+                AND j."sentAt" IS NOT NULL
+                AND j."sentAt" > c."abandonedAt"
+                AND j."sentAt" < c."recoveredAt"
+            )
+        `
+      : [],
     hasJourneys
       ? prisma.journeyJob.count({ where: { ...stepFilter, status: { in: ["pending", "processing"] } } })
       : 0,
@@ -51,8 +94,8 @@ export async function getCartRescueStats(shop, days = 30) {
     prisma.emailSuppression.count({ where: { shop } }),
   ]);
 
-  const recoveredCount = recovered.length;
-  const recoveredRevenue = recovered.reduce((sum, r) => sum + (r.recoveredRevenue ?? 0), 0);
+  const recoveredCount = recoveredRows.length;
+  const recoveredRevenue = recoveredRows.reduce((sum, r) => sum + (r.recoveredRevenue ?? 0), 0);
 
   return {
     sent,
