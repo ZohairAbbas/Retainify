@@ -12,12 +12,16 @@ export const action = async ({ request }) => {
   const customerEmail = payload.customer?.email;
   if (!customerEmail) return new Response(null, { status: 200 });
 
+  const emailLower = customerEmail.trim().toLowerCase();
+
   await Promise.all([
     prisma.abandonedCart.deleteMany({ where: { shop, customerEmail } }),
     prisma.emailSuppression.deleteMany({ where: { shop, email: customerEmail } }),
     prisma.popupSignup.deleteMany({ where: { shop, email: customerEmail } }),
     prisma.journeyEnrollment.deleteMany({ where: { shop, contactEmail: customerEmail } }),
     prisma.pushSubscription.deleteMany({ where: { shop, contactEmail: customerEmail } }),
+    // Hard-delete the unified Contact (and cascade ContactTag rows).
+    prisma.contact.deleteMany({ where: { shop, email: emailLower } }),
   ]);
 
   return new Response(null, { status: 200 });

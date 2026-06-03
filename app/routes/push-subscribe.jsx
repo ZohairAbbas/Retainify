@@ -1,4 +1,5 @@
 import prisma from "../db.server.js";
+import { upsertContact } from "../lib/contacts/contacts.server.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -40,6 +41,12 @@ export const action = async ({ request }) => {
       ...(contactEmail ? { contactEmail } : {}),
     },
   });
+
+  if (contactEmail) {
+    upsertContact({ shop, email: contactEmail, source: "push_only" }).catch((err) =>
+      console.error("[push-subscribe] upsertContact failed:", err.message),
+    );
+  }
 
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers: CORS });
 };

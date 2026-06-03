@@ -4,6 +4,7 @@ import { createDiscountCode } from "../lib/shopify/discounts.server.js";
 import { syncConfirmedSubscriber } from "../lib/shopify/customers.server.js";
 import { sendEmail } from "../lib/email/resend.server.js";
 import { renderDiscountRevealEmail } from "../lib/email/templates.server.js";
+import { upsertContact } from "../lib/contacts/contacts.server.js";
 
 function html(title, body) {
   return new Response(
@@ -73,6 +74,19 @@ export const loader = async ({ request }) => {
     where: { id: signup.id },
     data: { confirmedAt, discountCode },
   });
+
+  // Mirror to the unified Contact record. Confirmation upgrades to subscribed
+  // and stamps marketingConsentAt — upsertContact's guard prevents this from
+  // downgrading a later suppression.
+  upsertContact({
+    shop,
+    email,
+    source: "popup",
+    subscriptionStatus: "subscribed",
+    marketingConsentAt: confirmedAt,
+  }).catch((err) =>
+    console.error("[confirm] upsertContact failed:", err.message),
+  );
 
   // Push subscriber to Shopify with CONFIRMED_OPT_IN marketing consent (fire-and-forget)
   syncConfirmedSubscriber(shop, email, confirmedAt).catch((err) =>

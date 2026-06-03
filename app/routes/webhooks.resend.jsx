@@ -19,6 +19,7 @@
  */
 import { Webhook } from "svix";
 import prisma from "../db.server.js";
+import { upsertContact } from "../lib/contacts/contacts.server.js";
 
 const SECRET = process.env.RESEND_WEBHOOK_SECRET || "";
 
@@ -119,6 +120,14 @@ async function handleEvent(eventType, messageId, data) {
       create: { shop: job.shop, email: toAddr, reason },
       update: { reason },
     });
+    await upsertContact({
+      shop: job.shop,
+      email: toAddr,
+      subscriptionStatus:
+        reason === "bounce" ? "bounced" : reason === "complaint" ? "complained" : "unsubscribed",
+    }).catch((err) =>
+      console.error("[resend-webhook] upsertContact failed:", err.message),
+    );
     console.log(`[resend-webhook] suppressed ${toAddr} on ${job.shop} reason=${reason} via messageId=${messageId}`);
     return;
   }

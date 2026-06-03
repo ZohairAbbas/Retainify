@@ -1,6 +1,7 @@
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { enrollContact } from "../lib/journey/journey-queue.server.js";
+import { upsertContact } from "../lib/contacts/contacts.server.js";
 
 export const action = async ({ request }) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
@@ -52,6 +53,14 @@ export const action = async ({ request }) => {
         customerName,
       },
     });
+    await upsertContact({
+      shop,
+      email,
+      name: customerName,
+      source: "cart_abandoned",
+    }).catch((err) =>
+      console.error("[webhook] upsertContact (checkout_create) failed:", err.message),
+    );
   }
 
   if (topic === "CHECKOUTS_UPDATE") {
@@ -80,6 +89,14 @@ export const action = async ({ request }) => {
         customerName,
       },
     });
+    await upsertContact({
+      shop,
+      email,
+      name: customerName,
+      source: "cart_abandoned",
+    }).catch((err) =>
+      console.error("[webhook] upsertContact (checkout_update) failed:", err.message),
+    );
 
     // Enroll in any published cart_abandoned journey, gated on the shop being
     // active and the cart not already recovered.

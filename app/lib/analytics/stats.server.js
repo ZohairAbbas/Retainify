@@ -52,26 +52,37 @@ export async function getCartRescueStats(shop, days = 30) {
     hasJourneys
       ? prisma.journeyJob.count({ where: { ...stepFilter, clickedAt: { gte: since, not: null } } })
       : 0,
-    // Denominator: distinct enrollments in cart_abandoned journeys, enrolled
-    // within the window, where at least one rescue email actually shipped.
-    hasJourneys
-      ? prisma.journeyEnrollment.count({
-          where: {
-            shop,
-            journeyId: { in: journeyIds },
-            enrolledAt: { gte: since },
-            jobs: { some: { sentAt: { not: null } } },
-          },
-        })
-      : 0,
-    // Numerator: AbandonedCart rows recovered in the window, but ONLY when a
-    // rescue email fired for this contact AND the customer had time to
-    // actually engage with it (5+ minute gap between sentAt and recoveredAt).
+    // Denominator: enrollments where a rescue email landed AT LEAST 1 HOUR
+    // AFTER the customer abandoned. That threshold excludes "noise"
+    // enrollments — customers who entered their email at checkout, got a
+    // rescue email fired within seconds by the worker (because the step's
+    // delayHours was 0), and completed their order anyway. A genuine
+    // abandonment is one where the customer was gone long enough for the
+    // email to plausibly have a role.
     //
-    // Without the 5-minute gap, every checkout that completed seconds after
-    // the worker fired an email got booked as a recovery — even though the
-    // customer almost certainly hadn't seen the email yet. 5 minutes isn't
-    // proof of causation, but it rules out impossible attribution.
+    // Symmetric with the numerator below: both sides require the same
+    // "real rescue attempt" definition, so the rate is interpretable.
+    hasJourneys
+      ? prisma.$queryRaw`
+          SELECT COUNT(*)::int AS count
+          FROM "JourneyEnrollment" e
+          WHERE e.shop = ${shop}
+            AND e."journeyId" = ANY(${journeyIds})
+            AND e."enrolledAt" >= ${since}
+            AND EXISTS (
+              SELECT 1 FROM "JourneyJob" j
+              WHERE j."enrollmentId" = e.id
+                AND j."sentAt" IS NOT NULL
+                AND j."sentAt" > e."enrolledAt" + INTERVAL '1 hour'
+            )
+        `
+      : [{ count: 0 }],
+    // Numerator: AbandonedCart rows recovered in the window, but ONLY when a
+    // rescue email shipped at least 1 hour after the customer abandoned AND
+    // before they recovered. The 1-hour gap is what makes the attribution
+    // meaningful: anything shorter means the email landed while the customer
+    // was still in their checkout session and the recovery would have
+    // happened regardless.
     //
     // Raw SQL because Prisma can't express the cross-row time-bracket
     // condition cleanly.
@@ -89,8 +100,8 @@ export async function getCartRescueStats(shop, days = 30) {
               WHERE e.shop = c.shop
                 AND e."contactEmail" = c."customerEmail"
                 AND j."sentAt" IS NOT NULL
-                AND j."sentAt" > c."abandonedAt"
-                AND j."sentAt" < c."recoveredAt" - INTERVAL '5 minutes'
+                AND j."sentAt" > c."abandonedAt" + INTERVAL '1 hour'
+                AND j."sentAt" < c."recoveredAt"
             )
         `
       : [],
@@ -103,6 +114,8 @@ export async function getCartRescueStats(shop, days = 30) {
 
   const recoveredCount = recoveredRows.length;
   const recoveredRevenue = recoveredRows.reduce((sum, r) => sum + (r.recoveredRevenue ?? 0), 0);
+  // Denominator comes back as [{ count: N }] from raw SQL.
+  const abandonedCount = Array.isArray(abandoned) ? Number(abandoned[0]?.count ?? 0) : Number(abandoned || 0);
 
   return {
     sent,
@@ -110,13 +123,13 @@ export async function getCartRescueStats(shop, days = 30) {
     clicked,
     recoveredCount,
     recoveredRevenue,
-    abandoned,
+    abandoned: abandonedCount,
     pendingJobs,
     signups,
     suppressions,
     openRate: sent > 0 ? (opened / sent) * 100 : 0,
     clickRate: sent > 0 ? (clicked / sent) * 100 : 0,
-    recoveryRate: abandoned > 0 ? (recoveredCount / abandoned) * 100 : 0,
+    recoveryRate: abandonedCount > 0 ? (recoveredCount / abandonedCount) * 100 : 0,
   };
 }
 

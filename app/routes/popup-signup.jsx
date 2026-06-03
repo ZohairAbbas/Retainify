@@ -2,6 +2,7 @@ import prisma from "../db.server.js";
 import { sendEmail } from "../lib/email/resend.server.js";
 import { renderConfirmationEmail } from "../lib/email/templates.server.js";
 import { generateConfirmToken } from "../lib/email/confirm.server.js";
+import { upsertContact } from "../lib/contacts/contacts.server.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -57,6 +58,12 @@ export const action = async ({ request }) => {
       data: { confirmToken },
     });
   }
+
+  // Mirror the touchpoint to the unified Contact record. Fire-and-forget so
+  // the popup response isn't held up by a Contacts table write.
+  upsertContact({ shop, email, source: "popup" }).catch((err) =>
+    console.error("[popup-signup] upsertContact failed:", err.message),
+  );
 
   // Load shop settings for sender details and popup config for discount %
   const [shopSettings, popupSettings] = await Promise.all([

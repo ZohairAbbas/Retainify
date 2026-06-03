@@ -46,8 +46,71 @@ model ShopSettings {
   onboardingStep   Int      @default(0) // 0=not started, 1=sender saved, 2=done
   isActive         Boolean  @default(false)
   pushEnabled      Boolean  @default(false)
+  // Contacts feature — one-time backfill flag + Shopify customer sync state
+  contactsBackfilledAt              DateTime?
+  lastShopifyCustomerSyncAt         DateTime?
+  shopifyCustomerSyncCursor         String?
+  shopifyCustomerSyncStatus         String   @default("idle") // idle | running | failed
+  shopifyCustomerSyncTotal          Int?
+  shopifyCustomerSyncDone           Int?
+  shopifyCustomerSyncIncludeNonOptIn Boolean @default(false)
+  shopifyCustomerSyncLastError      String   @default("")
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
+}
+
+// Unified contact record per shop+email. Source of truth for browsing audience.
+// Other tables (AbandonedCart, PopupSignup, PushSubscription, EmailSuppression,
+// JourneyEnrollment) still key on `email` string — no FKs added.
+model Contact {
+  id                  String    @id @default(cuid())
+  shop                String
+  email               String    // always lowercased + trimmed on write
+  name                String    @default("")
+  firstSeenAt         DateTime  @default(now())
+  lastSeenAt          DateTime  @default(now())
+  source              String    @default("manual") // popup | cart_abandoned | shopify_customer | csv_import | push_only | manual
+  subscriptionStatus  String    @default("never_opted_in") // subscribed | unsubscribed | bounced | complained | never_opted_in
+  marketingConsentAt  DateTime?
+  shopifyCustomerId   String?
+  deletedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  tags                ContactTag[]
+
+  @@unique([shop, email])
+  @@index([shop, lastSeenAt])
+  @@index([shop, source])
+  @@index([shop, subscriptionStatus])
+}
+
+// Merchant-defined tag — per shop. `nameKey` is the lowercased uniqueness key;
+// `name` keeps original display case.
+model Tag {
+  id        String   @id @default(cuid())
+  shop      String
+  name      String
+  nameKey   String
+  color     String   @default("forest") // forest | blue | amber | purple | tan | red
+  createdAt DateTime @default(now())
+
+  contacts  ContactTag[]
+
+  @@unique([shop, nameKey])
+}
+
+// Join table — tag membership on a contact.
+model ContactTag {
+  contactId String
+  tagId     String
+  createdAt DateTime @default(now())
+
+  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([contactId, tagId])
+  @@index([tagId])
 }
 
 // Tracks an abandoned checkout session
