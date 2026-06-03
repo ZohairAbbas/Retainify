@@ -65,9 +65,16 @@ export async function getCartRescueStats(shop, days = 30) {
         })
       : 0,
     // Numerator: AbandonedCart rows recovered in the window, but ONLY when a
-    // rescue email fired for this contact between cart.abandonedAt and
-    // cart.recoveredAt. Raw SQL because Prisma can't express the cross-row
-    // time-bracket condition cleanly.
+    // rescue email fired for this contact AND the customer had time to
+    // actually engage with it (5+ minute gap between sentAt and recoveredAt).
+    //
+    // Without the 5-minute gap, every checkout that completed seconds after
+    // the worker fired an email got booked as a recovery — even though the
+    // customer almost certainly hadn't seen the email yet. 5 minutes isn't
+    // proof of causation, but it rules out impossible attribution.
+    //
+    // Raw SQL because Prisma can't express the cross-row time-bracket
+    // condition cleanly.
     hasJourneys
       ? prisma.$queryRaw`
           SELECT c."recoveredRevenue"
@@ -83,7 +90,7 @@ export async function getCartRescueStats(shop, days = 30) {
                 AND e."contactEmail" = c."customerEmail"
                 AND j."sentAt" IS NOT NULL
                 AND j."sentAt" > c."abandonedAt"
-                AND j."sentAt" < c."recoveredAt"
+                AND j."sentAt" < c."recoveredAt" - INTERVAL '5 minutes'
             )
         `
       : [],
