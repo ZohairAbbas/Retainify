@@ -400,6 +400,22 @@ export default function ContactsPage() {
               }}
             />
           </div>
+          {(filters.status !== "all" || filters.source !== "all" || filters.tagId !== "all") && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => {
+                const p = new URLSearchParams();
+                p.set("from", "filters");
+                if (filters.status !== "all") p.set("status", filters.status);
+                if (filters.source !== "all") p.set("source", filters.source);
+                if (filters.tagId !== "all") p.set("tag", filters.tagId);
+                navigate(`/app/segments/new?${p.toString()}`);
+              }}
+            >
+              <Icons.Sliders size={14} /> Save as segment
+            </button>
+          )}
         </div>
       </div>
 

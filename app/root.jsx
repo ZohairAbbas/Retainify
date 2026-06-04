@@ -1,6 +1,7 @@
 import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from "react-router";
 import tokenStyles from "./styles/tokens.css?url";
 import retainifyStyles from "./styles/retainify.css?url";
+import segmentsStyles from "./styles/segments.css?url";
 
 export const loader = async () => {
   return { apiKey: process.env.SHOPIFY_API_KEY || "" };
@@ -15,6 +16,7 @@ export const links = () => [
   },
   { rel: "stylesheet", href: tokenStyles },
   { rel: "stylesheet", href: retainifyStyles },
+  { rel: "stylesheet", href: segmentsStyles },
 ];
 
 export default function App() {

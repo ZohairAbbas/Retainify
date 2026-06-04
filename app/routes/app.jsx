@@ -17,12 +17,12 @@ const NAV_ACTIVE = [
   { id: "flows",    label: "Flows",     href: "/app/flows",    icon: "Flow" },
   { id: "push",     label: "Push",      href: "/app/push",     icon: "Bell" },
   { id: "contacts", label: "Contacts",  href: "/app/contacts", icon: "Users" },
+  { id: "segments", label: "Segments",  href: "/app/segments", icon: "Sliders" },
   { id: "popup",    label: "Popup",     href: "/app/popup",    icon: "Tab" },
   { id: "settings", label: "Settings",  href: "/app/settings", icon: "Settings" },
 ];
 
 const NAV_SOON = [
-  { id: "segments",  label: "Segments" },
   { id: "coupons",   label: "Coupons" },
   { id: "analytics", label: "Analytics" },
 ];

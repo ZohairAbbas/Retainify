@@ -113,6 +113,42 @@ model ContactTag {
   @@index([tagId])
 }
 
+// Saved audience group — dynamic (rule tree) or static (explicit member list).
+// Used for browsing, and (in a follow-up phase) for flow triggers.
+model Segment {
+  id             String   @id @default(cuid())
+  shop           String
+  name           String
+  description    String   @default("")
+  kind           String   // "dynamic" | "static"
+  filterTree     Json?    // root group for dynamic; null for static
+  contactCount   Int      @default(0)
+  lastComputedAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  deletedAt      DateTime?
+
+  memberships    SegmentMembership[]
+
+  @@index([shop, deletedAt])
+  @@index([shop, updatedAt])
+}
+
+// Explicit membership row for static segments. (Dynamic segments don't write
+// to this table — they evaluate on read.)
+model SegmentMembership {
+  id        String   @id @default(cuid())
+  segmentId String
+  contactId String   // points at Contact.id; joined by app logic
+  addedAt   DateTime @default(now())
+
+  segment   Segment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+
+  @@unique([segmentId, contactId])
+  @@index([segmentId])
+  @@index([contactId])
+}
+
 // Tracks an abandoned checkout session
 model AbandonedCart {
   id              String   @id @default(cuid())
