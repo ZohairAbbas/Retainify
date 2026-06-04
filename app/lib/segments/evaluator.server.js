@@ -225,6 +225,13 @@ function evalTreeJs(node, ctx) {
   return children.every((c) => evalTreeJs(c, ctx));
 }
 
+// Public single-contact eval — used by `listSegmentsForContact` to check
+// dynamic segment membership without scanning the whole shop.
+export function evalTreeForContact(tree, ctx) {
+  if (!tree) return true;
+  return evalTreeJs(tree, ctx);
+}
+
 // Whether the tree references any rule that needs JS-side evaluation.
 function needsJsEval(node) {
   if (isRule(node)) {

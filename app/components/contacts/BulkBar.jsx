@@ -1,7 +1,7 @@
 import Icons from "../ui/Icons.jsx";
 import SoonPill from "./SoonPill.jsx";
 
-export default function BulkBar({ selectedCount, onAddTag, onUnsubscribe, onDelete, onClear }) {
+export default function BulkBar({ selectedCount, onAddTag, onSaveAsSegment, onUnsubscribe, onDelete, onClear }) {
   if (!selectedCount) return null;
   return (
     <div className="rt-bulkbar">
@@ -13,6 +13,11 @@ export default function BulkBar({ selectedCount, onAddTag, onUnsubscribe, onDele
       <button type="button" className="rt-bulk-btn" onClick={onAddTag}>
         <Icons.Tag size={13} /> Add tag
       </button>
+      {onSaveAsSegment && (
+        <button type="button" className="rt-bulk-btn" onClick={onSaveAsSegment}>
+          <Icons.Sliders size={13} /> Save as segment
+        </button>
+      )}
       <button type="button" className="rt-bulk-btn" onClick={onUnsubscribe}>
         <Icons.Mail size={13} /> Unsubscribe
       </button>

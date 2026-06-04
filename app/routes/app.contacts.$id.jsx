@@ -43,6 +43,7 @@ import {
   listTagsForShop,
   removeTag,
 } from "../lib/contacts/tags.server.js";
+import { listSegmentsForContact } from "../lib/segments/segments.server.js";
 
 export const loader = async ({ request, params }) => {
   const { session } = await authenticate.admin(request);
@@ -53,7 +54,7 @@ export const loader = async ({ request, params }) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [stats, timeline, carts, emails, pushes, journeys, allTags, pushSubs, lastSuppression] =
+  const [stats, timeline, carts, emails, pushes, journeys, allTags, pushSubs, lastSuppression, contactSegments] =
     await Promise.all([
       getContactStats(shop, contact.email),
       buildTimeline(shop, contact.email),
@@ -69,6 +70,7 @@ export const loader = async ({ request, params }) => {
         where: { shop, email: contact.email },
         orderBy: { createdAt: "desc" },
       }),
+      listSegmentsForContact(shop, contact),
     ]);
 
   return {
@@ -98,6 +100,7 @@ export const loader = async ({ request, params }) => {
     journeys,
     allTags,
     lastSuppressedAt: lastSuppression?.createdAt || null,
+    contactSegments,
   };
 };
 
@@ -163,6 +166,7 @@ export default function ContactProfilePage() {
     journeys,
     allTags,
     lastSuppressedAt,
+    contactSegments,
   } = useLoaderData();
   const navigate = useNavigate();
   const fetcher = useFetcher();
@@ -386,7 +390,7 @@ export default function ContactProfilePage() {
             allTags={allTags}
           />
           <SubscriptionCard contact={contact} />
-          <SegmentsCard />
+          <SegmentsCard segments={contactSegments} />
           <JourneysCard active={journeys.active} past={journeys.past} />
           <CustomPropsCard />
         </aside>

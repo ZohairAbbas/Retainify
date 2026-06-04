@@ -34,6 +34,7 @@ import {
 import { runContactsBackfillIfNeeded } from "../lib/contacts/backfill.server.js";
 import { listTagsForShop, bulkApplyTag, upsertTag } from "../lib/contacts/tags.server.js";
 import { getSyncProgress } from "../lib/contacts/shopifyCustomerSync.server.js";
+import { createSegment } from "../lib/segments/segments.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -143,6 +144,20 @@ export const action = async ({ request }) => {
     const email = String(fd.get("email") || "");
     await resubscribeContact(shop, email);
     return { ok: true };
+  }
+
+  if (intent === "bulk_save_as_segment") {
+    const ids = fd.getAll("contactId").map(String).filter(Boolean);
+    const name = String(fd.get("name") || "").trim();
+    if (!ids.length || !name) return { ok: false };
+    const seg = await createSegment(shop, {
+      name,
+      description: `Static segment of ${ids.length} contact${ids.length === 1 ? "" : "s"} saved from Contacts.`,
+      kind: "static",
+      filterTree: null,
+      memberContactIds: ids,
+    });
+    return { ok: true, segmentId: seg.id };
   }
 
   return { ok: false };
@@ -573,6 +588,14 @@ export default function ContactsPage() {
         onAddTag={() => {
           const name = window.prompt("Tag name");
           if (name) submitBulk("bulk_apply_tag", { tagName: name });
+        }}
+        onSaveAsSegment={() => {
+          const name = window.prompt(
+            `Save these ${selected.size} contact(s) as a static segment. Name?`,
+          );
+          if (name && name.trim()) {
+            submitBulk("bulk_save_as_segment", { name: name.trim() });
+          }
         }}
         onUnsubscribe={() => submitBulk("bulk_unsubscribe")}
         onDelete={() => {

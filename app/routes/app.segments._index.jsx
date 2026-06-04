@@ -148,6 +148,44 @@ export default function SegmentsListPage() {
         <SegmentsEmpty templates={templates} />
       ) : (
         <>
+          {/* Slim templates row — always visible so merchants can spin up
+              a new segment from a template even after they have some saved. */}
+          <div className="rt-tpl-row rt-tpl-row-slim">
+            <div className="rt-tpl-head">
+              <div>
+                <h2>Start from a <em>template</em></h2>
+                <div className="rt-tpl-head-sub">
+                  Common groupings, pre-wired. Tweak the rules after.
+                </div>
+              </div>
+            </div>
+            <div className="rt-tpl-cards">
+              {templates.map((t) => (
+                <button
+                  type="button"
+                  key={t.id}
+                  className="rt-tpl-card"
+                  onClick={() => navigate(`/app/segments/new?template=${t.id}`)}
+                >
+                  <div className="rt-tpl-card-top">
+                    <span
+                      className="rt-tpl-icon"
+                      style={{ background: t.accent, color: t.accentInk }}
+                    >
+                      <Icons.Sparkles size={12} />
+                    </span>
+                    <span className="rt-tpl-card-name">{t.name}</span>
+                  </div>
+                  <div className="rt-tpl-card-desc">{t.description}</div>
+                  <div className="rt-tpl-card-foot">
+                    <strong>Use template</strong>
+                    <Icons.Arrow size={10} />
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Filter bar */}
           <div className="rt-toolbar rt-toolbar-stack">
             <div className="rt-chips rt-chips-wrap">

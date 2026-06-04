@@ -337,7 +337,9 @@
 .rt-grp {
   border-radius: var(--r-3);
   border: 1px solid var(--hair-2);
-  overflow: hidden;
+  /* overflow:hidden was clipping the field/op dropdowns — keep it visible
+     so .rt-sel-menu can escape the group card. */
+  overflow: visible;
   margin-bottom: 12px;
   background: var(--paper-3);
 }
@@ -454,7 +456,7 @@
   background: var(--paper-3);
   border: 1px solid var(--hair-2);
   border-radius: var(--r-3); box-shadow: var(--sh-3);
-  padding: 4px; z-index: 14;
+  padding: 4px; z-index: 50;
   max-height: 320px; overflow-y: auto;
 }
 .rt-sel-item {
@@ -727,6 +729,14 @@
 
 /* Detail tab content */
 .rt-sd-tabwrap { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
+
+/* Contacts table on detail page omits the checkbox column the main Contacts
+   list uses. Re-balance the grid so Contact / Status / Lifecycle don't
+   overlap. 7 columns: contact | status | lifecycle | tags | carts | last seen | actions */
+.rt-sd .rt-cthead,
+.rt-sd .rt-ctrow {
+  grid-template-columns: 2.2fr 1.05fr 1.05fr 1.4fr 0.95fr 0.95fr 44px;
+}
 
 /* Activity tab content */
 .rt-sd-activity { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; padding: 24px; }

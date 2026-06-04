@@ -6,7 +6,8 @@
 // update so the saved state is accurate immediately.
 
 import prisma from "../../db.server.js";
-import { evaluateSegment, validateFilterTree } from "./evaluator.server.js";
+import { evaluateSegment, evalTreeForContact, validateFilterTree } from "./evaluator.server.js";
+import { computeLifecycle, getContactStats } from "../contacts/contacts.server.js";
 
 const COUNT_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -204,6 +205,53 @@ export async function listStaticMemberIds(segmentId) {
     select: { contactId: true },
   });
   return rows.map((r) => r.contactId);
+}
+
+// Return the segments a given contact is part of. Static segments are read
+// from SegmentMembership; dynamic segments are evaluated by running each
+// segment's filter tree against this contact alone.
+export async function listSegmentsForContact(shop, contact) {
+  const all = await prisma.segment.findMany({
+    where: { shop, deletedAt: null },
+    orderBy: { updatedAt: "desc" },
+  });
+  if (all.length === 0) return [];
+
+  const staticSegments = all.filter((s) => s.kind === "static");
+  const dynamicSegments = all.filter((s) => s.kind === "dynamic");
+
+  // Static memberships in one query.
+  let staticMatchIds = new Set();
+  if (staticSegments.length) {
+    const rows = await prisma.segmentMembership.findMany({
+      where: {
+        segmentId: { in: staticSegments.map((s) => s.id) },
+        contactId: contact.id,
+      },
+      select: { segmentId: true },
+    });
+    staticMatchIds = new Set(rows.map((r) => r.segmentId));
+  }
+
+  // Dynamic: evaluate each filter tree against just this contact.
+  let dynamicMatchIds = new Set();
+  if (dynamicSegments.length) {
+    const stats = await getContactStats(shop, contact.email);
+    const lifecycle = computeLifecycle(contact, stats);
+    for (const seg of dynamicSegments) {
+      try {
+        if (evalTreeForContact(seg.filterTree, { contact, stats, lifecycle })) {
+          dynamicMatchIds.add(seg.id);
+        }
+      } catch (_e) {
+        // ignore evaluation errors per segment
+      }
+    }
+  }
+
+  return all
+    .filter((s) => staticMatchIds.has(s.id) || dynamicMatchIds.has(s.id))
+    .map((s) => ({ id: s.id, name: s.name, kind: s.kind }));
 }
 
 // ── Build a filter tree from current Contacts list filters ─────────────
