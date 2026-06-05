@@ -25,6 +25,12 @@ export const TRIGGER_CONFIG = {
     icon: "Refresh",
     desc: "Starts when a customer has not purchased in 90 days.",
   },
+  segment_entered: {
+    label: "Entered a Segment",
+    tint: "trigger",
+    icon: "Sliders",
+    desc: "Starts when a contact newly matches a segment.",
+  },
 };
 
 export const STATUS_PILL = {

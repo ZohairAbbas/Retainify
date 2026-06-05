@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useNavigate, useNavigation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import Icons from "../components/ui/Icons.jsx";
@@ -16,15 +16,27 @@ import {
 } from "../lib/segments/segments.server.js";
 import { listSystemSegmentsWithCounts } from "../lib/segments/systemSegments.server.js";
 import { TEMPLATES } from "../lib/segments/fields.server.js";
+import prisma from "../db.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const [segments, systemSegments] = await Promise.all([
+  const [segments, systemSegments, publishedSegmentFlows] = await Promise.all([
     listSegments(shop),
     listSystemSegmentsWithCounts(shop),
+    prisma.journey.findMany({
+      where: {
+        shop,
+        status: "published",
+        archivedAt: null,
+        trigger: "segment_entered",
+        triggerSegmentKey: { not: null },
+      },
+      select: { triggerSegmentKey: true },
+    }),
   ]);
   const dynamicCount = segments.filter((s) => s.kind === "dynamic").length;
+  const segmentsInFlows = new Set(publishedSegmentFlows.map((f) => f.triggerSegmentKey));
   return Response.json({
     segments,
     systemSegments,
@@ -32,7 +44,7 @@ export const loader = async ({ request }) => {
     totals: {
       total: segments.length,
       dynamic: dynamicCount,
-      inFlows: 0, // wired up when segment_entered trigger ships
+      inFlows: segmentsInFlows.size,
     },
   });
 };
@@ -62,10 +74,15 @@ export const action = async ({ request }) => {
 export default function SegmentsListPage() {
   const { segments, systemSegments, templates, totals } = useLoaderData();
   const navigate = useNavigate();
+  const navigation = useNavigation();
   const fetcher = useFetcher();
   const [openMenu, setOpenMenu] = useState(null);
   const [kindFilter, setKindFilter] = useState("all");
   const [q, setQ] = useState("");
+  // Show skeleton rows on a real navigation load (route is being entered or
+  // re-validated). useFetcher's state is intentionally not used here — we
+  // don't want kebab actions to flash the skeleton.
+  const isInitialLoading = navigation.state === "loading";
 
   const filtered = segments.filter((s) => {
     if (kindFilter !== "all" && s.kind !== kindFilter) return false;
@@ -328,9 +345,36 @@ export default function SegmentsListPage() {
                 </div>
               </div>
             ))}
-            {filtered.length === 0 && (
+            {isInitialLoading && filtered.length === 0 && (
+              <>
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={`sk-${i}`} className="rt-seg-row" style={{ cursor: "default" }}>
+                    <div className="rt-seg-name-cell">
+                      <span className="rt-seg-name-icon"><span className="rt-skel-bar" style={{ width: 16 }} /></span>
+                      <div className="rt-seg-name">
+                        <span className="rt-skel-bar" style={{ width: 160 }} />
+                        <span className="rt-skel-bar" style={{ width: 200, marginTop: 6, height: 10 }} />
+                      </div>
+                    </div>
+                    <div><span className="rt-skel-bar" style={{ width: 70 }} /></div>
+                    <div className="rt-seg-count"><span className="rt-skel-bar" style={{ width: 60 }} /></div>
+                    <div><span className="rt-skel-bar" style={{ width: 100 }} /></div>
+                    <div><span className="rt-skel-bar" style={{ width: 80 }} /></div>
+                    <div />
+                  </div>
+                ))}
+              </>
+            )}
+            {!isInitialLoading && filtered.length === 0 && (
               <div className="rt-empty-row">
-                No segments match. Try adjusting your filters.
+                No segments match. Try a different filter.{" "}
+                <button
+                  type="button"
+                  className="rt-link"
+                  onClick={() => { setKindFilter("all"); setQ(""); }}
+                >
+                  Clear filters
+                </button>
               </div>
             )}
           </div>

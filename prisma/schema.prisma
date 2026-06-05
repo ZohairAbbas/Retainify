@@ -55,6 +55,8 @@ model ShopSettings {
   shopifyCustomerSyncDone           Int?
   shopifyCustomerSyncIncludeNonOptIn Boolean @default(false)
   shopifyCustomerSyncLastError      String   @default("")
+  // Segments feature — daily snapshot worker. No-op unless ≥24h elapsed.
+  lastSegmentSnapshotAt             DateTime?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 }
@@ -132,6 +134,38 @@ model Segment {
 
   @@index([shop, deletedAt])
   @@index([shop, updatedAt])
+}
+
+// Per-contact entry log for a segment. Powers the segment detail Activity
+// tab (Recently entered / left) AND the enrollment worker's diff between
+// runs. Both static and dynamic segments write here:
+//   - Static: from addStaticMember/removeStaticMember (synchronously).
+//   - Dynamic: from the segment enrollment worker on each tick.
+// segmentKey matches Segment.id OR a sys_* system segment key.
+model SegmentEntryLog {
+  id         String    @id @default(cuid())
+  shop       String
+  segmentKey String
+  contactId  String
+  enteredAt  DateTime  @default(now())
+  leftAt     DateTime?
+
+  @@index([shop, segmentKey, enteredAt])
+  @@index([shop, segmentKey, leftAt])
+  @@index([contactId])
+}
+
+// Daily size snapshot for the Activity tab sparkline. The snapshot worker
+// writes one row per segment per UTC day and prunes anything older than 30
+// days for that segmentKey.
+model SegmentSnapshot {
+  id         String   @id @default(cuid())
+  shop       String
+  segmentKey String
+  takenAt    DateTime @default(now())
+  count      Int
+
+  @@index([shop, segmentKey, takenAt])
 }
 
 // Explicit membership row for static segments. (Dynamic segments don't write
@@ -223,7 +257,7 @@ model Journey {
   id               String    @id @default(cuid())
   shop             String
   name             String
-  trigger          String    // cart_abandoned | customer_created | order_placed | win_back
+  trigger          String    // cart_abandoned | customer_created | order_placed | win_back | segment_entered
   isActive         Boolean   @default(false)
   status           String    @default("draft")        // draft | published | paused
   publishedAt      DateTime?
@@ -233,6 +267,12 @@ model Journey {
   exitCriteria     String    @default("[]")           // JSON array of event keys
   source           String    @default("flows")        // flows | automations | cart_rescue_legacy
   archivedAt       DateTime?
+  // Segments trigger metadata. triggerSegmentKey holds Segment.id (cuid) or
+  // a sys_* key for built-in system segments. lastEnrollmentAt/Hash drive
+  // the staggered enrollment worker — never bypass via hand edits.
+  triggerSegmentKey  String?
+  lastEnrollmentAt   DateTime?
+  lastEnrollmentHash String?
   createdAt        DateTime  @default(now())
   updatedAt        DateTime  @updatedAt
 
@@ -241,6 +281,7 @@ model Journey {
 
   @@index([shop, trigger])
   @@index([shop, status])
+  @@index([trigger, status, lastEnrollmentAt])
 }
 
 // One step within a journey (email send, time delay, push, or exit)

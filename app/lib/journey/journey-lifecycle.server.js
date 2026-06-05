@@ -72,7 +72,7 @@ export async function archiveJourney(journeyId) {
  * `steps` is an array of { stepNumber, nodeType, delayHours, subject, previewText,
  *   emailName, templateStyle, discountPct, isEnabled }.
  */
-export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, steps }) {
+export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, steps, triggerSegmentKey }) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
 
@@ -181,6 +181,13 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         name: name ?? journey.name,
         entryFrequency: entryFrequency ?? journey.entryFrequency,
         exitCriteria: exitCriteria ? JSON.stringify(exitCriteria) : journey.exitCriteria,
+        // Allow rebinding a segment-trigger flow to a different segment from
+        // the inspector. Pass undefined to leave it alone; null clears it.
+        ...(triggerSegmentKey !== undefined ? {
+          triggerSegmentKey,
+          // Force one fresh enrollment pass with the new key.
+          lastEnrollmentHash: null,
+        } : {}),
         draftVersion: journey.draftVersion + 1,
       },
     }),

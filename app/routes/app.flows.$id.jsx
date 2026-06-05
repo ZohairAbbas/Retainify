@@ -7,12 +7,20 @@ import { saveDraft, publishJourney, pauseJourney, unpublishToDraft, archiveJourn
 import { getStepStats } from "../lib/journey/journey-analytics.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
+import { listSegmentChoices } from "../lib/segments/segments.server.js";
+import { evaluateSegment } from "../lib/segments/evaluator.server.js";
+import { getSystemSegmentById, isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
 const EXIT_CRITERIA_OPTIONS = [
   { value: "order_placed", label: "Contact places an order" },
   { value: "cart_recovered", label: "Cart is recovered" },
   { value: "unsubscribed", label: "Contact unsubscribes" },
+];
+
+// Extra exit criteria only shown when the flow is segment-triggered.
+const SEGMENT_EXIT_CRITERIA = [
+  { value: "leaves_trigger_segment", label: "Contact leaves the trigger segment" },
 ];
 
 export const loader = async ({ request, params }) => {
@@ -41,6 +49,31 @@ export const loader = async ({ request, params }) => {
     }
   }
 
+  // Segment trigger metadata: choices for the dropdown, plus a current-match
+  // count when the flow already points at a segment. The count is the same
+  // number the segment detail page shows.
+  const segmentChoices = await listSegmentChoices(shop);
+  let triggerSegmentCount = null;
+  if (journey.trigger === "segment_entered" && journey.triggerSegmentKey) {
+    const key = journey.triggerSegmentKey;
+    let segment = null;
+    if (isSystemSegmentId(key)) {
+      segment = { ...getSystemSegmentById(key), shop };
+    } else {
+      segment = await prisma.segment.findFirst({
+        where: { id: key, shop, deletedAt: null },
+      });
+    }
+    if (segment) {
+      try {
+        const { count } = await evaluateSegment(shop, segment, { sampleSize: 0 });
+        triggerSegmentCount = count;
+      } catch (_e) {
+        triggerSegmentCount = null;
+      }
+    }
+  }
+
   return {
     journey: {
       ...journey,
@@ -49,6 +82,8 @@ export const loader = async ({ request, params }) => {
     canvasNodes,
     settings: settings ?? {},
     stats,
+    segmentChoices,
+    triggerSegmentCount,
   };
 };
 
@@ -111,6 +146,12 @@ export const action = async ({ request, params }) => {
     const name = String(fd.get("name") || journey.name);
     const entryFrequency = String(fd.get("entryFrequency") || journey.entryFrequency);
     const exitCriteria = JSON.parse(String(fd.get("exitCriteria") || "[]"));
+    // Only pass triggerSegmentKey if the client sent one explicitly. Empty
+    // string from a cleared dropdown becomes null; absent field leaves it
+    // alone (so non-segment flows aren't disturbed).
+    const rawSegKey = fd.get("triggerSegmentKey");
+    const triggerSegmentKey =
+      rawSegKey === null ? undefined : (String(rawSegKey) || null);
 
     const stepsForSave = nodes
       .filter((n) => n.kind !== "trigger")
@@ -145,7 +186,7 @@ export const action = async ({ request, params }) => {
         };
       });
 
-    await saveDraft(id, { name, entryFrequency, exitCriteria, steps: stepsForSave });
+    await saveDraft(id, { name, entryFrequency, exitCriteria, steps: stepsForSave, triggerSegmentKey });
     return { ok: true, saved: true };
   }
 
@@ -173,7 +214,7 @@ export const action = async ({ request, params }) => {
 };
 
 export default function FlowBuilder() {
-  const { journey, canvasNodes: initialNodes, settings, stats } = useLoaderData();
+  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -182,6 +223,7 @@ export default function FlowBuilder() {
   const [name, setName] = useState(journey.name);
   const [entryFrequency, setEntryFrequency] = useState(journey.entryFrequency || "no_reentry");
   const [exitCriteria, setExitCriteria] = useState(journey.exitCriteria || []);
+  const [triggerSegmentKey, setTriggerSegmentKey] = useState(journey.triggerSegmentKey || "");
   const [selectedId, setSelectedId] = useState("trigger");
   const [viewMode, setViewMode] = useState("canvas");
   const [showPreview, setShowPreview] = useState(true);
@@ -195,9 +237,10 @@ export default function FlowBuilder() {
       name !== journey.name ||
       entryFrequency !== (journey.entryFrequency || "no_reentry") ||
       JSON.stringify(exitCriteria) !== JSON.stringify(journey.exitCriteria || []) ||
-      JSON.stringify(nodes) !== JSON.stringify(initialNodes)
+      JSON.stringify(nodes) !== JSON.stringify(initialNodes) ||
+      (journey.trigger === "segment_entered" && triggerSegmentKey !== (journey.triggerSegmentKey || ""))
     );
-  }, [name, entryFrequency, exitCriteria, nodes, journey, initialNodes]);
+  }, [name, entryFrequency, exitCriteria, nodes, journey, initialNodes, triggerSegmentKey]);
 
   const selected = nodes.find((n) => n.id === selectedId);
 
@@ -271,6 +314,9 @@ export default function FlowBuilder() {
     fd.set("entryFrequency", entryFrequency);
     fd.set("exitCriteria", JSON.stringify(exitCriteria));
     fd.set("nodes", JSON.stringify(nodes));
+    if (journey.trigger === "segment_entered") {
+      fd.set("triggerSegmentKey", triggerSegmentKey || "");
+    }
     fetcher.submit(fd, { method: "post" });
   }
 
@@ -456,6 +502,10 @@ export default function FlowBuilder() {
             setEntryFrequency={setEntryFrequency}
             exitCriteria={exitCriteria}
             setExitCriteria={setExitCriteria}
+            triggerSegmentKey={triggerSegmentKey}
+            setTriggerSegmentKey={setTriggerSegmentKey}
+            segmentChoices={segmentChoices}
+            triggerSegmentCount={triggerSegmentCount}
             settings={settings}
             onChange={(patch) => selected && updateNode(selected.id, patch)}
             onOpenEditor={setEmailEditorNodeId}
@@ -693,7 +743,7 @@ function InsertMenu({ open, onClose, onAdd }) {
   );
 }
 
-function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, settings, onChange, onOpenEditor }) {
+function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, segmentChoices = [], triggerSegmentCount, settings, onChange, onOpenEditor }) {
   if (!node) {
     return (
       <div className="rt-ins">
@@ -738,6 +788,53 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
           <div className="t-micro muted">Trigger event</div>
           <div className="field-help" style={{ marginTop: 6 }}>{trig.desc}</div>
         </div>
+
+        {journey.trigger === "segment_entered" && (
+          <div className="rt-ins-section">
+            <div className="t-micro muted">Segment</div>
+            <div className="t-small muted" style={{ margin: "6px 0 10px" }}>
+              Contacts that newly match this segment will be enrolled.
+            </div>
+            <select
+              className="input"
+              value={triggerSegmentKey || ""}
+              onChange={(e) => setTriggerSegmentKey(e.target.value)}
+              style={{ width: "100%" }}
+            >
+              <option value="">Pick a segment…</option>
+              {(() => {
+                const sys = segmentChoices.filter((s) => s.system);
+                const user = segmentChoices.filter((s) => !s.system);
+                return (
+                  <>
+                    {sys.length > 0 && (
+                      <optgroup label="Built-in">
+                        {sys.map((s) => (
+                          <option key={s.key} value={s.key}>{s.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                    {user.length > 0 && (
+                      <optgroup label="Your segments">
+                        {user.map((s) => (
+                          <option key={s.key} value={s.key}>{s.name}</option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </>
+                );
+              })()}
+            </select>
+            {typeof triggerSegmentCount === "number" && triggerSegmentKey && (
+              <div className="t-small muted" style={{ marginTop: 8 }}>
+                <strong style={{ color: "var(--ink-1)" }}>
+                  {triggerSegmentCount.toLocaleString()}
+                </strong>{" "}
+                contact{triggerSegmentCount === 1 ? "" : "s"} currently match.
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="rt-ins-section">
           <div className="t-micro muted">Entry frequency</div>
@@ -795,6 +892,15 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
                 onChange={() => toggleCriterion(opt.value)}
               />
             ))}
+            {journey.trigger === "segment_entered" &&
+              SEGMENT_EXIT_CRITERIA.map((opt) => (
+                <CheckOption
+                  key={opt.value}
+                  label={opt.label}
+                  checked={exitCriteria.includes(opt.value)}
+                  onChange={() => toggleCriterion(opt.value)}
+                />
+              ))}
           </div>
         </div>
       </div>

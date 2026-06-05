@@ -58,3 +58,30 @@ export async function bulkApplyTag(shop, contactIds, tagId) {
     skipDuplicates: true,
   });
 }
+
+const VALID_COLORS = new Set(["forest", "blue", "amber", "purple", "tan", "red"]);
+
+// Rename a tag in place. We also update nameKey (the lowercased uniqueness
+// key) so the post-rename tag still de-dupes by case-insensitive name.
+// Throws on the unique-constraint collision so the route can surface a
+// friendly error.
+export async function renameTag(shop, id, name) {
+  const trimmed = String(name || "").trim();
+  if (!trimmed) throw new Error("Name is required");
+  const nameKey = trimmed.toLowerCase();
+  return prisma.tag.update({
+    where: { id },
+    data: { name: trimmed, nameKey },
+  });
+}
+
+export async function recolorTag(shop, id, color) {
+  if (!VALID_COLORS.has(color)) throw new Error("Unknown color");
+  return prisma.tag.update({ where: { id }, data: { color } });
+}
+
+export async function deleteTag(shop, id) {
+  // ContactTag cascades via Prisma's onDelete on the relation, so we only
+  // need to delete the Tag row.
+  await prisma.tag.delete({ where: { id } });
+}

@@ -185,6 +185,21 @@
 .rt-seg-row { position: relative; }
 .rt-seg-row .rt-tactions { position: relative; z-index: 5; }
 .rt-seg-row .rt-menu { z-index: 60; }
+
+/* Loading skeleton — bars of varying width that pulse softly. Used by the
+   segments list during initial loader navigation. */
+.rt-skel-bar {
+  display: inline-block;
+  height: 14px;
+  border-radius: var(--r-pill);
+  background: linear-gradient(90deg, var(--paper-2) 0%, var(--hair-1) 50%, var(--paper-2) 100%);
+  background-size: 200% 100%;
+  animation: rt-skel-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes rt-skel-shimmer {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
 .rt-seg-thead, .rt-seg-row {
   display: grid;
   /* name | type | contacts+spark | flows | updated | actions */

@@ -6,12 +6,18 @@ import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { runJourneyWorker } from "./lib/journey/journey-worker.server.js";
 import { runPushWorker } from "./lib/push/push-worker.server.js";
+import { runSegmentEnrollmentWorker } from "./lib/segments/segmentEnrollmentWorker.server.js";
+import { runSegmentSnapshotWorker } from "./lib/segments/segmentSnapshotWorker.server.js";
 
 // Poll all job queues every 60 seconds.
 if (typeof setInterval !== "undefined") {
   setInterval(() => {
     runJourneyWorker().catch((err) => console.error("[journey-worker] poll error:", err));
     runPushWorker().catch((err) => console.error("[push-worker] poll error:", err));
+    // Bounded per-tick budget keeps these next to journey/push without
+    // blowing up DB load. See segmentEnrollmentWorker comment for details.
+    runSegmentEnrollmentWorker().catch((err) => console.error("[segment-enrollment] poll error:", err));
+    runSegmentSnapshotWorker().catch((err) => console.error("[segment-snapshot] poll error:", err));
   }, 60_000);
 }
 

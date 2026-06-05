@@ -217,12 +217,13 @@ export async function createJourneyFromTemplate(shop, templateKey, overrides = {
 /**
  * Create an empty draft Journey (Start From Scratch).
  */
-export async function createBlankJourney(shop, { name, trigger } = {}) {
+export async function createBlankJourney(shop, { name, trigger, triggerSegmentKey } = {}) {
   return prisma.journey.create({
     data: {
       shop,
       name: name || "Untitled Flow",
       trigger: trigger || "customer_created",
+      triggerSegmentKey: triggerSegmentKey || null,
       status: "draft",
       isActive: false,
       source: "flows",

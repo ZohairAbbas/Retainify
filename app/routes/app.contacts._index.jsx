@@ -391,6 +391,15 @@ export default function ContactsPage() {
               })),
             ]}
           />
+          <button
+            type="button"
+            className="rt-link"
+            onClick={() => navigate("/app/contacts/tags")}
+            title="Rename, recolor, or delete tags"
+            style={{ marginLeft: 4 }}
+          >
+            Manage tags
+          </button>
           <FilterDropdown
             label="Source"
             icon="Refresh"

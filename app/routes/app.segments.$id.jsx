@@ -12,9 +12,19 @@ import StatCard from "../components/contacts/StatCard.jsx";
 import SegmentKindPill from "../components/segments/SegmentKindPill.jsx";
 import Sparkline from "../components/segments/Sparkline.jsx";
 import ReadOnlyRules from "../components/segments/ReadOnlyRules.jsx";
+import RecentMovement from "../components/segments/RecentMovement.jsx";
 import { relativeTime, fmtMoney } from "../components/contacts/constants.js";
 import { evaluateSegment } from "../lib/segments/evaluator.server.js";
-import { getSegmentById, softDeleteSegment, duplicateSegment, listStaticMemberIds } from "../lib/segments/segments.server.js";
+import {
+  getSegmentById,
+  softDeleteSegment,
+  duplicateSegment,
+  listStaticMemberIds,
+  listFlowsUsingSegment,
+  addStaticMember,
+  removeStaticMember,
+  updateSegment,
+} from "../lib/segments/segments.server.js";
 import { getSystemSegmentById, isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import { listTagsForShop } from "../lib/contacts/tags.server.js";
 import { computeLifecycle, getContactStats } from "../lib/contacts/contacts.server.js";
@@ -43,15 +53,26 @@ export const loader = async ({ params, request }) => {
 
   // Build the contacts table from the sample. For dynamic, the evaluator
   // already returned a representative slice; for static, augment with rows.
+  // Static lists use cursor pagination so very large lists don't blow up
+  // the loader. `?after=<id>` skips to the page after that contact.
+  const url = new URL(request.url);
+  const after = url.searchParams.get("after") || null;
+  const PAGE_SIZE = 50;
   let contactRows = [];
+  let nextCursor = null;
   if (segment.kind === "static" && !system) {
     const memberIds = await listStaticMemberIds(segment.id);
     const contacts = await prisma.contact.findMany({
       where: { id: { in: memberIds }, shop, deletedAt: null },
       include: { tags: { include: { tag: true } } },
-      take: 100,
-      orderBy: { lastSeenAt: "desc" },
+      take: PAGE_SIZE + 1,
+      ...(after ? { cursor: { id: after }, skip: 1 } : {}),
+      orderBy: [{ lastSeenAt: "desc" }, { id: "desc" }],
     });
+    if (contacts.length > PAGE_SIZE) {
+      const last = contacts.pop();
+      nextCursor = last.id;
+    }
     contactRows = await Promise.all(
       contacts.map(async (c) => {
         const stats = await getContactStats(shop, c.email);
@@ -89,6 +110,52 @@ export const loader = async ({ params, request }) => {
     }
   }
 
+  // Activity tab data: 30-day snapshot series + last 7 days of entry/exit
+  // log rows. `segmentKey` is the same id whether system or user.
+  const segmentKey = segment.id;
+  const cutoff30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const cutoff7d = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const [snapshots, enteredRows, leftRows, flowsUsing] = await Promise.all([
+    prisma.segmentSnapshot.findMany({
+      where: { shop, segmentKey, takenAt: { gte: cutoff30d } },
+      orderBy: { takenAt: "asc" },
+      select: { takenAt: true, count: true },
+    }),
+    prisma.segmentEntryLog.findMany({
+      where: { shop, segmentKey, enteredAt: { gte: cutoff7d } },
+      orderBy: { enteredAt: "desc" },
+      take: 25,
+      select: { id: true, contactId: true, enteredAt: true },
+    }),
+    prisma.segmentEntryLog.findMany({
+      where: { shop, segmentKey, leftAt: { gte: cutoff7d } },
+      orderBy: { leftAt: "desc" },
+      take: 25,
+      select: { id: true, contactId: true, leftAt: true },
+    }),
+    listFlowsUsingSegment(shop, segmentKey),
+  ]);
+
+  // Hydrate contact emails/names for the movement rows in one query.
+  const movementIds = [
+    ...new Set([...enteredRows, ...leftRows].map((r) => r.contactId)),
+  ];
+  let contactById = {};
+  if (movementIds.length) {
+    const rows = await prisma.contact.findMany({
+      where: { id: { in: movementIds }, shop },
+      select: { id: true, email: true, name: true },
+    });
+    contactById = Object.fromEntries(rows.map((c) => [c.id, c]));
+  }
+  const enrich = (r, key) => ({
+    id: r.id,
+    contactId: r.contactId,
+    email: contactById[r.contactId]?.email || "(deleted)",
+    name: contactById[r.contactId]?.name || "",
+    [key]: r[key],
+  });
+
   return Response.json({
     segment,
     system,
@@ -97,6 +164,11 @@ export const loader = async ({ params, request }) => {
     contactRows,
     tags,
     fields: FIELDS,
+    snapshots: snapshots.map((s) => ({ takenAt: s.takenAt, count: s.count })),
+    recentEntered: enteredRows.map((r) => enrich(r, "enteredAt")),
+    recentLeft: leftRows.map((r) => enrich(r, "leftAt")),
+    flowsUsing,
+    nextCursor,
   });
 };
 
@@ -119,15 +191,69 @@ export const action = async ({ params, request }) => {
     const copy = await duplicateSegment(shop, id);
     return Response.json({ ok: true, redirect: `/app/segments/${copy.id}` });
   }
+  if (intent === "update_name") {
+    const name = String(fd.get("name") || "").trim();
+    if (!name) return Response.json({ ok: false, error: "Name is required" }, { status: 400 });
+    await updateSegment(shop, id, { name });
+    return Response.json({ ok: true });
+  }
+  if (intent === "update_description") {
+    const description = String(fd.get("description") || "").trim();
+    await updateSegment(shop, id, { description });
+    return Response.json({ ok: true });
+  }
+  if (intent === "add_static_member") {
+    const contactId = String(fd.get("contactId") || "");
+    if (!contactId) return Response.json({ ok: false }, { status: 400 });
+    await addStaticMember(shop, id, contactId);
+    return Response.json({ ok: true });
+  }
+  if (intent === "remove_static_member") {
+    const contactId = String(fd.get("contactId") || "");
+    if (!contactId) return Response.json({ ok: false }, { status: 400 });
+    await removeStaticMember(shop, id, contactId);
+    return Response.json({ ok: true });
+  }
   return Response.json({ ok: false }, { status: 400 });
 };
 
 export default function SegmentDetailPage() {
-  const { segment, system, count, lifecycleMix, contactRows, tags, fields } = useLoaderData();
+  const {
+    segment, system, count, lifecycleMix, contactRows, tags, fields,
+    snapshots = [], recentEntered = [], recentLeft = [], flowsUsing = [],
+    nextCursor,
+  } = useLoaderData();
+
+  // Snapshot series → sparkline values. Append the live count so the
+  // rightmost point matches the big stat card. When there are no snapshots
+  // yet, fall back to the synthetic curve so the card isn't blank.
+  const snapshotSeries =
+    snapshots.length > 0
+      ? [...snapshots.map((s) => s.count), count]
+      : fakeSpark(count);
   const navigate = useNavigate();
   const fetcher = useFetcher();
   const [tab, setTab] = useState("contacts");
   const [openKebab, setOpenKebab] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [editingDesc, setEditingDesc] = useState(false);
+  const [nameDraft, setNameDraft] = useState(segment.name);
+  const [descDraft, setDescDraft] = useState(segment.description || "");
+  const [memberSearch, setMemberSearch] = useState("");
+  const [memberResults, setMemberResults] = useState([]);
+
+  const submitField = (intent, key, value) => {
+    const fd = new FormData();
+    fd.set("intent", intent);
+    fd.set(key, value);
+    fetcher.submit(fd, { method: "post" });
+  };
+  const submitMember = (intent, contactId) => {
+    const fd = new FormData();
+    fd.set("intent", intent);
+    fd.set("contactId", contactId);
+    fetcher.submit(fd, { method: "post" });
+  };
 
   // Redirect on fetcher result.
   if (fetcher.data?.redirect && fetcher.state === "idle") {
@@ -221,8 +347,62 @@ export default function SegmentDetailPage() {
           <div className={`rt-sd-icon ${segment.kind === "static" ? "static" : ""}`}>
             <Icon size={28} />
           </div>
-          <h1 className="rt-sd-title">{segment.name}</h1>
-          {segment.description && <p className="rt-sd-desc">{segment.description}</p>}
+          {editingName && !system ? (
+            <input
+              className="input"
+              autoFocus
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={() => {
+                if (nameDraft.trim() && nameDraft.trim() !== segment.name) {
+                  submitField("update_name", "name", nameDraft.trim());
+                }
+                setEditingName(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") { setNameDraft(segment.name); setEditingName(false); }
+              }}
+              style={{ fontSize: 48, fontWeight: 400, fontFamily: "var(--font-display)" }}
+            />
+          ) : (
+            <h1
+              className="rt-sd-title"
+              onClick={() => !system && setEditingName(true)}
+              style={!system ? { cursor: "text" } : undefined}
+              title={!system ? "Click to rename" : undefined}
+            >
+              {segment.name}
+            </h1>
+          )}
+          {editingDesc && !system ? (
+            <input
+              className="input"
+              autoFocus
+              value={descDraft}
+              onChange={(e) => setDescDraft(e.target.value)}
+              onBlur={() => {
+                if (descDraft.trim() !== (segment.description || "")) {
+                  submitField("update_description", "description", descDraft.trim());
+                }
+                setEditingDesc(false);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") e.currentTarget.blur();
+                if (e.key === "Escape") { setDescDraft(segment.description || ""); setEditingDesc(false); }
+              }}
+              style={{ marginTop: 12, maxWidth: 540 }}
+            />
+          ) : (
+            <p
+              className="rt-sd-desc"
+              onClick={() => !system && setEditingDesc(true)}
+              style={!system ? { cursor: "text" } : undefined}
+              title={!system ? "Click to edit description" : undefined}
+            >
+              {segment.description || (!system ? "Add a description…" : null)}
+            </p>
+          )}
           <div className="rt-sd-pills">
             {system && <span className="pill" style={{ background: "var(--paper-2)", color: "var(--ink-3)" }}>Built-in</span>}
             <SegmentKindPill kind={segment.kind} />
@@ -240,7 +420,7 @@ export default function SegmentDetailPage() {
             {count.toLocaleString()}
             <span className="rt-sd-stat-card-big-unit">contacts</span>
           </span>
-          <Sparkline values={fakeSpark(count)} w={300} h={36} />
+          <Sparkline values={snapshotSeries} w={300} h={36} />
         </div>
       </div>
 
@@ -249,13 +429,20 @@ export default function SegmentDetailPage() {
           <StatCard label="Avg. order value" value="—" sub="Order data not connected" />
           <StatCard label="Lifetime revenue" value="—" sub="Order data not connected" />
           <StatCard label="Email open rate" value="—" sub="Last 30 days" />
-          <StatCard label="In active flows" value="0" sub="Powering published journeys" />
+          <StatCard
+            label="In active flows"
+            value={String(flowsUsing.length)}
+            sub={flowsUsing.length === 0 ? "Not used yet" : "Powering published journeys"}
+          />
         </section>
       )}
 
       <div className="rt-sd-tabwrap">
         <div className="rt-chips">
-          {["contacts", "rules", "activity", "flows"].map((t) => (
+          {(segment.kind === "static" && !system
+            ? ["contacts", "members", "rules", "activity", "flows"]
+            : ["contacts", "rules", "activity", "flows"]
+          ).map((t) => (
             <button
               key={t}
               type="button"
@@ -313,6 +500,101 @@ export default function SegmentDetailPage() {
               No contacts in this segment yet.
             </div>
           )}
+          {nextCursor && (
+            <div className="rt-table-foot">
+              <button
+                type="button"
+                className="rt-link"
+                onClick={() => navigate(`/app/segments/${segment.id}?after=${nextCursor}`)}
+              >
+                Load more
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === "members" && segment.kind === "static" && !system && (
+        <div className="rt-sd-rules">
+          <div className="rt-stm-add">
+            <div className="rt-search" style={{ flex: 1 }}>
+              <Icons.Search size={14} />
+              <input
+                placeholder="Search by email or name to add a contact…"
+                value={memberSearch}
+                onChange={async (e) => {
+                  const q = e.target.value;
+                  setMemberSearch(q);
+                  if (q.trim().length < 2) { setMemberResults([]); return; }
+                  try {
+                    const res = await fetch(`/app/segments/search?q=${encodeURIComponent(q.trim())}`);
+                    if (res.ok) {
+                      const data = await res.json();
+                      // Hide contacts already in the segment.
+                      const existing = new Set(contactRows.map((r) => r.id));
+                      setMemberResults((data.contacts || []).filter((c) => !existing.has(c.id)));
+                    }
+                  } catch (_e) { /* noop */ }
+                }}
+              />
+            </div>
+          </div>
+          {memberResults.length > 0 && (
+            <div
+              className="rt-sel-menu"
+              style={{ position: "static", boxShadow: "none", marginBottom: 12 }}
+            >
+              {memberResults.map((r) => (
+                <button
+                  type="button"
+                  key={r.id}
+                  className="rt-sel-item"
+                  onClick={() => {
+                    submitMember("add_static_member", r.id);
+                    setMemberSearch("");
+                    setMemberResults([]);
+                  }}
+                >
+                  <span style={{ fontWeight: 500 }}>{r.email}</span>
+                  {r.name && (
+                    <span style={{ color: "var(--ink-3)", marginLeft: 8 }}>· {r.name}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {contactRows.length === 0 ? (
+            <div className="rt-stm-empty">
+              No contacts in this segment yet. Search above to add some.
+            </div>
+          ) : (
+            <div className="rt-stm-list">
+              {contactRows.map((c) => (
+                <div className="rt-stm-row" key={c.id}>
+                  <Avatar name={c.name} email={c.email} size={28} />
+                  <div className="rt-cname-email">
+                    {c.email}
+                    {c.name && <span style={{ color: "var(--ink-3)" }}>  ·  {c.name}</span>}
+                  </div>
+                  <button
+                    type="button"
+                    className="rt-rule-x"
+                    onClick={() => submitMember("remove_static_member", c.id)}
+                    aria-label="Remove member"
+                  >
+                    <Icons.Close size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="rt-stm-bulk">
+            <Icons.Sparkles size={14} />
+            <span>
+              {count.toLocaleString()} contact{count === 1 ? "" : "s"} in this segment.
+            </span>
+          </div>
         </div>
       )}
 
@@ -348,10 +630,12 @@ export default function SegmentDetailPage() {
       {tab === "activity" && (
         <div className="rt-sd-activity">
           <div className="rt-sd-act-card">
-            <div className="rt-sd-act-title">Segment size over time</div>
-            <Sparkline values={fakeSpark(count)} w={520} h={180} />
+            <div className="rt-sd-act-title">Segment size — last 30 days</div>
+            <Sparkline values={snapshotSeries} w={520} h={180} />
             <div className="t-small muted" style={{ marginTop: 12 }}>
-              Daily history starts recording after the next nightly job.
+              {snapshots.length === 0
+                ? "Daily history starts recording after the next nightly snapshot."
+                : `Showing ${snapshots.length} day${snapshots.length === 1 ? "" : "s"} of history.`}
             </div>
           </div>
           <div className="rt-sd-act-card">
@@ -362,28 +646,55 @@ export default function SegmentDetailPage() {
               <div className="t-small muted">No data yet.</div>
             )}
           </div>
+          <RecentMovement
+            title="Recently entered"
+            rows={recentEntered}
+            kind="entered"
+          />
+          <RecentMovement
+            title="Recently left"
+            rows={recentLeft}
+            kind="left"
+          />
         </div>
       )}
 
       {tab === "flows" && (
         <div className="rt-sd-rules">
-          <div className="rt-sd-cta">
-            <div className="rt-sd-cta-icon"><Icons.Flow size={18} /></div>
-            <div>
-              <div className="rt-sd-cta-title">This segment isn't powering a flow yet.</div>
-              <div className="rt-sd-cta-sub">
-                Build a flow that triggers when contacts enter this segment — useful for
-                welcome series, win-backs, or VIP-only drops.
+          {flowsUsing.length === 0 ? (
+            <div className="rt-sd-cta">
+              <div className="rt-sd-cta-icon"><Icons.Flow size={18} /></div>
+              <div>
+                <div className="rt-sd-cta-title">This segment isn't powering a flow yet.</div>
+                <div className="rt-sd-cta-sub">
+                  Build a flow that triggers when contacts enter this segment — useful for
+                  welcome series, win-backs, or VIP-only drops.
+                </div>
               </div>
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => navigate("/app/flows")}
+              >
+                Build a flow
+              </button>
             </div>
-            <button
-              type="button"
-              className="btn btn-primary"
-              onClick={() => navigate("/app/flows")}
-            >
-              Build a flow
-            </button>
-          </div>
+          ) : (
+            <div className="rt-prev-used" style={{ padding: 20 }}>
+              {flowsUsing.map((f) => (
+                <a
+                  key={f.id}
+                  href={`/app/flows/${f.id}`}
+                  className="rt-prev-used-flow"
+                  style={{ textDecoration: "none" }}
+                >
+                  <Icons.Flow size={14} />
+                  <span>{f.name}</span>
+                  <span className="rt-prev-used-flow-status">{f.status}</span>
+                </a>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>

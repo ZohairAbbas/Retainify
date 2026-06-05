@@ -11,6 +11,7 @@ import {
 } from "../lib/journey/journey-templates.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL, timeAgo } from "../lib/triggerConfig.js";
+import { listSegmentChoices } from "../lib/segments/segments.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -42,6 +43,8 @@ export const loader = async ({ request }) => {
   );
   const statsById = Object.fromEntries(stats.map((s) => [s.id, s]));
 
+  const segmentChoices = await listSegmentChoices(shop);
+
   return {
     journeys: journeys.map((j) => ({
       ...j,
@@ -49,6 +52,7 @@ export const loader = async ({ request }) => {
       stats: statsById[j.id] || { delivered: 0, opened: 0, clicked: 0 },
     })),
     templates,
+    segmentChoices,
   };
 };
 
@@ -68,7 +72,13 @@ export const action = async ({ request }) => {
 
   if (intent === "create-blank") {
     const trigger = String(fd.get("trigger") || "customer_created");
-    const journey = await createBlankJourney(shop, { trigger });
+    const triggerSegmentKey = String(fd.get("triggerSegmentKey") || "") || null;
+    // Segment trigger requires a segment key — bail out otherwise so we
+    // don't create a half-configured flow the worker can't process.
+    if (trigger === "segment_entered" && !triggerSegmentKey) {
+      return { ok: false, error: "Pick a segment for this trigger" };
+    }
+    const journey = await createBlankJourney(shop, { trigger, triggerSegmentKey });
     const url = new URL(request.url);
     return redirect(`/app/flows/${journey.id}${url.search}`);
   }
@@ -125,7 +135,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Flows() {
-  const { journeys, templates } = useLoaderData();
+  const { journeys, templates, segmentChoices } = useLoaderData();
   const navigate = useNavigate();
   const location = useLocation();
   const fetcher = useFetcher();
@@ -138,6 +148,7 @@ export default function Flows() {
         {showModal && (
           <CreateFlowModal
             templates={templates}
+            segmentChoices={segmentChoices}
             onClose={() => setShowModal(false)}
             fetcher={fetcher}
           />
@@ -466,10 +477,12 @@ function FlowMiniMap({ template }) {
   );
 }
 
-function CreateFlowModal({ templates, onClose, fetcher }) {
+function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [channelFilter, setChannelFilter] = useState("email");
   const [selectedKey, setSelectedKey] = useState(templates[0]?.key || null);
+  const [blankTrigger, setBlankTrigger] = useState("customer_created");
+  const [blankSegmentKey, setBlankSegmentKey] = useState("");
 
   const typeOptions = ["all", "Welcome Series", "Abandoned Cart", "Post Purchase", "Win-back"];
 
@@ -479,14 +492,23 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
 
   const selected = templates.find((t) => t.key === selectedKey) || templates[0];
 
+  const blankDisabled =
+    fetcher.state !== "idle" ||
+    (blankTrigger === "segment_entered" && !blankSegmentKey);
+
   const startBlank = () => {
-    fetcher.submit({ intent: "create-blank", trigger: "customer_created" }, { method: "post" });
+    const payload = { intent: "create-blank", trigger: blankTrigger };
+    if (blankTrigger === "segment_entered") payload.triggerSegmentKey = blankSegmentKey;
+    fetcher.submit(payload, { method: "post" });
   };
 
   const useTemplate = () => {
     if (!selected) return;
     fetcher.submit({ intent: "create-from-template", templateKey: selected.key }, { method: "post" });
   };
+
+  const systemSegs = segmentChoices.filter((s) => s.system);
+  const userSegs = segmentChoices.filter((s) => !s.system);
 
   return (
     <div className="rt-modal-backdrop" onClick={onClose}>
@@ -505,7 +527,7 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
             <button
               className="btn btn-secondary"
               onClick={startBlank}
-              disabled={fetcher.state !== "idle"}
+              disabled={blankDisabled}
             >
               <Icons.Plus size={14} /> Start blank
             </button>
@@ -565,12 +587,51 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
             </div>
 
             <div className="rt-cm-foot">
-              <div className="t-micro muted">Need something custom?</div>
+              <div className="t-micro muted" style={{ marginBottom: 6 }}>
+                Start blank — pick a trigger
+              </div>
+              <select
+                className="input"
+                value={blankTrigger}
+                onChange={(e) => {
+                  setBlankTrigger(e.target.value);
+                  if (e.target.value !== "segment_entered") setBlankSegmentKey("");
+                }}
+                style={{ width: "100%", marginBottom: 8 }}
+              >
+                {Object.entries(TRIGGER_CONFIG).map(([key, cfg]) => (
+                  <option key={key} value={key}>{cfg.label}</option>
+                ))}
+              </select>
+              {blankTrigger === "segment_entered" && (
+                <select
+                  className="input"
+                  value={blankSegmentKey}
+                  onChange={(e) => setBlankSegmentKey(e.target.value)}
+                  style={{ width: "100%", marginBottom: 8 }}
+                >
+                  <option value="">Pick a segment…</option>
+                  {systemSegs.length > 0 && (
+                    <optgroup label="Built-in">
+                      {systemSegs.map((s) => (
+                        <option key={s.key} value={s.key}>{s.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                  {userSegs.length > 0 && (
+                    <optgroup label="Your segments">
+                      {userSegs.map((s) => (
+                        <option key={s.key} value={s.key}>{s.name}</option>
+                      ))}
+                    </optgroup>
+                  )}
+                </select>
+              )}
               <button
                 className="btn btn-ghost btn-sm"
                 onClick={startBlank}
-                style={{ marginTop: 8 }}
-                disabled={fetcher.state !== "idle"}
+                style={{ marginTop: 4 }}
+                disabled={blankDisabled}
               >
                 Start from a blank canvas →
               </button>

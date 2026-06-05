@@ -8,6 +8,11 @@
 import prisma from "../../db.server.js";
 import { evaluateSegment, evalTreeForContact, validateFilterTree } from "./evaluator.server.js";
 import { computeLifecycle, getContactStats } from "../contacts/contacts.server.js";
+import { SYSTEM_SEGMENTS } from "./systemSegments.server.js";
+import {
+  enrollContactsIntoSegmentFlows,
+  exitContactsFromSegmentFlows,
+} from "./segmentEnrollmentWorker.server.js";
 
 const COUNT_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -173,10 +178,56 @@ export async function softDeleteSegment(shop, id) {
   });
 }
 
-// Stub — flows don't reference segments in v1. Wire up when the
-// `segment_entered` trigger ships.
-export async function isSegmentUsedInFlows(_shop, _segmentId) {
-  return false;
+// True when a published Journey references this segment — either as its
+// trigger (triggerSegmentKey) or via a `joins_segment:<key>` exit criterion.
+// Used to block soft-delete and to populate the detail page Flows tab.
+export async function isSegmentUsedInFlows(shop, segmentId) {
+  const flows = await listFlowsUsingSegment(shop, segmentId);
+  return flows.length > 0;
+}
+
+// Returns published Journeys that reference this segment. Caller can render
+// flow chips in the segment detail Flows tab. The exit-criteria check is a
+// substring match on the stringified JSON since exitCriteria is `String`.
+export async function listFlowsUsingSegment(shop, segmentId) {
+  const flows = await prisma.journey.findMany({
+    where: {
+      shop,
+      status: "published",
+      archivedAt: null,
+      OR: [
+        { triggerSegmentKey: segmentId },
+        { exitCriteria: { contains: `joins_segment:${segmentId}` } },
+      ],
+    },
+    select: { id: true, name: true, trigger: true, status: true },
+  });
+  return flows;
+}
+
+// Choices for the flow trigger picker: every non-deleted user segment plus
+// every system segment, tagged so the picker can group them. Used by the
+// flow create modal and the trigger inspector.
+export async function listSegmentChoices(shop) {
+  const userSegments = await prisma.segment.findMany({
+    where: { shop, deletedAt: null },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, name: true, kind: true },
+  });
+  return [
+    ...SYSTEM_SEGMENTS.map((s) => ({
+      key: s.id,
+      name: s.name,
+      kind: s.kind,
+      system: true,
+    })),
+    ...userSegments.map((s) => ({
+      key: s.id,
+      name: s.name,
+      kind: s.kind,
+      system: false,
+    })),
+  ];
 }
 
 // ── Static membership ──────────────────────────────────────────────────
@@ -184,18 +235,50 @@ export async function isSegmentUsedInFlows(_shop, _segmentId) {
 export async function addStaticMember(shop, segmentId, contactId) {
   const seg = await getSegmentById(shop, segmentId);
   if (!seg || seg.kind !== "static") return;
-  await prisma.segmentMembership.upsert({
+  const created = await prisma.segmentMembership.upsert({
     where: { segmentId_contactId: { segmentId, contactId } },
     create: { segmentId, contactId },
     update: {},
   });
+  // Write an entry log row only when membership is new — repeat upserts
+  // shouldn't spam the log. We detect newness by checking whether an open
+  // log row already exists.
+  const openLog = await prisma.segmentEntryLog.findFirst({
+    where: { shop, segmentKey: segmentId, contactId, leftAt: null },
+    select: { id: true },
+  });
+  if (!openLog) {
+    await prisma.segmentEntryLog.create({
+      data: { shop, segmentKey: segmentId, contactId, enteredAt: new Date() },
+    });
+    // Static segments enroll synchronously into any published flow that uses
+    // them as trigger — merchants expect this to feel instant.
+    try {
+      await enrollContactsIntoSegmentFlows(shop, segmentId, [contactId]);
+    } catch (e) {
+      console.error("[segments] static enroll failed:", e);
+    }
+  }
   await refreshCount(shop, segmentId);
+  return created;
 }
 
 export async function removeStaticMember(shop, segmentId, contactId) {
   await prisma.segmentMembership.deleteMany({
     where: { segmentId, contactId },
   });
+  // Close the open log row for this contact + segment, if any.
+  await prisma.segmentEntryLog.updateMany({
+    where: { shop, segmentKey: segmentId, contactId, leftAt: null },
+    data: { leftAt: new Date() },
+  });
+  // Honour `leaves_trigger_segment` exit on any active enrollment whose flow
+  // is triggered by this segment.
+  try {
+    await exitContactsFromSegmentFlows(shop, segmentId, [contactId]);
+  } catch (e) {
+    console.error("[segments] static exit failed:", e);
+  }
   await refreshCount(shop, segmentId);
 }
 

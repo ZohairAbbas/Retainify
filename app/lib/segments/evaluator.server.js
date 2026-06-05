@@ -289,16 +289,22 @@ export function validateFilterTree(tree) {
  *   segment.kind === "static"  → count + sample come from SegmentMembership.
  *   segment.kind === "dynamic" → evaluate filterTree against contacts.
  *
- * Returns: { count, sample, capped, lifecycleMix }.
+ * Options:
+ *   - sampleSize: how many contact rows to return in `sample` (default 5).
+ *   - returnIds:  when true, also returns `matchedIds` — the full set of
+ *                 matching Contact.id values (capped at MAX_SCAN). Used by
+ *                 the enrollment worker to diff entered/left sets.
+ *
+ * Returns: { count, sample, capped, lifecycleMix, matchedIds? }.
  */
-export async function evaluateSegment(shop, segment, { sampleSize = 5 } = {}) {
+export async function evaluateSegment(shop, segment, { sampleSize = 5, returnIds = false } = {}) {
   if (!segment || segment.kind === "static") {
-    return evaluateStatic(shop, segment, sampleSize);
+    return evaluateStatic(shop, segment, sampleSize, returnIds);
   }
-  return evaluateDynamic(shop, segment.filterTree, sampleSize);
+  return evaluateDynamic(shop, segment.filterTree, sampleSize, returnIds);
 }
 
-async function evaluateStatic(shop, segment, sampleSize) {
+async function evaluateStatic(shop, segment, sampleSize, returnIds = false) {
   if (!segment?.id) return { count: 0, sample: [], capped: false, lifecycleMix: emptyMix() };
   const memberships = await prisma.segmentMembership.findMany({
     where: { segmentId: segment.id },
@@ -324,10 +330,11 @@ async function evaluateStatic(shop, segment, sampleSize) {
     sample,
     capped: false,
     lifecycleMix: await mixFromContacts(shop, contacts.slice(0, MAX_SCAN)),
+    ...(returnIds ? { matchedIds: contacts.map((c) => c.id) } : {}),
   };
 }
 
-async function evaluateDynamic(shop, tree, sampleSize) {
+async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
   // No tree → treat as "all contacts in shop".
   if (!tree || !isGroup(tree) || (tree.children || []).length === 0) {
     const count = await prisma.contact.count({ where: { shop, deletedAt: null } });
@@ -343,7 +350,23 @@ async function evaluateDynamic(shop, tree, sampleSize) {
         lifecycle: computeLifecycle(c, await getContactStats(shop, c.email)),
       })),
     );
-    return { count, sample, capped: false, lifecycleMix: await mixFromContacts(shop, sampleRows) };
+    let matchedIds;
+    if (returnIds) {
+      const idRows = await prisma.contact.findMany({
+        where: { shop, deletedAt: null },
+        take: MAX_SCAN,
+        orderBy: { lastSeenAt: "desc" },
+        select: { id: true },
+      });
+      matchedIds = idRows.map((r) => r.id);
+    }
+    return {
+      count,
+      sample,
+      capped: count > MAX_SCAN,
+      lifecycleMix: await mixFromContacts(shop, sampleRows),
+      ...(returnIds ? { matchedIds } : {}),
+    };
   }
 
   const { where: fullWhere, allSafe } = treeToPrisma(tree);
@@ -366,11 +389,22 @@ async function evaluateDynamic(shop, tree, sampleSize) {
         lifecycle: computeLifecycle(c, await getContactStats(shop, c.email)),
       })),
     );
+    let matchedIds;
+    if (returnIds) {
+      const idRows = await prisma.contact.findMany({
+        where: finalWhere,
+        take: MAX_SCAN,
+        orderBy: { lastSeenAt: "desc" },
+        select: { id: true },
+      });
+      matchedIds = idRows.map((r) => r.id);
+    }
     return {
       count,
       sample,
-      capped: false,
+      capped: count > MAX_SCAN,
       lifecycleMix: await mixFromContacts(shop, sampleRows),
+      ...(returnIds ? { matchedIds } : {}),
     };
   }
 
@@ -409,6 +443,7 @@ async function evaluateDynamic(shop, tree, sampleSize) {
     sample,
     capped,
     lifecycleMix,
+    ...(returnIds ? { matchedIds: matched.map((m) => m.contact.id) } : {}),
   };
 }
 
