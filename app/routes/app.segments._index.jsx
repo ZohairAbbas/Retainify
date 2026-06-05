@@ -114,36 +114,6 @@ export default function SegmentsListPage() {
         </section>
       )}
 
-      {/* Quick views rail — system segments */}
-      {!showEmpty && (
-        <div className="rt-qv-rail">
-          <div className="rt-qv-rail-label">
-            <Icons.Lock size={12} /> Quick views
-          </div>
-          <div className="rt-qv-scroll">
-            {systemSegments.map((s) => {
-              const Icon = Icons[s.icon] || Icons.Sliders;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  className="rt-qv-item"
-                  onClick={() => navigate(`/app/segments/${s.id}`)}
-                >
-                  <span className="rt-qv-icon"><Icon size={14} /></span>
-                  <span className="rt-qv-body">
-                    <span className="rt-qv-name">{s.name}</span>
-                    <span className="rt-qv-count">
-                      <strong>{s.contactCount.toLocaleString()}</strong> contacts
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {showEmpty ? (
         <SegmentsEmpty templates={templates} />
       ) : (
@@ -183,6 +153,34 @@ export default function SegmentsListPage() {
                   </div>
                 </button>
               ))}
+            </div>
+          </div>
+
+          {/* Quick views rail — system segments */}
+          <div className="rt-qv-rail">
+            <div className="rt-qv-rail-label">
+              <Icons.Lock size={12} /> Quick views
+            </div>
+            <div className="rt-qv-scroll">
+              {systemSegments.map((s) => {
+                const Icon = Icons[s.icon] || Icons.Sliders;
+                return (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className="rt-qv-item"
+                    onClick={() => navigate(`/app/segments/${s.id}`)}
+                  >
+                    <span className="rt-qv-icon"><Icon size={14} /></span>
+                    <span className="rt-qv-body">
+                      <span className="rt-qv-name">{s.name}</span>
+                      <span className="rt-qv-count">
+                        <strong>{s.contactCount.toLocaleString()}</strong> contacts
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 

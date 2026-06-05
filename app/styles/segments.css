@@ -177,8 +177,14 @@
 /* ── User segments table ─────────────────────────────────────────────── */
 .rt-seg-table {
   background: var(--paper-3); border: 1px solid var(--hair-1);
-  border-radius: var(--r-4); overflow: hidden;
+  border-radius: var(--r-4);
+  /* overflow:visible so per-row kebab menus aren't clipped by the rounded
+     table boundary. Header/footer corners stay rounded via their own bg. */
+  overflow: visible;
 }
+.rt-seg-row { position: relative; }
+.rt-seg-row .rt-tactions { position: relative; z-index: 5; }
+.rt-seg-row .rt-menu { z-index: 60; }
 .rt-seg-thead, .rt-seg-row {
   display: grid;
   /* name | type | contacts+spark | flows | updated | actions */
