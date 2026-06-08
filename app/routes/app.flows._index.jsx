@@ -12,6 +12,7 @@ import {
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL, timeAgo } from "../lib/triggerConfig.js";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
+import TriggerPicker from "../components/flows/TriggerPicker.jsx";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -507,9 +508,6 @@ function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
     fetcher.submit({ intent: "create-from-template", templateKey: selected.key }, { method: "post" });
   };
 
-  const systemSegs = segmentChoices.filter((s) => s.system);
-  const userSegs = segmentChoices.filter((s) => !s.system);
-
   return (
     <div className="rt-modal-backdrop" onClick={onClose}>
       <div className="rt-modal rt-create-modal" onClick={(e) => e.stopPropagation()}>
@@ -523,52 +521,7 @@ function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
               Templates are fully editable. Pick the closest match and shape it from there.
             </p>
           </div>
-          <div className="rt-modal-head-right" style={{ alignItems: "flex-end", gap: 10 }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 220 }}>
-              <div className="t-micro muted">Start blank — pick a trigger</div>
-              <select
-                className="input"
-                value={blankTrigger}
-                onChange={(e) => {
-                  setBlankTrigger(e.target.value);
-                  if (e.target.value !== "segment_entered") setBlankSegmentKey("");
-                }}
-              >
-                {Object.entries(TRIGGER_CONFIG).map(([key, cfg]) => (
-                  <option key={key} value={key}>{cfg.label}</option>
-                ))}
-              </select>
-              {blankTrigger === "segment_entered" && (
-                <select
-                  className="input"
-                  value={blankSegmentKey}
-                  onChange={(e) => setBlankSegmentKey(e.target.value)}
-                >
-                  <option value="">Pick a segment…</option>
-                  {systemSegs.length > 0 && (
-                    <optgroup label="Built-in">
-                      {systemSegs.map((s) => (
-                        <option key={s.key} value={s.key}>{s.name}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                  {userSegs.length > 0 && (
-                    <optgroup label="Your segments">
-                      {userSegs.map((s) => (
-                        <option key={s.key} value={s.key}>{s.name}</option>
-                      ))}
-                    </optgroup>
-                  )}
-                </select>
-              )}
-            </div>
-            <button
-              className="btn btn-secondary"
-              onClick={startBlank}
-              disabled={blankDisabled}
-            >
-              <Icons.Plus size={14} /> Start blank
-            </button>
+          <div className="rt-modal-head-right">
             <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
               <Icons.Close size={16} />
             </button>
@@ -623,6 +576,31 @@ function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
                 <span className="pill soon" style={{ height: 18, fontSize: 9, padding: "0 6px" }}>Soon</span>
               </button>
             </div>
+
+            <div className="t-micro muted rt-cm-filter-heading" style={{ marginTop: 28 }}>
+              Start blank
+            </div>
+            <div className="t-small muted" style={{ margin: "0 0 8px" }}>
+              Pick a trigger and build the flow yourself.
+            </div>
+            <TriggerPicker
+              value={blankTrigger}
+              segmentKey={blankSegmentKey}
+              segmentChoices={segmentChoices}
+              onChange={(t, segKey) => {
+                setBlankTrigger(t);
+                setBlankSegmentKey(t === "segment_entered" ? (segKey || "") : "");
+              }}
+              hideDescription
+            />
+            <button
+              className="btn btn-secondary"
+              onClick={startBlank}
+              disabled={blankDisabled}
+              style={{ marginTop: 12, width: "100%" }}
+            >
+              <Icons.Plus size={14} /> Start blank
+            </button>
 
           </aside>
 

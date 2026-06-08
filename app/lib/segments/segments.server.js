@@ -208,23 +208,53 @@ export async function listFlowsUsingSegment(shop, segmentId) {
 // Choices for the flow trigger picker: every non-deleted user segment plus
 // every system segment, tagged so the picker can group them. Used by the
 // flow create modal and the trigger inspector.
+// Used by the flow trigger picker (tiles + inline segment card + gallery).
+// Returns shape matches what the SegmentTriggerCard and SegmentGallery
+// components render: name, description, kind, contactCount, updatedAt.
+// System segments have a constant description and no real updatedAt.
 export async function listSegmentChoices(shop) {
   const userSegments = await prisma.segment.findMany({
     where: { shop, deletedAt: null },
     orderBy: { updatedAt: "desc" },
-    select: { id: true, name: true, kind: true },
+    select: {
+      id: true,
+      name: true,
+      description: true,
+      kind: true,
+      contactCount: true,
+      updatedAt: true,
+    },
   });
+  // System segment counts come from the cheap summary aggregate (the
+  // segments page already calls listSystemSegmentsWithCounts; we duplicate
+  // a tiny bit here so the trigger picker doesn't have to import it).
+  const systemWithCounts = await Promise.all(
+    SYSTEM_SEGMENTS.map(async (s) => {
+      try {
+        const { count } = await evaluateSegment(shop, s, { sampleSize: 0 });
+        return { ...s, count };
+      } catch (_e) {
+        return { ...s, count: 0 };
+      }
+    }),
+  );
   return [
-    ...SYSTEM_SEGMENTS.map((s) => ({
+    ...systemWithCounts.map((s) => ({
       key: s.id,
       name: s.name,
+      description: s.description || "Built-in audience",
       kind: s.kind,
+      contactCount: s.count,
+      updatedAt: null,
       system: true,
     })),
     ...userSegments.map((s) => ({
       key: s.id,
       name: s.name,
+      description: s.description || "",
       kind: s.kind,
+      contactCount: s.contactCount,
+      updatedAt: s.updatedAt,
       system: false,
     })),
   ];

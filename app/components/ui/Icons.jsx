@@ -44,6 +44,7 @@ export const IconBell = (p) => <I {...p}><path d="M6 8a6 6 0 0 1 12 0c0 7 3 7 3 
 export const IconTab = (p) => <I {...p}><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></I>;
 export const IconList = (p) => <I {...p}><path d="M3 6h18M3 12h18M3 18h12"/></I>;
 export const IconSliders = (p) => <I {...p}><path d="M4 21V14M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3"/><circle cx="4" cy="12" r="2"/><circle cx="12" cy="10" r="2"/><circle cx="20" cy="14" r="2"/></I>;
+export const IconVenn = (p) => <I {...p}><circle cx="9" cy="12" r="6"/><circle cx="15" cy="12" r="6"/></I>;
 export const IconBold = (p) => <I {...p}><path d="M7 4h6a3.5 3.5 0 0 1 0 7H7zM7 11h7a3.5 3.5 0 0 1 0 7H7z"/></I>;
 export const IconItalic = (p) => <I {...p}><path d="M10 4h8M6 20h8M14 4l-4 16"/></I>;
 export const IconUnderline = (p) => <I {...p}><path d="M7 4v8a5 5 0 0 0 10 0V4M5 20h14"/></I>;
@@ -110,6 +111,7 @@ const Icons = {
   Tab: IconTab,
   List: IconList,
   Sliders: IconSliders,
+  Venn: IconVenn,
   Bold: IconBold,
   Italic: IconItalic,
   Underline: IconUnderline,

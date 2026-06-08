@@ -10,6 +10,8 @@ import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
 import { evaluateSegment } from "../lib/segments/evaluator.server.js";
 import { getSystemSegmentById, isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
+import TriggerPicker from "../components/flows/TriggerPicker.jsx";
+import SoonPill from "../components/contacts/SoonPill.jsx";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
 const EXIT_CRITERIA_OPTIONS = [
@@ -152,6 +154,10 @@ export const action = async ({ request, params }) => {
     const rawSegKey = fd.get("triggerSegmentKey");
     const triggerSegmentKey =
       rawSegKey === null ? undefined : (String(rawSegKey) || null);
+    // Same pattern for trigger itself — the new TriggerPicker lets the
+    // merchant change a flow's trigger inline.
+    const rawTrigger = fd.get("trigger");
+    const trigger = rawTrigger === null ? undefined : String(rawTrigger);
 
     const stepsForSave = nodes
       .filter((n) => n.kind !== "trigger")
@@ -186,7 +192,7 @@ export const action = async ({ request, params }) => {
         };
       });
 
-    await saveDraft(id, { name, entryFrequency, exitCriteria, steps: stepsForSave, triggerSegmentKey });
+    await saveDraft(id, { name, entryFrequency, exitCriteria, steps: stepsForSave, triggerSegmentKey, trigger });
     return { ok: true, saved: true };
   }
 
@@ -224,6 +230,9 @@ export default function FlowBuilder() {
   const [entryFrequency, setEntryFrequency] = useState(journey.entryFrequency || "no_reentry");
   const [exitCriteria, setExitCriteria] = useState(journey.exitCriteria || []);
   const [triggerSegmentKey, setTriggerSegmentKey] = useState(journey.triggerSegmentKey || "");
+  // Local trigger draft so the TriggerPicker can change it inline. Persisted
+  // on save-draft alongside other flow fields.
+  const [triggerDraft, setTriggerDraft] = useState(journey.trigger || "customer_created");
   const [selectedId, setSelectedId] = useState("trigger");
   const [viewMode, setViewMode] = useState("canvas");
   const [showPreview, setShowPreview] = useState(true);
@@ -238,9 +247,10 @@ export default function FlowBuilder() {
       entryFrequency !== (journey.entryFrequency || "no_reentry") ||
       JSON.stringify(exitCriteria) !== JSON.stringify(journey.exitCriteria || []) ||
       JSON.stringify(nodes) !== JSON.stringify(initialNodes) ||
-      (journey.trigger === "segment_entered" && triggerSegmentKey !== (journey.triggerSegmentKey || ""))
+      triggerDraft !== (journey.trigger || "customer_created") ||
+      (triggerDraft === "segment_entered" && triggerSegmentKey !== (journey.triggerSegmentKey || ""))
     );
-  }, [name, entryFrequency, exitCriteria, nodes, journey, initialNodes, triggerSegmentKey]);
+  }, [name, entryFrequency, exitCriteria, nodes, journey, initialNodes, triggerSegmentKey, triggerDraft]);
 
   const selected = nodes.find((n) => n.id === selectedId);
 
@@ -314,7 +324,10 @@ export default function FlowBuilder() {
     fd.set("entryFrequency", entryFrequency);
     fd.set("exitCriteria", JSON.stringify(exitCriteria));
     fd.set("nodes", JSON.stringify(nodes));
-    if (journey.trigger === "segment_entered") {
+    if (triggerDraft !== (journey.trigger || "customer_created")) {
+      fd.set("trigger", triggerDraft);
+    }
+    if (triggerDraft === "segment_entered") {
       fd.set("triggerSegmentKey", triggerSegmentKey || "");
     }
     fetcher.submit(fd, { method: "post" });
@@ -504,6 +517,8 @@ export default function FlowBuilder() {
             setExitCriteria={setExitCriteria}
             triggerSegmentKey={triggerSegmentKey}
             setTriggerSegmentKey={setTriggerSegmentKey}
+            triggerDraft={triggerDraft}
+            setTriggerDraft={setTriggerDraft}
             segmentChoices={segmentChoices}
             triggerSegmentCount={triggerSegmentCount}
             settings={settings}
@@ -743,7 +758,7 @@ function InsertMenu({ open, onClose, onAdd }) {
   );
 }
 
-function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, segmentChoices = [], triggerSegmentCount, settings, onChange, onOpenEditor }) {
+function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, onChange, onOpenEditor }) {
   if (!node) {
     return (
       <div className="rt-ins">
@@ -759,7 +774,10 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
   }
 
   if (node.kind === "trigger") {
-    const trig = TRIGGER_CONFIG[journey.trigger] || TRIGGER_CONFIG.customer_created;
+    // Read from the in-memory draft so swapping the trigger reflects in
+    // the head + glyph immediately without waiting for save.
+    const activeTrigger = triggerDraft || journey.trigger || "customer_created";
+    const trig = TRIGGER_CONFIG[activeTrigger] || TRIGGER_CONFIG.customer_created;
     const TrigIcon = Icons[trig.icon];
     const isDelayed = entryFrequency.startsWith("delayed_");
     const delayedHours = isDelayed ? Number(entryFrequency.slice("delayed_".length)) : 168;
@@ -773,7 +791,7 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
     return (
       <div className="rt-ins">
         <div className="rt-ins-head">
-          <div className="rt-node-glyph rt-tint-trigger">
+          <div className={`rt-node-glyph rt-tint-${trig.tint || "trigger"}`}>
             {TrigIcon && <TrigIcon size={14} />}
           </div>
           <div>
@@ -785,56 +803,41 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
         </div>
 
         <div className="rt-ins-section">
-          <div className="t-micro muted">Trigger event</div>
-          <div className="field-help" style={{ marginTop: 6 }}>{trig.desc}</div>
+          <div className="t-micro muted" style={{ marginBottom: 4 }}>When this happens</div>
+          <div className="t-small muted" style={{ margin: "0 0 4px" }}>
+            Pick what kicks off the flow.
+          </div>
+          <TriggerPicker
+            value={triggerDraft}
+            segmentKey={triggerSegmentKey}
+            segmentChoices={segmentChoices}
+            onChange={(t, segKey) => {
+              setTriggerDraft(t);
+              if (t === "segment_entered") {
+                setTriggerSegmentKey(segKey || "");
+              } else {
+                setTriggerSegmentKey("");
+              }
+            }}
+          />
         </div>
 
-        {journey.trigger === "segment_entered" && (
-          <div className="rt-ins-section">
-            <div className="t-micro muted">Segment</div>
-            <div className="t-small muted" style={{ margin: "6px 0 10px" }}>
-              Contacts that newly match this segment will be enrolled.
-            </div>
-            <select
-              className="input"
-              value={triggerSegmentKey || ""}
-              onChange={(e) => setTriggerSegmentKey(e.target.value)}
-              style={{ width: "100%" }}
-            >
-              <option value="">Pick a segment…</option>
-              {(() => {
-                const sys = segmentChoices.filter((s) => s.system);
-                const user = segmentChoices.filter((s) => !s.system);
-                return (
-                  <>
-                    {sys.length > 0 && (
-                      <optgroup label="Built-in">
-                        {sys.map((s) => (
-                          <option key={s.key} value={s.key}>{s.name}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                    {user.length > 0 && (
-                      <optgroup label="Your segments">
-                        {user.map((s) => (
-                          <option key={s.key} value={s.key}>{s.name}</option>
-                        ))}
-                      </optgroup>
-                    )}
-                  </>
-                );
-              })()}
-            </select>
-            {typeof triggerSegmentCount === "number" && triggerSegmentKey && (
-              <div className="t-small muted" style={{ marginTop: 8 }}>
-                <strong style={{ color: "var(--ink-1)" }}>
-                  {triggerSegmentCount.toLocaleString()}
-                </strong>{" "}
-                contact{triggerSegmentCount === 1 ? "" : "s"} currently match.
-              </div>
-            )}
+        <div className="rt-ins-section">
+          <div className="t-micro muted">
+            Flow filters <SoonPill />
           </div>
-        )}
+          <div className="t-small muted" style={{ margin: "6px 0 12px" }}>
+            Only enter when these conditions are met.
+          </div>
+          <button
+            type="button"
+            className="rt-add-filter"
+            disabled
+            title="Flow filters are coming soon"
+          >
+            <Icons.Plus size={13} /> Add filter
+          </button>
+        </div>
 
         <div className="rt-ins-section">
           <div className="t-micro muted">Entry frequency</div>
@@ -892,7 +895,7 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
                 onChange={() => toggleCriterion(opt.value)}
               />
             ))}
-            {journey.trigger === "segment_entered" &&
+            {activeTrigger === "segment_entered" &&
               SEGMENT_EXIT_CRITERIA.map((opt) => (
                 <CheckOption
                   key={opt.value}

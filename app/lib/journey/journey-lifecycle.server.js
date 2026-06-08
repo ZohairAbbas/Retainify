@@ -72,7 +72,7 @@ export async function archiveJourney(journeyId) {
  * `steps` is an array of { stepNumber, nodeType, delayHours, subject, previewText,
  *   emailName, templateStyle, discountPct, isEnabled }.
  */
-export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, steps, triggerSegmentKey }) {
+export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, steps, triggerSegmentKey, trigger }) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
 
@@ -186,6 +186,14 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         ...(triggerSegmentKey !== undefined ? {
           triggerSegmentKey,
           // Force one fresh enrollment pass with the new key.
+          lastEnrollmentHash: null,
+        } : {}),
+        // Allow changing the trigger itself from the inspector. When
+        // switching away from segment_entered, also wipe the segment key
+        // so we don't keep a dangling reference.
+        ...(trigger !== undefined ? {
+          trigger,
+          ...(trigger !== "segment_entered" ? { triggerSegmentKey: null } : {}),
           lastEnrollmentHash: null,
         } : {}),
         draftVersion: journey.draftVersion + 1,

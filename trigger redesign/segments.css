@@ -177,28 +177,7 @@
 /* ── User segments table ─────────────────────────────────────────────── */
 .rt-seg-table {
   background: var(--paper-3); border: 1px solid var(--hair-1);
-  border-radius: var(--r-4);
-  /* overflow:visible so per-row kebab menus aren't clipped by the rounded
-     table boundary. Header/footer corners stay rounded via their own bg. */
-  overflow: visible;
-}
-.rt-seg-row { position: relative; }
-.rt-seg-row .rt-tactions { position: relative; z-index: 5; }
-.rt-seg-row .rt-menu { z-index: 60; }
-
-/* Loading skeleton — bars of varying width that pulse softly. Used by the
-   segments list during initial loader navigation. */
-.rt-skel-bar {
-  display: inline-block;
-  height: 14px;
-  border-radius: var(--r-pill);
-  background: linear-gradient(90deg, var(--paper-2) 0%, var(--hair-1) 50%, var(--paper-2) 100%);
-  background-size: 200% 100%;
-  animation: rt-skel-shimmer 1.4s ease-in-out infinite;
-}
-@keyframes rt-skel-shimmer {
-  0%   { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+  border-radius: var(--r-4); overflow: hidden;
 }
 .rt-seg-thead, .rt-seg-row {
   display: grid;
@@ -358,9 +337,7 @@
 .rt-grp {
   border-radius: var(--r-3);
   border: 1px solid var(--hair-2);
-  /* overflow:hidden was clipping the field/op dropdowns — keep it visible
-     so .rt-sel-menu can escape the group card. */
-  overflow: visible;
+  overflow: hidden;
   margin-bottom: 12px;
   background: var(--paper-3);
 }
@@ -477,7 +454,7 @@
   background: var(--paper-3);
   border: 1px solid var(--hair-2);
   border-radius: var(--r-3); box-shadow: var(--sh-3);
-  padding: 4px; z-index: 50;
+  padding: 4px; z-index: 14;
   max-height: 320px; overflow-y: auto;
 }
 .rt-sel-item {
@@ -751,14 +728,6 @@
 /* Detail tab content */
 .rt-sd-tabwrap { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; flex-wrap: wrap; }
 
-/* Contacts table on detail page omits the checkbox column the main Contacts
-   list uses. Re-balance the grid so Contact / Status / Lifecycle don't
-   overlap. 7 columns: contact | status | lifecycle | tags | carts | last seen | actions */
-.rt-sd .rt-cthead,
-.rt-sd .rt-ctrow {
-  grid-template-columns: 2.2fr 1.05fr 1.05fr 1.4fr 0.95fr 0.95fr 44px;
-}
-
 /* Activity tab content */
 .rt-sd-activity { display: grid; grid-template-columns: 1.4fr 1fr; gap: 14px; padding: 24px; }
 .rt-sd-act-card { background: var(--paper-2); border: 1px solid var(--hair-1); border-radius: var(--r-3); padding: 18px 20px; }
@@ -860,8 +829,6 @@
   .rt-sd-stat-card { min-width: 0; }
 }
 
-/* ── Segment trigger tint — used by trigger picker tile glyphs ───────── */
-.rt-tint-segment { background: #DCE4ED; color: #25406A; }
 
 /* ── Inspector: Trigger picker tiles ─────────────────────────────────── */
 .rt-trig-tiles {
@@ -1005,15 +972,25 @@
 }
 
 /* ── Gallery (revealed when picking a segment) ──────────────────────── */
+.rt-seg-gallery-overlay {
+  position: absolute; inset: 0;
+  background: var(--paper-3);
+  border-radius: var(--r-3);
+  display: flex; flex-direction: column;
+  z-index: 4;
+  animation: rt-fade-in 200ms var(--ease);
+}
 .rt-seg-gallery {
   display: flex; flex-direction: column;
   gap: 8px;
 }
-.rt-seg-gallery-search { margin-bottom: 4px; }
+.rt-seg-gallery-search {
+  margin-bottom: 4px;
+}
 .rt-seg-gallery-search .rt-search { width: 100%; }
 .rt-seg-gallery-list {
   display: flex; flex-direction: column; gap: 6px;
-  max-height: 360px; overflow-y: auto;
+  max-height: 320px; overflow-y: auto;
   padding-right: 4px;
 }
 .rt-seg-gallery-item {
@@ -1058,6 +1035,7 @@
   display: flex; align-items: center; gap: 6px;
   white-space: nowrap;
 }
+
 .rt-seg-gallery-create {
   display: flex; align-items: center; gap: 10px;
   padding: 10px 12px;
@@ -1073,15 +1051,4 @@
   border-color: var(--brand-700);
   background: var(--brand-50);
   border-style: solid;
-}
-
-/* ── Flow filters placeholder (Soon) ─────────────────────────────────── */
-.rt-add-filter {
-  display: inline-flex; align-items: center; gap: 6px;
-  padding: 7px 12px; height: 32px;
-  background: transparent;
-  border: 1px dashed var(--hair-3);
-  border-radius: var(--r-2);
-  color: var(--ink-3); font-size: 12.5px;
-  cursor: not-allowed;
 }
