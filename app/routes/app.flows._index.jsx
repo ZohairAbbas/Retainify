@@ -11,8 +11,6 @@ import {
 } from "../lib/journey/journey-templates.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL, timeAgo } from "../lib/triggerConfig.js";
-import { listSegmentChoices } from "../lib/segments/segments.server.js";
-import TriggerPicker from "../components/flows/TriggerPicker.jsx";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -44,8 +42,6 @@ export const loader = async ({ request }) => {
   );
   const statsById = Object.fromEntries(stats.map((s) => [s.id, s]));
 
-  const segmentChoices = await listSegmentChoices(shop);
-
   return {
     journeys: journeys.map((j) => ({
       ...j,
@@ -53,7 +49,6 @@ export const loader = async ({ request }) => {
       stats: statsById[j.id] || { delivered: 0, opened: 0, clicked: 0 },
     })),
     templates,
-    segmentChoices,
   };
 };
 
@@ -136,7 +131,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Flows() {
-  const { journeys, templates, segmentChoices } = useLoaderData();
+  const { journeys, templates } = useLoaderData();
   const navigate = useNavigate();
   const location = useLocation();
   const fetcher = useFetcher();
@@ -149,7 +144,6 @@ export default function Flows() {
         {showModal && (
           <CreateFlowModal
             templates={templates}
-            segmentChoices={segmentChoices}
             onClose={() => setShowModal(false)}
             fetcher={fetcher}
           />
@@ -478,12 +472,10 @@ function FlowMiniMap({ template }) {
   );
 }
 
-function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
+function CreateFlowModal({ templates, onClose, fetcher }) {
   const [typeFilter, setTypeFilter] = useState("all");
   const [channelFilter, setChannelFilter] = useState("email");
   const [selectedKey, setSelectedKey] = useState(templates[0]?.key || null);
-  const [blankTrigger, setBlankTrigger] = useState("customer_created");
-  const [blankSegmentKey, setBlankSegmentKey] = useState("");
 
   const typeOptions = ["all", "Welcome Series", "Abandoned Cart", "Post Purchase", "Win-back"];
 
@@ -493,14 +485,11 @@ function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
 
   const selected = templates.find((t) => t.key === selectedKey) || templates[0];
 
-  const blankDisabled =
-    fetcher.state !== "idle" ||
-    (blankTrigger === "segment_entered" && !blankSegmentKey);
-
+  // Blank flows start on the safest default. Merchants change the trigger
+  // (including to `segment_entered`) from the builder's TriggerPicker — the
+  // modal stays focused on template browsing.
   const startBlank = () => {
-    const payload = { intent: "create-blank", trigger: blankTrigger };
-    if (blankTrigger === "segment_entered") payload.triggerSegmentKey = blankSegmentKey;
-    fetcher.submit(payload, { method: "post" });
+    fetcher.submit({ intent: "create-blank", trigger: "customer_created" }, { method: "post" });
   };
 
   const useTemplate = () => {
@@ -522,6 +511,13 @@ function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
             </p>
           </div>
           <div className="rt-modal-head-right">
+            <button
+              className="btn btn-secondary"
+              onClick={startBlank}
+              disabled={fetcher.state !== "idle"}
+            >
+              <Icons.Plus size={14} /> Start blank
+            </button>
             <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
               <Icons.Close size={16} />
             </button>
@@ -576,32 +572,6 @@ function CreateFlowModal({ templates, segmentChoices = [], onClose, fetcher }) {
                 <span className="pill soon" style={{ height: 18, fontSize: 9, padding: "0 6px" }}>Soon</span>
               </button>
             </div>
-
-            <div className="t-micro muted rt-cm-filter-heading" style={{ marginTop: 28 }}>
-              Start blank
-            </div>
-            <div className="t-small muted" style={{ margin: "0 0 8px" }}>
-              Pick a trigger and build the flow yourself.
-            </div>
-            <TriggerPicker
-              value={blankTrigger}
-              segmentKey={blankSegmentKey}
-              segmentChoices={segmentChoices}
-              onChange={(t, segKey) => {
-                setBlankTrigger(t);
-                setBlankSegmentKey(t === "segment_entered" ? (segKey || "") : "");
-              }}
-              hideDescription
-            />
-            <button
-              className="btn btn-secondary"
-              onClick={startBlank}
-              disabled={blankDisabled}
-              style={{ marginTop: 12, width: "100%" }}
-            >
-              <Icons.Plus size={14} /> Start blank
-            </button>
-
           </aside>
 
           {/* Gallery */}

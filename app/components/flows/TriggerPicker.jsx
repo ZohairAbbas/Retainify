@@ -24,6 +24,10 @@ export default function TriggerPicker({
   // Create Flow modal where space is tighter and the inspector intro text
   // would feel redundant.
   hideDescription = false,
+  // Optional guard: when set, the picker calls this before navigating away
+  // to a segment route. If it returns false, navigation is cancelled. Used
+  // by the flow builder inspector to warn about unsaved draft changes.
+  confirmLeave,
 }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const triggers = useMemo(
@@ -77,6 +81,7 @@ export default function TriggerPicker({
             onChange("segment_entered", key);
             setGalleryOpen(false);
           }}
+          confirmLeave={confirmLeave}
         />
       )}
     </div>
@@ -90,8 +95,16 @@ function SegmentTriggerCard({
   onOpenGallery,
   onCloseGallery,
   onPick,
+  confirmLeave,
 }) {
   const seg = segmentChoices.find((s) => s.key === segmentKey);
+  // Guarded navigation helper — used for the destructive cross-route links
+  // (View segment, + New, + Create new segment…).
+  const guardedNav = (e, path) => {
+    if (confirmLeave && !confirmLeave(path)) {
+      e.preventDefault();
+    }
+  };
 
   if (galleryOpen) {
     return (
@@ -111,6 +124,7 @@ function SegmentTriggerCard({
           activeKey={segmentKey}
           segmentChoices={segmentChoices}
           onPick={onPick}
+          confirmLeave={confirmLeave}
         />
       </div>
     );
@@ -147,15 +161,14 @@ function SegmentTriggerCard({
             >
               <Icons.Sliders size={13} /> Pick a segment
             </button>
-            <a
+            <Link
               className="btn btn-secondary"
-              href="/app/segments/new"
-              target="_blank"
-              rel="noopener noreferrer"
-              title="Create new segment in a new tab"
+              to="/app/segments/new"
+              title="Create new segment"
+              onClick={(e) => guardedNav(e, "/app/segments/new")}
             >
               <Icons.Plus size={13} /> New
-            </a>
+            </Link>
           </div>
         </div>
       ) : (
@@ -181,13 +194,12 @@ function SegmentTriggerCard({
                   <span>Updated {relativeTime(seg.updatedAt)}</span>
                 </>
               )}
-              <a
-                href={`/app/segments/${seg.key}`}
-                target="_blank"
-                rel="noopener noreferrer"
+              <Link
+                to={`/app/segments/${seg.key}`}
+                onClick={(e) => guardedNav(e, `/app/segments/${seg.key}`)}
               >
                 View <Icons.Arrow size={9} />
-              </a>
+              </Link>
             </div>
           </div>
         </div>
@@ -196,8 +208,13 @@ function SegmentTriggerCard({
   );
 }
 
-function SegmentGallery({ activeKey, segmentChoices, onPick }) {
+function SegmentGallery({ activeKey, segmentChoices, onPick, confirmLeave }) {
   const [q, setQ] = useState("");
+  const guardedNav = (e, path) => {
+    if (confirmLeave && !confirmLeave(path)) {
+      e.preventDefault();
+    }
+  };
   const items = useMemo(() => {
     if (!q) return segmentChoices;
     const lq = q.toLowerCase();
@@ -220,15 +237,14 @@ function SegmentGallery({ activeKey, segmentChoices, onPick }) {
         </div>
       </div>
       <div className="rt-seg-gallery-list">
-        <a
+        <Link
           className="rt-seg-gallery-create"
-          href="/app/segments/new"
-          target="_blank"
-          rel="noopener noreferrer"
+          to="/app/segments/new"
           style={{ textDecoration: "none" }}
+          onClick={(e) => guardedNav(e, "/app/segments/new")}
         >
           <Icons.Plus size={13} /> Create new segment…
-        </a>
+        </Link>
         {items.map((s) => (
           <button
             type="button"

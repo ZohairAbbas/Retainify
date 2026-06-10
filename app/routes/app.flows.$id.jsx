@@ -240,6 +240,11 @@ export default function FlowBuilder() {
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [emailEditorNodeId, setEmailEditorNodeId] = useState(null);
+  // When the TriggerPicker wants to navigate to a segment route mid-edit,
+  // we capture the target here and show a confirm modal. Null = no pending
+  // navigation. Resolved by either saving the draft + navigating, or
+  // discarding draft state and navigating directly.
+  const [pendingLeavePath, setPendingLeavePath] = useState(null);
 
   const isDirty = useMemo(() => {
     return (
@@ -524,6 +529,16 @@ export default function FlowBuilder() {
             settings={settings}
             onChange={(patch) => selected && updateNode(selected.id, patch)}
             onOpenEditor={setEmailEditorNodeId}
+            // Block destructive cross-route nav when there are unsaved
+            // changes — return false from the picker's confirmLeave to
+            // cancel default navigation and surface the warning modal.
+            confirmLeave={(path) => {
+              if (isDirty) {
+                setPendingLeavePath(path);
+                return false;
+              }
+              return true;
+            }}
           />
         </div>
       </div>
@@ -536,6 +551,73 @@ export default function FlowBuilder() {
           loading={saving}
         />
       )}
+      {pendingLeavePath && (
+        <LeaveDraftModal
+          onCancel={() => setPendingLeavePath(null)}
+          onSaveAndContinue={() => {
+            saveDraftAction();
+            // Wait for the save to settle before navigating, otherwise
+            // the unsaved-warning state desyncs with the persisted row.
+            const dest = pendingLeavePath;
+            setPendingLeavePath(null);
+            setTimeout(() => navigate(dest), 120);
+          }}
+          onDiscardAndContinue={() => {
+            const dest = pendingLeavePath;
+            setPendingLeavePath(null);
+            navigate(dest);
+          }}
+          loading={saving}
+        />
+      )}
+    </div>
+  );
+}
+
+function LeaveDraftModal({ onCancel, onSaveAndContinue, onDiscardAndContinue, loading }) {
+  return (
+    <div className="rt-modal-backdrop" onClick={onCancel}>
+      <div
+        className="rt-save-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 520 }}
+      >
+        <div className="rt-save-head">
+          <div className="t-micro">Unsaved changes</div>
+          <h2 className="t-h1">Save your draft before leaving?</h2>
+        </div>
+        <div className="rt-save-body">
+          <p className="t-body" style={{ margin: 0 }}>
+            This flow has unsaved changes. If you leave without saving, you'll
+            lose your edits to this draft.
+          </p>
+        </div>
+        <div className="rt-save-foot">
+          <div className="rt-save-foot-left">
+            <button type="button" className="btn btn-ghost" onClick={onCancel}>
+              Stay here
+            </button>
+          </div>
+          <div className="rt-save-foot-right">
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={onDiscardAndContinue}
+              disabled={loading}
+            >
+              Discard &amp; continue
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onSaveAndContinue}
+              disabled={loading}
+            >
+              {loading ? "Saving…" : "Save draft & continue"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -758,7 +840,7 @@ function InsertMenu({ open, onClose, onAdd }) {
   );
 }
 
-function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, onChange, onOpenEditor }) {
+function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, onChange, onOpenEditor, confirmLeave }) {
   if (!node) {
     return (
       <div className="rt-ins">
@@ -819,6 +901,7 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
                 setTriggerSegmentKey("");
               }
             }}
+            confirmLeave={confirmLeave}
           />
         </div>
 

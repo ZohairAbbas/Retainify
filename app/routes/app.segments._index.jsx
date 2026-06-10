@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate, useNavigation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
@@ -83,6 +83,20 @@ export default function SegmentsListPage() {
   // re-validated). useFetcher's state is intentionally not used here — we
   // don't want kebab actions to flash the skeleton.
   const isInitialLoading = navigation.state === "loading";
+
+  // Inline error toast. Surfaces 409 responses from delete (e.g. segment is
+  // referenced by a published flow). Auto-dismisses after 6s.
+  const [toast, setToast] = useState(null);
+  useEffect(() => {
+    if (fetcher.state === "idle" && fetcher.data && fetcher.data.ok === false && fetcher.data.error) {
+      setToast(fetcher.data.error);
+    }
+  }, [fetcher.state, fetcher.data]);
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   const filtered = segments.filter((s) => {
     if (kindFilter !== "all" && s.kind !== kindFilter) return false;
@@ -379,6 +393,29 @@ export default function SegmentsListPage() {
             )}
           </div>
         </>
+      )}
+      {toast && (
+        <div
+          role="alert"
+          className="rt-prev-warn danger"
+          style={{
+            position: "fixed",
+            right: 24,
+            bottom: 24,
+            zIndex: 200,
+            maxWidth: 380,
+            boxShadow: "var(--sh-3)",
+            cursor: "pointer",
+          }}
+          onClick={() => setToast(null)}
+          title="Dismiss"
+        >
+          <Icons.Close size={14} />
+          <div>
+            <strong>Couldn't delete segment.</strong>
+            {toast}
+          </div>
+        </div>
       )}
     </div>
   );

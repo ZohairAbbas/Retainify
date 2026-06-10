@@ -118,7 +118,9 @@ export default function ManageTagsPage() {
         </div>
       </header>
 
-      <div className="rt-ctable">
+      {/* overflow:visible so the per-row color dropdown isn't clipped by
+          the rounded table border. */}
+      <div className="rt-ctable" style={{ overflow: "visible" }}>
         <div className="rt-cthead" style={{ gridTemplateColumns: "1.5fr 1fr 0.6fr 0.8fr 60px" }}>
           <div>Tag</div>
           <div>Color</div>
@@ -138,7 +140,11 @@ export default function ManageTagsPage() {
             <div
               key={t.id}
               className="rt-ctrow"
-              style={{ gridTemplateColumns: "1.5fr 1fr 0.6fr 0.8fr 60px", cursor: "default" }}
+              style={{
+                gridTemplateColumns: "1.5fr 1fr 0.6fr 0.8fr 60px",
+                cursor: "default",
+                position: "relative",
+              }}
             >
               <div className="rt-cname" style={{ gap: 10 }}>
                 <TagChip tag={t} />
@@ -186,8 +192,14 @@ export default function ManageTagsPage() {
                 </button>
                 {openColorFor === t.id && (
                   <>
+                    {/* Veil is below the menu (z-index: 9 vs the menu's
+                        bumped 60) so color picks register. Sits above row
+                        content + table border-radius so it's not clipped. */}
                     <div className="rt-veil" onClick={() => setOpenColorFor(null)} />
-                    <div className="rt-menu" style={{ minWidth: 140 }}>
+                    <div
+                      className="rt-menu"
+                      style={{ minWidth: 160, zIndex: 60, top: 28, left: 0 }}
+                    >
                       {COLORS.map((c) => {
                         const sw = TAG_PALETTE[c];
                         return (
