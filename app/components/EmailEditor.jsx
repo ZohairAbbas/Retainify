@@ -4,6 +4,8 @@
 
 import { useState, useRef, useEffect, useMemo } from "react";
 import Icons from "./ui/Icons.jsx";
+import EmailTemplateGallery from "./email-templates/EmailTemplateGallery.jsx";
+import { TEMPLATES, TEMPLATE_ORDER, cloneBlocks } from "../lib/email-templates/email-templates.js";
 
 // ── Block factory ──────────────────────────────────────────────────────────
 const bid = () => "b_" + Math.random().toString(36).slice(2, 7);
@@ -115,7 +117,8 @@ function formatPrice(amount, currency) {
 }
 
 // ── Block view (renders inside canvas) ─────────────────────────────────────
-function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
+// Exported so the template gallery can render true-to-editor previews.
+export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
   // Merge against DEFAULT_BRAND so missing fields (notably accent) never come
   // through as undefined. React drops undefined inline styles, which is why a
   // half-initialised brand renders the button with no background/border.
@@ -989,6 +992,7 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
   const [viewport, setViewport] = useState("desktop");
   const [openGapId, setOpenGapId] = useState(null);
   const [saved, setSaved] = useState(true);
+  const [templatesOpen, setTemplatesOpen] = useState(false);
 
   const selected = useMemo(() => blocks.find((b) => b.id === selectedId), [selectedId, blocks]);
 
@@ -1065,6 +1069,25 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
   }
   function closeAndSave() { save(); onBack(); }
 
+  // Apply a gallery template (after the gallery's own confirmation step).
+  // Swaps blocks + brand + subject + preview atomically. Brand is spread over
+  // DEFAULT_BRAND so only supported keys (logoText/accent/bg/fontPair) ever
+  // reach state — keeps the saved payload send-safe.
+  function applyTemplate(templateId) {
+    const tmpl = TEMPLATES[templateId];
+    if (!tmpl) return;
+    setBlocks(cloneBlocks(tmpl));
+    setBrand({ ...DEFAULT_BRAND, ...tmpl.brand });
+    setNodeMeta((m) => ({
+      ...m,
+      subject: tmpl.subject,
+      previewText: tmpl.preview,
+      emailName: tmpl.name,
+    }));
+    setSelectedId(null);
+    setTemplatesOpen(false);
+  }
+
   return (
     <div className="rt-builder-shell rt-emb-builder">
       {/* Top bar */}
@@ -1088,7 +1111,20 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
           </div>
         </div>
 
-        <div className="rt-bt-center">
+        <div className="rt-bt-center" style={{ gap: 18, alignItems: "center" }}>
+          <button
+            className="rt-emb-browse-btn"
+            onClick={() => setTemplatesOpen(true)}
+            title="Browse all email designs"
+          >
+            <span className="rt-emb-browse-btn-swatches">
+              <span style={{ background: brand.accent || "#1F3D2F" }} />
+              <span style={{ background: brand.bg || "#FFFFFF" }} />
+              <span style={{ background: "#14201A" }} />
+            </span>
+            <span>Browse templates</span>
+            <span className="rt-emb-browse-btn-pill">{TEMPLATE_ORDER.length}</span>
+          </button>
           <div className="rt-view-toggle">
             <button className={viewport === "desktop" ? "rt-vt-on" : ""} onClick={() => setViewport("desktop")}>
               <Icons.Desktop size={13} /> Desktop
@@ -1174,6 +1210,13 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
           )}
         </div>
       </div>
+
+      {templatesOpen && (
+        <EmailTemplateGallery
+          onClose={() => setTemplatesOpen(false)}
+          onUseTemplate={applyTemplate}
+        />
+      )}
     </div>
   );
 }

@@ -69,12 +69,13 @@ export const action = async ({ request }) => {
   if (intent === "create-blank") {
     const trigger = String(fd.get("trigger") || "customer_created");
     const triggerSegmentKey = String(fd.get("triggerSegmentKey") || "") || null;
+    const name = String(fd.get("name") || "") || undefined;
     // Segment trigger requires a segment key — bail out otherwise so we
     // don't create a half-configured flow the worker can't process.
     if (trigger === "segment_entered" && !triggerSegmentKey) {
       return { ok: false, error: "Pick a segment for this trigger" };
     }
-    const journey = await createBlankJourney(shop, { trigger, triggerSegmentKey });
+    const journey = await createBlankJourney(shop, { name, trigger, triggerSegmentKey });
     const url = new URL(request.url);
     return redirect(`/app/flows/${journey.id}${url.search}`);
   }

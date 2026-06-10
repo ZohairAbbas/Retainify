@@ -248,6 +248,17 @@ export default function SegmentDetailPage() {
     fd.set(key, value);
     fetcher.submit(fd, { method: "post" });
   };
+  // Create a blank flow pre-triggered on this segment and drop the merchant
+  // into its builder. Reuses the flows index `create-blank` action, which
+  // redirects to the new flow; React Router follows the redirect.
+  const useInFlow = () => {
+    const fd = new FormData();
+    fd.set("intent", "create-blank");
+    fd.set("trigger", "segment_entered");
+    fd.set("triggerSegmentKey", segment.id);
+    fd.set("name", `${segment.name} flow`);
+    fetcher.submit(fd, { method: "post", action: "/app/flows" });
+  };
   const submitMember = (intent, contactId) => {
     const fd = new FormData();
     fd.set("intent", intent);
@@ -287,7 +298,8 @@ export default function SegmentDetailPage() {
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={() => navigate("/app/flows")}
+                onClick={useInFlow}
+                disabled={fetcher.state !== "idle"}
               >
                 <Icons.Flow size={14} /> Use in a flow
               </button>
@@ -674,7 +686,8 @@ export default function SegmentDetailPage() {
               <button
                 type="button"
                 className="btn btn-primary"
-                onClick={() => navigate("/app/flows")}
+                onClick={useInFlow}
+                disabled={fetcher.state !== "idle"}
               >
                 Build a flow
               </button>
