@@ -11,6 +11,7 @@
 // the Create Flow modal's "Start blank" pathway.
 
 import { useMemo, useState } from "react";
+import { Link } from "react-router";
 import Icons from "../ui/Icons.jsx";
 import { TRIGGER_CONFIG } from "../../lib/triggerConfig.js";
 import { relativeTime } from "../contacts/constants.js";
