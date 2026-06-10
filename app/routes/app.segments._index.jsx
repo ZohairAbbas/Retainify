@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useFetcher, useLoaderData, useNavigate, useNavigation, useRouteError } from "react-router";
+import { Link, useFetcher, useLoaderData, useNavigate, useNavigation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import Icons from "../components/ui/Icons.jsx";
@@ -32,15 +32,23 @@ export const loader = async ({ request }) => {
         trigger: "segment_entered",
         triggerSegmentKey: { not: null },
       },
-      select: { triggerSegmentKey: true },
+      select: { id: true, name: true, triggerSegmentKey: true },
     }),
   ]);
   const dynamicCount = segments.filter((s) => s.kind === "dynamic").length;
   const segmentsInFlows = new Set(publishedSegmentFlows.map((f) => f.triggerSegmentKey));
+  // Per-segment list of published flows that reference it as trigger.
+  // Used by the table's "Used in flows" column to render flow chips.
+  const flowsBySegment = {};
+  for (const f of publishedSegmentFlows) {
+    if (!flowsBySegment[f.triggerSegmentKey]) flowsBySegment[f.triggerSegmentKey] = [];
+    flowsBySegment[f.triggerSegmentKey].push({ id: f.id, name: f.name });
+  }
   return Response.json({
     segments,
     systemSegments,
     templates: TEMPLATES,
+    flowsBySegment,
     totals: {
       total: segments.length,
       dynamic: dynamicCount,
@@ -72,7 +80,7 @@ export const action = async ({ request }) => {
 };
 
 export default function SegmentsListPage() {
-  const { segments, systemSegments, templates, totals } = useLoaderData();
+  const { segments, systemSegments, templates, totals, flowsBySegment = {} } = useLoaderData();
   const navigate = useNavigate();
   const navigation = useNavigation();
   const fetcher = useFetcher();
@@ -290,7 +298,33 @@ export default function SegmentsListPage() {
                   <Sparkline values={fakeSpark(seg.contactCount)} />
                 </div>
                 <div className="rt-seg-flows">
-                  <span className="rt-seg-flow-none">Not used</span>
+                  {(() => {
+                    const using = flowsBySegment[seg.id] || [];
+                    if (using.length === 0) {
+                      return <span className="rt-seg-flow-none">Not used</span>;
+                    }
+                    const shown = using.slice(0, 2);
+                    const overflow = using.length - shown.length;
+                    return (
+                      <>
+                        {shown.map((f) => (
+                          <Link
+                            key={f.id}
+                            to={`/app/flows/${f.id}`}
+                            className="rt-seg-flow-chip"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{ textDecoration: "none" }}
+                          >
+                            <Icons.Flow size={11} />
+                            <span>{f.name}</span>
+                          </Link>
+                        ))}
+                        {overflow > 0 && (
+                          <span className="rt-seg-flow-chip">+{overflow}</span>
+                        )}
+                      </>
+                    );
+                  })()}
                 </div>
                 <div className="rt-seg-updated">{relativeTime(seg.updatedAt)}</div>
                 <div className="rt-tactions">

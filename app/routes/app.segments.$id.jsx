@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
+import { Link, useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import Icons from "../components/ui/Icons.jsx";
@@ -682,16 +682,16 @@ export default function SegmentDetailPage() {
           ) : (
             <div className="rt-prev-used" style={{ padding: 20 }}>
               {flowsUsing.map((f) => (
-                <a
+                <Link
                   key={f.id}
-                  href={`/app/flows/${f.id}`}
+                  to={`/app/flows/${f.id}`}
                   className="rt-prev-used-flow"
                   style={{ textDecoration: "none" }}
                 >
                   <Icons.Flow size={14} />
                   <span>{f.name}</span>
                   <span className="rt-prev-used-flow-status">{f.status}</span>
-                </a>
+                </Link>
               ))}
             </div>
           )}
