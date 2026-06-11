@@ -2293,10 +2293,12 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-emt-modal-detail {
   background: var(--paper-3); padding: 0;
   display: flex; flex-direction: column;
-  position: relative; overflow-y: auto;
+  position: relative; min-height: 0; overflow: hidden;
 }
 .rt-emt-modal-close { position: absolute; top: 14px; right: 14px; z-index: 2; }
-.rt-emt-modal-detail-inner { padding: 32px; display: flex; flex-direction: column; }
+/* The inner content is the scroll area; the CTA footer below is a fixed
+   flex child so it's always visible at the bottom of the pane. */
+.rt-emt-modal-detail-inner { padding: 32px; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; overflow-y: auto; }
 .rt-emt-modal-persona {
   margin-top: 20px; padding: 14px;
   border: 1px solid var(--hair-1); border-radius: var(--r-3);
@@ -2390,10 +2392,8 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 
 /* ── Preview-modal sticky CTA (keeps "Use this design" pinned, never over
    the email preview) ───────────────────────────────────────────────── */
-.rt-emt-modal-detail-inner { padding-bottom: 16px; }
 .rt-emt-modal-cta {
-  position: sticky; bottom: 0;
-  margin-top: auto;
+  flex: 0 0 auto;
   padding: 16px 32px;
   background: var(--paper-3);
   border-top: 1px solid var(--hair-1);
