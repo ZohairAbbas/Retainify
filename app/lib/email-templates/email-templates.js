@@ -12,15 +12,21 @@
 //
 //   blocks      logo, heading, paragraph, button, image, spacer, divider,
 //               product, discount, footer
-//   fontPair    editorial | modern | classic
-//   brand       logoText, accent, bg, fontPair   (other keys are ignored)
+//   fontPair    editorial | modern | classic | display | mono | hand |
+//               brutal | moody  (editor + email <head> load the webfonts;
+//               clients that drop them fall back to serif/sans/mono)
+//   brand       logoText, accent, bg, ink, subInk, onAccent, fontPair
+//               ink = headings/wordmark, subInk = body, onAccent = button text
 //   discount    { percent, label } — NO hardcoded code (Shopify generates it
 //               at send time and injects ctx.discount_code)
 //   image       src "" placeholder — merchant uploads; no `tone`/`placeholder`
+//   per-block   heading/paragraph accept an optional `color`; button accepts
+//               `bgColor`/`textColor` — all fall back to the brand kit.
 //
-// The original prototype used eyebrow/signature/bignumber blocks and exotic
-// font pairs; those are down-mapped to paragraph/heading and to one of the
-// three supported pairs so the gallery preview is bit-for-bit what sends.
+// The original prototype used eyebrow/signature/bignumber blocks; those are
+// down-mapped to paragraph/heading (a renderer-supported type) but keep their
+// authored brand colors + font pair, so the gallery preview is bit-for-bit
+// what sends (in webfont-capable clients).
 
 // ── Vibes (primary gallery filter — style, not journey) ──────────────────
 export const VIBES = {
@@ -69,8 +75,10 @@ const eb = (text, align = "center") => pa(`<strong>${text}</strong>`, align);
 // signature → italic paragraph.
 const sig = (text, align = "left") =>
   pa(`<em>${String(text).replace(/\n/g, "<br/>")}</em>`, align);
-// bignumber → an H1 headline. caption (if any) becomes a following eyebrow.
-const bn = (value, unit, caption, align = "center") => h(`${value}${unit ? ` ${unit}` : ""}`, 1, align);
+// bignumber → an H1 headline (the percentage). Any caption the prototype
+// carried is dropped here — every template pairs the big number with a
+// discount block whose label already states the offer, so it's not lost.
+const bn = (value, unit = "", align = "center") => h(`${value}${unit ? ` ${unit}` : ""}`, 1, align);
 
 // ════════════════════════════════════════════════════════════════════════
 // TEMPLATES — 10 designs across 5 journeys
@@ -85,7 +93,7 @@ export const TEMPLATES = {
     tags: ["Editorial", "Serif", "Single column"], discount: 15,
     subject: "Welcome to the studio",
     preview: "A short letter from the bench in upstate New York.",
-    brand: { logoText: "NORTHHILL & CO.", accent: "#1F3D2F", bg: "#FAF6EC", fontPair: "editorial" },
+    brand: { logoText: "NORTHHILL & CO.", accent: "#1F3D2F", bg: "#FAF6EC", ink: "#14201A", subInk: "#5C625A", onAccent: "#FAF6EC", fontPair: "editorial" },
     blocks: [
       sp(12), eb("A NEW LETTER · ISSUE NO. 14"), sp(8),
       lo("NORTHHILL & CO.", "medium", "center"), sp(20),
@@ -107,7 +115,7 @@ export const TEMPLATES = {
     tags: ["Minimal", "Left-aligned", "Sans"], discount: 0,
     subject: "OPUS / Welcome",
     preview: "A two-minute primer on what we make and why.",
-    brand: { logoText: "OPUS", accent: "#FF4D2A", bg: "#FFFFFF", fontPair: "modern" },
+    brand: { logoText: "OPUS", accent: "#FF4D2A", bg: "#FFFFFF", ink: "#0E0E0E", subInk: "#5A5A5A", onAccent: "#FFFFFF", fontPair: "mono" },
     blocks: [
       sp(16), eb("OPUS / V2.4 / NEW READER", "left"), sp(10),
       h("Hello.", 1, "left"), sp(6),
@@ -131,7 +139,7 @@ export const TEMPLATES = {
     tags: ["Display serif", "Warm palette", "Gift"], discount: 10,
     subject: "Hi gorgeous — a tiny welcome gift inside",
     preview: "10% off your first ritual, plus our most-loved finds.",
-    brand: { logoText: "olive & honey", accent: "#C7522A", bg: "#F8E8D8", fontPair: "editorial" },
+    brand: { logoText: "olive & honey", accent: "#C7522A", bg: "#F8E8D8", ink: "#4A2E1F", subInk: "#7A4E3A", onAccent: "#F8E8D8", fontPair: "display" },
     blocks: [
       sp(20), lo("olive & honey", "medium", "center"), sp(18),
       im("Hero · still life of bottles", 280), sp(24),
@@ -155,13 +163,13 @@ export const TEMPLATES = {
     tags: ["Bold display", "Cart recovery", "Urgent"], discount: 10,
     subject: "YOU LEFT SOMETHING — last look",
     preview: "Your size, your color, still in the bag — but not for long.",
-    brand: { logoText: "ATELIER 84", accent: "#0E0E0E", bg: "#F4EFE4", fontPair: "modern" },
+    brand: { logoText: "ATELIER 84", accent: "#E5FF36", bg: "#0E0E0E", ink: "#F4EFE4", subInk: "#A8A8A0", onAccent: "#0E0E0E", fontPair: "brutal" },
     blocks: [
       sp(20), lo("ATELIER 84", "small", "left"), sp(20),
       eb("LAST LOOK / 23H 49M LEFT", "left"), sp(10),
       h("You left something.", 1, "left"), sp(14),
       pa("Your bag is still warm. Your size is still in stock. But this code only works for the next 24 hours.", "left"), sp(28),
-      bn("10% OFF", "", "USE IT AT CHECKOUT"), sp(8),
+      bn("10% OFF"), sp(8),
       dc("Your code", 10), sp(20),
       btn("Finish checking out", "filled", "center"), sp(28),
       eb("// STILL IN YOUR BAG"), sp(12),
@@ -179,7 +187,7 @@ export const TEMPLATES = {
     tags: ["Gentle", "Serif", "Single product"], discount: 0,
     subject: "A small reminder",
     preview: "Your cart is still here when you're ready.",
-    brand: { logoText: "NORTHHILL & CO.", accent: "#1F3D2F", bg: "#FDFBF5", fontPair: "editorial" },
+    brand: { logoText: "NORTHHILL & CO.", accent: "#1F3D2F", bg: "#FDFBF5", ink: "#14201A", subInk: "#5C625A", onAccent: "#FAF6EC", fontPair: "editorial" },
     blocks: [
       sp(28), lo("NORTHHILL & CO.", "small", "center"), sp(28),
       h("A small reminder.", 1, "center"), sp(12),
@@ -201,7 +209,7 @@ export const TEMPLATES = {
     tags: ["Personal", "Order receipt", "Loyalty"], discount: 10,
     subject: "Thank you, gorgeous.",
     preview: "Your order is packed and on its way — plus a small thing to say thanks.",
-    brand: { logoText: "olive & honey", accent: "#C7522A", bg: "#F4EFE4", fontPair: "editorial" },
+    brand: { logoText: "olive & honey", accent: "#C7522A", bg: "#F4EFE4", ink: "#4A2E1F", subInk: "#7A4E3A", onAccent: "#F4EFE4", fontPair: "hand" },
     blocks: [
       sp(28), lo("olive & honey", "small", "center"), sp(28),
       h("Thank you.", 1, "center"), sp(14),
@@ -223,7 +231,7 @@ export const TEMPLATES = {
     tags: ["Plain text", "High open rate", "Founder voice"], discount: 0,
     subject: "a quick note from Anna",
     preview: "Thank you, and a real address if you want to write back.",
-    brand: { logoText: "", accent: "#1F3D2F", bg: "#FFFFFF", fontPair: "classic" },
+    brand: { logoText: "", accent: "#1F3D2F", bg: "#FFFFFF", ink: "#14201A", subInk: "#2D362F", onAccent: "#FFFFFF", fontPair: "modern" },
     blocks: [
       sp(36),
       pa("Hi {first_name},", "left"), sp(8),
@@ -245,7 +253,7 @@ export const TEMPLATES = {
     tags: ["Dark", "Serif display", "Generous discount"], discount: 20,
     subject: "It's been a minute.",
     preview: "Come back, on us — 20% off, no expiry.",
-    brand: { logoText: "VELOUR", accent: "#D4A35A", bg: "#1A1226", fontPair: "editorial" },
+    brand: { logoText: "VELOUR", accent: "#D4A35A", bg: "#1A1226", ink: "#FCE6D6", subInk: "#B79CB0", onAccent: "#1A1226", fontPair: "moody" },
     blocks: [
       sp(36), lo("VELOUR", "medium", "center"), sp(24),
       eb("— A LETTER TO ABSENT FRIENDS —"), sp(18),
@@ -267,7 +275,7 @@ export const TEMPLATES = {
     tags: ["Product-led", "Bold display", "Visual"], discount: 15,
     subject: "We've been busy.",
     preview: "See what dropped while you were gone.",
-    brand: { logoText: "ATELIER 84", accent: "#0E0E0E", bg: "#FFFFFF", fontPair: "modern" },
+    brand: { logoText: "ATELIER 84", accent: "#0E0E0E", bg: "#FFFFFF", ink: "#0E0E0E", subInk: "#5A5A5A", onAccent: "#FFFFFF", fontPair: "brutal" },
     blocks: [
       sp(20), lo("ATELIER 84", "small", "left"), sp(20),
       eb("// 90 DAYS LATER", "left"), sp(8),
@@ -275,7 +283,7 @@ export const TEMPLATES = {
       pa("14 drops, 2 collabs, and a whole new season of basics — while you were gone. Catch up:", "left"), sp(28),
       pr(4, true), sp(24),
       di("solid"), sp(20),
-      bn("15% OFF", "", "IF YOU COME BACK THIS WEEK"), sp(8),
+      bn("15% OFF"), sp(8),
       dc("Welcome-back gift", 15), sp(24),
       btn("See what dropped", "filled", "center"), sp(36),
       ft("Atelier 84", "500 Geary, San Francisco, CA 94102"),
@@ -291,13 +299,13 @@ export const TEMPLATES = {
     tags: ["Birthday", "Playful", "Annual"], discount: 25,
     subject: "🎉  it's your day, {first_name}",
     preview: "A 25% gift, because it's only fair.",
-    brand: { logoText: "olive & honey", accent: "#E8568D", bg: "#FFF9F0", fontPair: "editorial" },
+    brand: { logoText: "olive & honey", accent: "#E8568D", bg: "#FFF9F0", ink: "#2A1B4E", subInk: "#5A4E7A", onAccent: "#FFF9F0", fontPair: "display" },
     blocks: [
       sp(24), lo("olive & honey", "small", "center"), sp(20),
       eb("— FROM ALL OF US, ON YOUR DAY —"), sp(14),
       h("Happy birthday, <em>{first_name}.</em>", 1, "center"), sp(16),
       pa("We keep a calendar with the dates of our favourite people — and yours is today. We made you something.", "center"), sp(26),
-      bn("25% OFF", "", "GOOD ALL WEEK"), sp(8),
+      bn("25% OFF"), sp(8),
       dc("Your birthday treat", 25), sp(28),
       btn("Treat yourself", "filled", "center"), sp(36),
       sig("the whole team xx", "center"), sp(28),

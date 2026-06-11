@@ -224,8 +224,11 @@ function EmailTemplatePreview({ template, onUseTemplate, onClose }) {
             <div className="rt-emt-modal-tags">
               {template.tags.map((t) => <span key={t} className="rt-emt-modal-tag">{t}</span>)}
             </div>
+          </div>
 
-            <button className="btn btn-primary btn-lg" style={{ width: "100%", marginTop: 28 }} onClick={onUseTemplate}>
+          {/* Sticky footer CTA — never scrolls over the email preview. */}
+          <div className="rt-emt-modal-cta">
+            <button className="btn btn-primary btn-lg" style={{ width: "100%" }} onClick={onUseTemplate}>
               Use this design {Icons.Arrow && <Icons.Arrow size={14} />}
             </button>
           </div>

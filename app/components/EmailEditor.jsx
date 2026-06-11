@@ -72,13 +72,28 @@ export const DEFAULT_BRAND = {
   logoText: "YOUR STORE",
   accent: "#1F3D2F",
   bg: "#FFFFFF",
+  // ink = headings/wordmark/strong text; subInk = body text; onAccent = text
+  // on filled buttons. Brand-level defaults; per-block `color` can override.
+  ink: "#14201A",
+  subInk: "#2D362F",
+  onAccent: "#FFFFFF",
   fontPair: "editorial",
 };
 
+// Font pairings. `display` drives headings/logo/signature, `body` everything
+// else. The leading family is a Google webfont (loaded in the editor and
+// embedded in the sent email's <head>); the rest are email-safe fallbacks for
+// clients that ignore webfonts (Gmail/Outlook). `displayItalic` italicises the
+// display face (moody). FONT_PAIRS is mirrored in visual-renderer.server.js.
 const FONT_PAIRS = {
-  editorial: { display: "Instrument Serif, Cambria, serif", body: "Geist, system-ui, sans-serif", label: "Editorial" },
-  modern:    { display: "Geist, system-ui, sans-serif",     body: "Geist, system-ui, sans-serif", label: "Modern" },
-  classic:   { display: "Georgia, Cambria, serif",          body: "Georgia, Cambria, serif",      label: "Classic" },
+  editorial: { display: "'Instrument Serif', Cambria, Georgia, serif", body: "Geist, system-ui, sans-serif",        label: "Editorial" },
+  modern:    { display: "Geist, system-ui, sans-serif",                body: "Geist, system-ui, sans-serif",        label: "Modern" },
+  classic:   { display: "Georgia, Cambria, 'Times New Roman', serif",  body: "Georgia, Cambria, serif",             label: "Classic" },
+  display:   { display: "'DM Serif Display', Georgia, serif",          body: "Geist, system-ui, sans-serif",        label: "Display Serif" },
+  mono:      { display: "'Geist Mono', 'Courier New', ui-monospace, monospace", body: "Geist, system-ui, sans-serif", label: "Mono" },
+  hand:      { display: "'Caveat', 'Instrument Serif', cursive",       body: "Geist, system-ui, sans-serif",        label: "Handwritten" },
+  brutal:    { display: "'Archivo Black', Impact, 'Geist', sans-serif", body: "Geist, system-ui, sans-serif",       label: "Bold Display" },
+  moody:     { display: "'DM Serif Display', Georgia, serif",          body: "Geist, system-ui, sans-serif",        label: "Moody Serif", displayItalic: true },
 };
 
 const ACCENT_SWATCHES = [
@@ -95,6 +110,16 @@ const BG_SWATCHES = [
   { name: "Paper",  value: "#FAF6EC" },
   { name: "Cream",  value: "#F4EFE4" },
   { name: "Sand",   value: "#EFE8D7" },
+  { name: "Ink",    value: "#0E0E0E" },
+  { name: "Plum",   value: "#1A1226" },
+];
+
+const TEXT_SWATCHES = [
+  { name: "Ink",    value: "#14201A" },
+  { name: "Slate",  value: "#2D362F" },
+  { name: "Stone",  value: "#5C625A" },
+  { name: "Cream",  value: "#FCE6D6" },
+  { name: "White",  value: "#FFFFFF" },
 ];
 
 const MERGE_TAGS = ["{first_name}", "{last_name}", "{store_name}", "{store_url}", "{discount_code}", "{cart_url}"];
@@ -126,11 +151,26 @@ export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
   const align = block.align || "left";
   const alignStyle = { textAlign: align === "full" ? "left" : align };
   const fonts = FONT_PAIRS[brand.fontPair] || FONT_PAIRS.editorial;
+  const ink = brand.ink || "#14201A";
+  const subInk = brand.subInk || "#2D362F";
+  const accent = brand.accent || "#1F3D2F";
+  const onAccent = brand.onAccent || "#FFFFFF";
+  const isBrutal = brand.fontPair === "brutal";
+  const isMono = brand.fontPair === "mono";
+  const displayItalicStyle = fonts.displayItalic ? { fontStyle: "italic" } : null;
 
   if (block.type === "logo") {
     const sizes = { small: 14, medium: 18, large: 24 };
     return (
-      <div className="rt-emb-logo" style={{ textAlign: block.align, fontFamily: fonts.display, fontSize: sizes[block.size] || 18 }}>
+      <div className="rt-emb-logo" style={{
+        textAlign: block.align,
+        fontFamily: fonts.display,
+        fontSize: sizes[block.size] || 18,
+        color: block.color || ink,
+        letterSpacing: isMono || isBrutal ? "0.16em" : "0.06em",
+        textTransform: isMono || isBrutal ? "uppercase" : "none",
+        fontWeight: isBrutal ? 900 : 500,
+      }}>
         {block.text}
       </div>
     );
@@ -143,7 +183,7 @@ export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
         contentEditable={!isPreview}
         suppressContentEditableWarning
         onBlur={(e) => onInlineEdit && onInlineEdit({ html: e.currentTarget.innerHTML })}
-        style={{ ...alignStyle, fontFamily: fonts.display, fontSize: sizes[block.level] || 24, lineHeight: 1.18, fontWeight: 400, letterSpacing: "-0.01em", color: "#14201A" }}
+        style={{ ...alignStyle, fontFamily: fonts.display, fontSize: sizes[block.level] || 24, lineHeight: isBrutal ? 1.04 : 1.18, fontWeight: isBrutal ? 900 : 400, letterSpacing: isBrutal ? "-0.02em" : "-0.01em", textTransform: isBrutal ? "uppercase" : "none", color: block.color || ink, ...displayItalicStyle }}
         dangerouslySetInnerHTML={{ __html: block.html }}
       />
     );
@@ -155,22 +195,26 @@ export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
         contentEditable={!isPreview}
         suppressContentEditableWarning
         onBlur={(e) => onInlineEdit && onInlineEdit({ html: e.currentTarget.innerHTML })}
-        style={{ ...alignStyle, fontFamily: fonts.body, fontSize: 15, lineHeight: 1.6, color: "#2D362F" }}
+        style={{ ...alignStyle, fontFamily: fonts.body, fontSize: 15, lineHeight: 1.6, color: block.color || subInk }}
         dangerouslySetInnerHTML={{ __html: block.html }}
       />
     );
   }
   if (block.type === "button") {
-    const filled = block.fill === "filled";
+    const filled = block.fill !== "outline";
+    const btnBg = block.bgColor || accent;
+    const btnText = block.textColor || (filled ? onAccent : btnBg);
     return (
       <div style={{ textAlign: block.align }}>
         <a className="rt-emb-button"
            href={isPreview ? block.url : undefined}
            style={{
-             background: filled ? brand.accent : "transparent",
-             color: filled ? "#fff" : brand.accent,
-             borderColor: brand.accent,
+             background: filled ? btnBg : "transparent",
+             color: filled ? btnText : (block.textColor || btnBg),
+             borderColor: btnBg,
              fontFamily: fonts.body,
+             textTransform: isBrutal ? "uppercase" : "none",
+             fontWeight: isBrutal ? 700 : 600,
            }}>
           {block.text}
         </a>
@@ -244,17 +288,17 @@ export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
   }
   if (block.type === "discount") {
     return (
-      <div className="rt-emb-discount" style={{ borderColor: brand.accent }}>
-        <div className="rt-emb-discount-label" style={{ fontFamily: fonts.body, color: brand.accent }}>{block.label}</div>
-        <div className="rt-emb-discount-code" style={{ fontFamily: "var(--font-mono)", color: "#14201A" }}>GENERATED-XXXXXX</div>
-        <div className="rt-emb-discount-percent" style={{ fontFamily: fonts.body }}>{block.percent}% off your first order</div>
+      <div className="rt-emb-discount" style={{ borderColor: accent }}>
+        <div className="rt-emb-discount-label" style={{ fontFamily: fonts.body, color: accent }}>{block.label}</div>
+        <div className="rt-emb-discount-code" style={{ fontFamily: "var(--font-mono)", color: ink }}>GENERATED-XXXXXX</div>
+        <div className="rt-emb-discount-percent" style={{ fontFamily: fonts.body, color: subInk }}>{block.percent}% off your first order</div>
       </div>
     );
   }
   if (block.type === "footer") {
     return (
-      <div className="rt-emb-footer" style={{ fontFamily: fonts.body }}>
-        <div className="rt-emb-footer-store">{block.storeName}</div>
+      <div className="rt-emb-footer" style={{ fontFamily: fonts.body, color: subInk }}>
+        <div className="rt-emb-footer-store" style={{ color: ink }}>{block.storeName}</div>
         <div className="rt-emb-footer-addr">{block.address}</div>
         {block.unsubscribe && (
           <div className="rt-emb-footer-links">
@@ -700,7 +744,9 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
             </div>
             <label className="field-label" style={{ marginTop: 14 }}>Alignment</label>
             <AlignToggle value={block.align} onChange={(v) => onUpdate({ align: v })} />
-            <div className="field-help" style={{ marginTop: 10 }}>Click the heading on the canvas to edit text.</div>
+            <label className="field-label" style={{ marginTop: 14 }}>Text color</label>
+            <ColorField value={block.color} onChange={(v) => onUpdate({ color: v })} presets={TEXT_SWATCHES} allowClear />
+            <div className="field-help" style={{ marginTop: 10 }}>Click the heading on the canvas to edit text. Leave color empty to use the brand heading color.</div>
           </div>
           <MergeTagsSection onInsert={onInsertMergeTag} />
         </>
@@ -711,7 +757,9 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
           <div className="rt-ins-section">
             <label className="field-label">Alignment</label>
             <AlignToggle value={block.align} onChange={(v) => onUpdate({ align: v })} />
-            <div className="field-help" style={{ marginTop: 10 }}>Click the paragraph on the canvas to edit.</div>
+            <label className="field-label" style={{ marginTop: 14 }}>Text color</label>
+            <ColorField value={block.color} onChange={(v) => onUpdate({ color: v })} presets={TEXT_SWATCHES} allowClear />
+            <div className="field-help" style={{ marginTop: 10 }}>Click the paragraph on the canvas to edit. Leave color empty to use the brand body color.</div>
           </div>
           <MergeTagsSection onInsert={onInsertMergeTag} />
         </>
@@ -729,8 +777,13 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
               <button key={k} className={block.fill === k ? "rt-seg-on" : ""} onClick={() => onUpdate({ fill: k })}>{l}</button>
             ))}
           </div>
+          <label className="field-label" style={{ marginTop: 14 }}>Button color</label>
+          <ColorField value={block.bgColor} onChange={(v) => onUpdate({ bgColor: v })} presets={ACCENT_SWATCHES} allowClear />
+          <label className="field-label" style={{ marginTop: 14 }}>Text color</label>
+          <ColorField value={block.textColor} onChange={(v) => onUpdate({ textColor: v })} presets={TEXT_SWATCHES} allowClear />
           <label className="field-label" style={{ marginTop: 14 }}>Alignment</label>
           <AlignToggle value={block.align} onChange={(v) => onUpdate({ align: v })} />
+          <div className="field-help" style={{ marginTop: 10 }}>Leave colors empty to use the brand accent.</div>
         </div>
       )}
 
@@ -810,6 +863,48 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
   );
 }
 
+// ── Color picker (native swatch + hex input, optional preset chips) ────────
+function ColorField({ value, onChange, presets, allowClear }) {
+  const norm = (value || "#000000").toUpperCase();
+  const [hex, setHex] = useState(norm.replace(/^#/, ""));
+  useEffect(() => { setHex(norm.replace(/^#/, "")); }, [norm]);
+  const commit = (raw) => {
+    const clean = raw.replace(/[^0-9a-fA-F]/g, "").slice(0, 6);
+    setHex(clean);
+    if (/^[0-9A-Fa-f]{6}$/.test(clean)) onChange("#" + clean.toUpperCase());
+  };
+  return (
+    <div className="rt-emb-cp">
+      <label className="rt-emb-cp-swatch" style={{ background: value || "transparent" }}>
+        <input type="color" value={norm} onChange={(e) => onChange(e.target.value.toUpperCase())} />
+      </label>
+      <div className="rt-emb-cp-hex">
+        <span className="rt-emb-cp-hash">#</span>
+        <input
+          type="text" value={hex} maxLength={6} spellCheck={false}
+          onChange={(e) => commit(e.target.value)}
+          onBlur={() => setHex(norm.replace(/^#/, ""))}
+        />
+      </div>
+      {presets && presets.map((p) => (
+        <button
+          key={p.value}
+          type="button"
+          className={`rt-emb-cp-chip${(value || "").toUpperCase() === p.value.toUpperCase() ? " rt-on" : ""}`}
+          style={{ background: p.value }}
+          title={p.name}
+          onClick={() => onChange(p.value.toUpperCase())}
+        />
+      ))}
+      {allowClear && value && (
+        <button type="button" className="rt-emb-cp-clear" title="Reset to brand default" onClick={() => onChange(undefined)}>
+          <Icons.Close size={12} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Email settings + brand kit (right rail when nothing selected) ──────────
 function EmailSettings({ node, brand, onNode, onBrand }) {
   return (
@@ -842,26 +937,19 @@ function EmailSettings({ node, brand, onNode, onBrand }) {
         </div>
 
         <label className="field-label" style={{ marginTop: 16 }}>Accent color</label>
-        <div className="rt-emb-swatches">
-          {ACCENT_SWATCHES.map((s) => (
-            <button key={s.value} className={`rt-emb-swatch${brand.accent === s.value ? " rt-on" : ""}`}
-                    style={{ background: s.value }} title={s.name}
-                    onClick={() => onBrand({ accent: s.value })}>
-              {brand.accent === s.value && <Icons.Check size={14} />}
-            </button>
-          ))}
-        </div>
+        <ColorField value={brand.accent} onChange={(v) => onBrand({ accent: v || DEFAULT_BRAND.accent })} presets={ACCENT_SWATCHES} />
 
         <label className="field-label" style={{ marginTop: 16 }}>Background</label>
-        <div className="rt-emb-swatches">
-          {BG_SWATCHES.map((s) => (
-            <button key={s.value} className={`rt-emb-swatch rt-emb-swatch-light${brand.bg === s.value ? " rt-on" : ""}`}
-                    style={{ background: s.value }} title={s.name}
-                    onClick={() => onBrand({ bg: s.value })}>
-              {brand.bg === s.value && <Icons.Check size={14} />}
-            </button>
-          ))}
-        </div>
+        <ColorField value={brand.bg} onChange={(v) => onBrand({ bg: v || DEFAULT_BRAND.bg })} presets={BG_SWATCHES} />
+
+        <label className="field-label" style={{ marginTop: 16 }}>Heading text</label>
+        <ColorField value={brand.ink} onChange={(v) => onBrand({ ink: v || DEFAULT_BRAND.ink })} presets={TEXT_SWATCHES} />
+
+        <label className="field-label" style={{ marginTop: 16 }}>Body text</label>
+        <ColorField value={brand.subInk} onChange={(v) => onBrand({ subInk: v || DEFAULT_BRAND.subInk })} presets={TEXT_SWATCHES} />
+
+        <label className="field-label" style={{ marginTop: 16 }}>Button text</label>
+        <ColorField value={brand.onAccent} onChange={(v) => onBrand({ onAccent: v || DEFAULT_BRAND.onAccent })} presets={TEXT_SWATCHES} />
 
         <label className="field-label" style={{ marginTop: 16 }}>Font pairing</label>
         <div className="rt-emb-fonts">

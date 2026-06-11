@@ -9,13 +9,30 @@
  * Mirrors the block schema authored by app/components/EmailEditor.jsx.
  */
 
+// Mirrors FONT_PAIRS in app/components/EmailEditor.jsx. The leading family is a
+// Google webfont embedded via <link> in the email <head> (rendered by Apple /
+// iOS / Samsung Mail); the rest are email-safe fallbacks for clients that drop
+// webfonts (Gmail, Outlook).
 const FONT_PAIRS = {
-  editorial: { display: "Instrument Serif, Cambria, serif", body: "Geist, system-ui, sans-serif" },
-  modern:    { display: "Geist, system-ui, sans-serif",     body: "Geist, system-ui, sans-serif" },
-  classic:   { display: "Georgia, Cambria, serif",          body: "Georgia, Cambria, serif" },
+  editorial: { display: "'Instrument Serif', Cambria, Georgia, serif", body: "Geist, system-ui, sans-serif" },
+  modern:    { display: "Geist, system-ui, sans-serif",                body: "Geist, system-ui, sans-serif" },
+  classic:   { display: "Georgia, Cambria, 'Times New Roman', serif",  body: "Georgia, Cambria, serif" },
+  display:   { display: "'DM Serif Display', Georgia, serif",          body: "Geist, system-ui, sans-serif" },
+  mono:      { display: "'Geist Mono', 'Courier New', monospace",      body: "Geist, system-ui, sans-serif" },
+  hand:      { display: "'Caveat', 'Brush Script MT', cursive",        body: "Geist, system-ui, sans-serif" },
+  brutal:    { display: "'Archivo Black', Impact, Arial, sans-serif",  body: "Geist, system-ui, sans-serif" },
+  moody:     { display: "'DM Serif Display', Georgia, serif",          body: "Geist, system-ui, sans-serif", displayItalic: true },
 };
 
-const DEFAULT_BRAND = { logoText: "YOUR STORE", accent: "#1F3D2F", bg: "#FFFFFF", fontPair: "editorial" };
+// Google Fonts stylesheet embedded in the email head so supporting clients
+// render the real display faces. Mirrors the families used by FONT_PAIRS.
+const GOOGLE_FONTS_HREF =
+  "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Archivo+Black&family=Caveat:wght@500;700&family=DM+Serif+Display:ital@0;1&display=swap";
+
+const DEFAULT_BRAND = {
+  logoText: "YOUR STORE", accent: "#1F3D2F", bg: "#FFFFFF",
+  ink: "#14201A", subInk: "#2D362F", onAccent: "#FFFFFF", fontPair: "editorial",
+};
 
 function escapeAttr(s) {
   return String(s || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -41,9 +58,12 @@ function renderLogo(b, brand, fonts, ctx) {
   const sizes = { small: 14, medium: 18, large: 24 };
   const fontSize = sizes[b.size] || 18;
   const align = b.align || "center";
+  const brutal = brand.fontPair === "brutal";
+  const mono = brand.fontPair === "mono";
   const text = mergeText(b.text || brand.logoText, ctx);
+  const tracking = mono || brutal ? "0.16em" : "0.06em";
   return `<tr><td align="${align}" style="padding:0 0 16px;">
-    <div style="font-family:${fonts.display};font-size:${fontSize}px;letter-spacing:0.08em;text-transform:uppercase;color:#14201A;">${escapeAttr(text)}</div>
+    <div style="font-family:${fonts.display};font-size:${fontSize}px;letter-spacing:${tracking};text-transform:uppercase;font-weight:${brutal ? 900 : 500};color:${b.color || brand.ink};">${escapeAttr(text)}</div>
   </td></tr>`;
 }
 
@@ -51,9 +71,11 @@ function renderHeading(b, brand, fonts, ctx) {
   const sizes = { 1: 32, 2: 24, 3: 18 };
   const fontSize = sizes[b.level] || 24;
   const align = b.align || "left";
+  const brutal = brand.fontPair === "brutal";
+  const italic = fonts.displayItalic ? "font-style:italic;" : "";
   const { out } = applyMergeTags(b.html || "", ctx);
   return `<tr><td align="${align}" style="padding:8px 0;">
-    <div style="font-family:${fonts.display};font-size:${fontSize}px;line-height:1.18;font-weight:400;letter-spacing:-0.01em;color:#14201A;text-align:${align};">${out}</div>
+    <div style="font-family:${fonts.display};font-size:${fontSize}px;line-height:${brutal ? 1.04 : 1.18};font-weight:${brutal ? 900 : 400};letter-spacing:${brutal ? "-0.02em" : "-0.01em"};${brutal ? "text-transform:uppercase;" : ""}${italic}color:${b.color || brand.ink};text-align:${align};">${out}</div>
   </td></tr>`;
 }
 
@@ -61,13 +83,14 @@ function renderParagraph(b, brand, fonts, ctx) {
   const align = b.align || "left";
   const { out } = applyMergeTags(b.html || "", ctx);
   return `<tr><td align="${align}" style="padding:8px 0;">
-    <div style="font-family:${fonts.body};font-size:15px;line-height:1.6;color:#2D362F;text-align:${align};">${out}</div>
+    <div style="font-family:${fonts.body};font-size:15px;line-height:1.6;color:${b.color || brand.subInk};text-align:${align};">${out}</div>
   </td></tr>`;
 }
 
 function renderButton(b, brand, fonts, ctx) {
   const filled = b.fill !== "outline";
   const align = b.align || "center";
+  const brutal = brand.fontPair === "brutal";
   const { out: url } = applyMergeTags(b.url || "#", ctx);
   const text = mergeText(b.text || "Shop now", ctx);
   // If url resolved to empty (merge tag with no value, e.g. {cart_url} on a
@@ -75,10 +98,11 @@ function renderButton(b, brand, fonts, ctx) {
   const safeUrl = url && url !== "{cart_url}" && url !== "{store_url}"
     ? url
     : (ctx.store_url || "#");
-  const bg = filled ? brand.accent : "transparent";
-  const color = filled ? "#FFFFFF" : brand.accent;
+  const btnBg = b.bgColor || brand.accent;
+  const bg = filled ? btnBg : "transparent";
+  const color = filled ? (b.textColor || brand.onAccent) : (b.textColor || btnBg);
   return `<tr><td align="${align}" style="padding:16px 0;">
-    <a href="${escapeAttr(safeUrl)}" style="display:inline-block;padding:14px 28px;background:${bg};color:${color};border:1px solid ${brand.accent};border-radius:4px;font-family:${fonts.body};font-size:15px;font-weight:600;text-decoration:none;">${escapeAttr(text)}</a>
+    <a href="${escapeAttr(safeUrl)}" style="display:inline-block;padding:14px 28px;background:${bg};color:${color};border:1px solid ${btnBg};border-radius:4px;font-family:${fonts.body};font-size:15px;font-weight:${brutal ? 700 : 600};${brutal ? "text-transform:uppercase;letter-spacing:0.04em;" : ""}text-decoration:none;">${escapeAttr(text)}</a>
   </td></tr>`;
 }
 
@@ -119,12 +143,12 @@ function renderProductGrid(b, brand, fonts, ctx, products) {
          </a>`
       : `<div style="aspect-ratio:1/1;background:#F4EFE4;border-radius:4px;"></div>`;
     const priceHtml = showPrice && p.price
-      ? `<div style="font-family:${fonts.body};font-size:13px;color:#5C625A;">${formatPriceServer(p.price, p.currency)}</div>`
+      ? `<div style="font-family:${fonts.body};font-size:13px;color:${brand.subInk};">${formatPriceServer(p.price, p.currency)}</div>`
       : "";
     return `<td valign="top" width="${cellWidthPct}%" style="padding:6px;">
       ${img}
-      <div style="margin-top:8px;font-family:${fonts.body};font-size:13px;color:#14201A;">
-        <a href="${url}" style="color:#14201A;text-decoration:none;">${escapeAttr(p.title || "")}</a>
+      <div style="margin-top:8px;font-family:${fonts.body};font-size:13px;color:${brand.ink};">
+        <a href="${url}" style="color:${brand.ink};text-decoration:none;">${escapeAttr(p.title || "")}</a>
       </div>
       ${priceHtml}
     </td>`;
@@ -154,24 +178,24 @@ function renderDiscount(b, brand, fonts, ctx) {
   return `<tr><td align="center" style="padding:16px 0;">
     <div style="border:1px dashed ${brand.accent};border-radius:6px;padding:20px;text-align:center;">
       <div style="font-family:${fonts.body};font-size:13px;color:${brand.accent};text-transform:uppercase;letter-spacing:0.08em;">${escapeAttr(label)}</div>
-      <div style="font-family:'Courier New',monospace;font-size:24px;font-weight:700;color:#14201A;margin:8px 0;">${escapeAttr(code)}</div>
-      <div style="font-family:${fonts.body};font-size:13px;color:#666;">${Number(b.percent) || 0}% off your order</div>
+      <div style="font-family:'Courier New',monospace;font-size:24px;font-weight:700;color:${brand.ink};margin:8px 0;">${escapeAttr(code)}</div>
+      <div style="font-family:${fonts.body};font-size:13px;color:${brand.subInk};">${Number(b.percent) || 0}% off your order</div>
     </div>
   </td></tr>`;
 }
 
 function renderFooter(b, brand, fonts, ctx) {
   const unsubHtml = b.unsubscribe && ctx.unsubscribeUrl
-    ? `<div style="margin-top:8px;"><a href="${escapeAttr(ctx.unsubscribeUrl)}" style="color:#999;text-decoration:underline;">Unsubscribe</a></div>`
+    ? `<div style="margin-top:8px;"><a href="${escapeAttr(ctx.unsubscribeUrl)}" style="color:${brand.subInk};text-decoration:underline;">Unsubscribe</a></div>`
     : "";
   const storeName = mergeText(b.storeName || ctx.store_name || "", ctx);
   const address = mergeText(b.address || "", ctx);
   return `<tr><td align="center" style="padding:24px 0 8px;">
-    <div style="font-family:${fonts.body};font-size:12px;color:#999;line-height:1.6;">
-      <div style="font-weight:600;color:#666;">${escapeAttr(storeName)}</div>
+    <div style="font-family:${fonts.body};font-size:12px;color:${brand.subInk};line-height:1.6;">
+      <div style="font-weight:600;color:${brand.ink};">${escapeAttr(storeName)}</div>
       <div>${escapeAttr(address)}</div>
       ${unsubHtml}
-      <div style="margin-top:6px;font-size:11px;color:#CCC;">Powered by Retainify</div>
+      <div style="margin-top:6px;font-size:11px;opacity:0.6;">Powered by Retainify</div>
     </div>
   </td></tr>`;
 }
@@ -300,12 +324,15 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <meta http-equiv="X-UA-Compatible" content="IE=edge" />
 <title>${escapeAttr(ctx.store_name || "")}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="${GOOGLE_FONTS_HREF}" rel="stylesheet" />
 </head>
 <body style="margin:0;padding:0;background-color:${safeBrand.bg};font-family:${fonts.body};">
 <table width="100%" cellpadding="0" cellspacing="0" style="background-color:${safeBrand.bg};">
   <tr>
     <td align="center" style="padding:32px 16px;">
-      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:#FFFFFF;border-radius:8px;padding:32px;">
+      <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:${safeBrand.bg};border-radius:8px;padding:32px;">
         ${inner}
       </table>
     </td>

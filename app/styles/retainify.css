@@ -2387,3 +2387,56 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   letter-spacing: 0.04em; text-transform: uppercase;
   border-radius: var(--r-pill); padding: 2px 6px; margin-left: 4px;
 }
+
+/* ── Preview-modal sticky CTA (keeps "Use this design" pinned, never over
+   the email preview) ───────────────────────────────────────────────── */
+.rt-emt-modal-detail-inner { padding-bottom: 16px; }
+.rt-emt-modal-cta {
+  position: sticky; bottom: 0;
+  margin-top: auto;
+  padding: 16px 32px;
+  background: var(--paper-3);
+  border-top: 1px solid var(--hair-1);
+}
+
+/* ── Brand/per-block color picker (rt-emb-cp) ──────────────────────── */
+.rt-emb-cp {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 6px;
+}
+.rt-emb-cp-swatch {
+  width: 30px; height: 30px; border-radius: var(--r-2);
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12);
+  cursor: pointer; flex-shrink: 0; position: relative; overflow: hidden;
+}
+.rt-emb-cp-swatch input[type="color"] {
+  position: absolute; inset: -4px; width: calc(100% + 8px); height: calc(100% + 8px);
+  border: none; padding: 0; background: none; cursor: pointer; opacity: 0;
+}
+.rt-emb-cp-hex {
+  display: flex; align-items: center;
+  border: 1px solid var(--hair-2); border-radius: var(--r-2);
+  height: 30px; padding: 0 8px; background: var(--paper-3);
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-1);
+}
+.rt-emb-cp-hash { color: var(--ink-4); margin-right: 1px; }
+.rt-emb-cp-hex input {
+  width: 60px; border: none; outline: none; background: transparent;
+  font-family: var(--font-mono); font-size: 12px; color: var(--ink-1);
+  text-transform: uppercase;
+}
+.rt-emb-cp-chip {
+  width: 18px; height: 18px; border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12);
+  cursor: pointer; flex-shrink: 0; border: none; padding: 0;
+  transition: transform var(--t-fast) var(--ease);
+}
+.rt-emb-cp-chip:hover { transform: scale(1.12); }
+.rt-emb-cp-chip.rt-on { box-shadow: inset 0 0 0 1px rgba(0,0,0,0.12), 0 0 0 2px var(--brand-700); }
+.rt-emb-cp-clear {
+  width: 22px; height: 22px; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--hair-2); background: var(--paper-2);
+  color: var(--ink-3); cursor: pointer; flex-shrink: 0;
+}
+.rt-emb-cp-clear:hover { background: var(--paper-1); color: var(--ink-1); }
