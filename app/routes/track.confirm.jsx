@@ -2,7 +2,7 @@ import prisma from "../db.server.js";
 import { verifyConfirmToken } from "../lib/email/confirm.server.js";
 import { createDiscountCode } from "../lib/shopify/discounts.server.js";
 import { syncConfirmedSubscriber } from "../lib/shopify/customers.server.js";
-import { sendEmail } from "../lib/email/resend.server.js";
+import { sendEmail, resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { renderDiscountRevealEmail } from "../lib/email/templates.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
 
@@ -118,16 +118,20 @@ async function sendDiscountEmail(shop, email, discountCode, discountPct) {
   const storeName = shopSettings?.senderName || shop;
   const brandColor = shopSettings?.brandColor || popupSettings?.brandColor || "#000000";
   const logoUrl = shopSettings?.logoUrl || popupSettings?.logoUrl || "";
-  const fromEmail = shopSettings?.senderEmail || process.env.RESEND_FROM_EMAIL || "noreply@retainify.app";
-  const from = `${storeName} <${fromEmail}>`;
 
   const htmlContent = renderDiscountRevealEmail({ storeName, logoUrl, brandColor, discountCode, discountPct });
 
-  await sendEmail({
-    to: email,
-    from,
-    replyTo: shopSettings?.replyTo || fromEmail,
-    subject: `Your ${discountPct}% discount code from ${storeName}`,
-    html: htmlContent,
-  });
+  const provider = resolveProvider(shopSettings);
+  const { from, replyTo } = resolveFrom({ settings: shopSettings, provider });
+
+  await sendEmail(
+    {
+      to: email,
+      from,
+      replyTo,
+      subject: `Your ${discountPct}% discount code from ${storeName}`,
+      html: htmlContent,
+    },
+    { shop, settings: shopSettings },
+  );
 }

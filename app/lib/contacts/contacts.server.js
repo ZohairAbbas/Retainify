@@ -8,6 +8,21 @@ const VALID_STATUSES = new Set([
   "complained",
   "never_opted_in",
 ]);
+// WhatsApp consent is a separate axis from email subscriptionStatus.
+const WA_SUPPRESSION_STATUSES = new Set(["unsubscribed", "invalid"]);
+const VALID_WA_STATUSES = new Set([
+  "subscribed",
+  "unsubscribed",
+  "invalid",
+  "never_opted_in",
+]);
+
+/** Normalize a phone to bare E.164 digits (no "+", spaces, or punctuation). */
+export function normalizePhone(raw) {
+  if (!raw) return "";
+  const digits = String(raw).replace(/[^\d]/g, "");
+  return digits;
+}
 const VALID_SOURCES = new Set([
   "popup",
   "cart_abandoned",
@@ -49,6 +64,13 @@ export async function upsertContact(input) {
     ? new Date(input.marketingConsentAt)
     : undefined;
   const shopifyCustomerId = input.shopifyCustomerId || undefined;
+  const phone = input.phone ? normalizePhone(input.phone) : undefined;
+  const whatsappStatusInput = VALID_WA_STATUSES.has(input.whatsappStatus)
+    ? input.whatsappStatus
+    : undefined;
+  const whatsappOptInAt = input.whatsappOptInAt
+    ? new Date(input.whatsappOptInAt)
+    : undefined;
 
   const existing = await prisma.contact.findUnique({
     where: { shop_email: { shop, email } },
@@ -67,6 +89,9 @@ export async function upsertContact(input) {
         subscriptionStatus: statusInput || "never_opted_in",
         marketingConsentAt: marketingConsentAt || null,
         shopifyCustomerId: shopifyCustomerId || null,
+        phone: phone || null,
+        whatsappStatus: whatsappStatusInput || "never_opted_in",
+        whatsappOptInAt: whatsappOptInAt || null,
       },
     });
   }
@@ -96,6 +121,22 @@ export async function upsertContact(input) {
 
   if (shopifyCustomerId && !existing.shopifyCustomerId) {
     data.shopifyCustomerId = shopifyCustomerId;
+  }
+
+  if (phone && !existing.phone) data.phone = phone;
+
+  if (whatsappStatusInput) {
+    // Same suppression-wins rule as email: an unsubscribed/invalid WhatsApp
+    // status can't be silently downgraded by a later non-suppressing write.
+    const isCurrentlySuppressed = WA_SUPPRESSION_STATUSES.has(existing.whatsappStatus);
+    const isUpgradeToSuppressed = WA_SUPPRESSION_STATUSES.has(whatsappStatusInput);
+    if (isUpgradeToSuppressed || !isCurrentlySuppressed) {
+      data.whatsappStatus = whatsappStatusInput;
+    }
+  }
+
+  if (whatsappOptInAt && !existing.whatsappOptInAt) {
+    data.whatsappOptInAt = whatsappOptInAt;
   }
 
   return prisma.contact.update({

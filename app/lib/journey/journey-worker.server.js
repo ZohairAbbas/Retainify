@@ -3,7 +3,7 @@
  * Called every 60s alongside the cart rescue worker.
  */
 import prisma from "../../db.server.js";
-import { sendEmail } from "../email/resend.server.js";
+import { sendEmail, resolveFrom, resolveProvider } from "../email/index.server.js";
 import { renderVisualEmail } from "../email/visual-renderer.server.js";
 import { buildUnsubscribeUrl } from "../tracking/links.server.js";
 import { createDiscountCode } from "../shopify/discounts.server.js";
@@ -116,15 +116,19 @@ async function processJourneyJob(job) {
   });
 
   const subject = step.subject || defaultSubject(journey.trigger, step.stepNumber, settings.senderName);
-  const from = `${settings.senderName} <${settings.senderEmail || process.env.RESEND_FROM_EMAIL || "noreply@retainify.app"}>`;
+  const provider = resolveProvider(settings);
+  const { from, replyTo } = resolveFrom({ settings, provider });
 
-  const result = await sendEmail({
-    to: enrollment.contactEmail,
-    from,
-    replyTo: settings.replyTo || settings.senderEmail,
-    subject,
-    html,
-  });
+  const result = await sendEmail(
+    {
+      to: enrollment.contactEmail,
+      from,
+      replyTo,
+      subject,
+      html,
+    },
+    { shop, settings },
+  );
 
   if (!result.ok) {
     await markJourneyJobFailed(job.id, result.error);
@@ -132,7 +136,15 @@ async function processJourneyJob(job) {
   }
 
   const sentAt = new Date();
-  await markJourneyJobDone(job.id, { sentAt, resendMessageId: result.providerMessageId || "" });
+  // Dual-write during the Resend→SES transition: resendMessageId keeps the
+  // existing Resend webhook join working; providerMessageId is the neutral key
+  // the SES webhook uses.
+  const messageId = result.providerMessageId || "";
+  await markJourneyJobDone(job.id, {
+    sentAt,
+    resendMessageId: messageId,
+    providerMessageId: messageId,
+  });
 
   // Check if all steps for this enrollment are done — complete enrollment
   const pendingCount = await prisma.journeyJob.count({

@@ -59,7 +59,7 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
   }
 
   const steps = await prisma.journeyStep.findMany({
-    where: { journeyId, isArchived: false, isEnabled: true, nodeType: { in: ["email", "push"] } },
+    where: { journeyId, isArchived: false, isEnabled: true, nodeType: { in: ["email", "push", "whatsapp"] } },
     orderBy: { stepNumber: "asc" },
   });
   if (!steps.length) {
@@ -80,6 +80,7 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
   const now = new Date();
   const emailSteps = steps.filter((s) => s.nodeType === "email");
   const pushSteps = steps.filter((s) => s.nodeType === "push");
+  const whatsappSteps = steps.filter((s) => s.nodeType === "whatsapp");
 
   if (emailSteps.length) {
     await prisma.journeyJob.createMany({
@@ -105,6 +106,18 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
     });
   }
 
+  if (whatsappSteps.length) {
+    await prisma.whatsappJob.createMany({
+      data: whatsappSteps.map((step) => ({
+        shop: journey.shop,
+        enrollmentId: enrollment.id,
+        stepId: step.id,
+        scheduledFor: new Date(now.getTime() + step.delayHours * 60 * 60 * 1000),
+        status: "pending",
+      })),
+    });
+  }
+
   return enrollment;
 }
 
@@ -118,6 +131,10 @@ export async function exitEnrollment(enrollmentId, reason) {
       data: { exitReason: reason, completedAt: new Date() },
     }),
     prisma.journeyJob.updateMany({
+      where: { enrollmentId, status: "pending" },
+      data: { status: "cancelled" },
+    }),
+    prisma.whatsappJob.updateMany({
       where: { enrollmentId, status: "pending" },
       data: { status: "cancelled" },
     }),

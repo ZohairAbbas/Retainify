@@ -1,17 +1,6 @@
 import prisma from "../../db.server.js";
 import { sendPushNotification } from "./web-push.server.js";
-
-function isInQuietHours(quietStart, quietEnd, timezone) {
-  try {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: timezone });
-    const hour = parseInt(formatter.format(now), 10);
-    if (quietStart < quietEnd) return hour >= quietStart && hour < quietEnd;
-    return hour >= quietStart || hour < quietEnd;
-  } catch {
-    return false;
-  }
-}
+import { isInQuietHours } from "../journey/quiet-hours.server.js";
 
 async function claimDuePushJobs(limit = 20) {
   const now = new Date();

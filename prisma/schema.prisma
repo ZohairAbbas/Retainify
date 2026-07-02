@@ -34,6 +34,7 @@ model ShopSettings {
   senderName       String   @default("Your Store")
   senderEmail      String   @default("")
   replyTo          String   @default("")
+  emailProvider    String   @default("resend") // resend | ses
   brandColor       String   @default("#000000")
   logoUrl          String   @default("")
   quietHoursStart  Int      @default(22) // hour 0-23 in store timezone
@@ -46,6 +47,10 @@ model ShopSettings {
   onboardingStep   Int      @default(0) // 0=not started, 1=sender saved, 2=done
   isActive         Boolean  @default(false)
   pushEnabled      Boolean  @default(false)
+  // WhatsApp channel (Meta Cloud API). Off by default; flipped on per shop
+  // once the merchant connects a WABA via Embedded Signup and approval lands.
+  whatsappEnabled  Boolean  @default(false)
+  whatsappProvider String   @default("meta") // meta | (future BSP)
   // Contacts feature — one-time backfill flag + Shopify customer sync state
   contactsBackfilledAt              DateTime?
   lastShopifyCustomerSyncAt         DateTime?
@@ -75,6 +80,12 @@ model Contact {
   subscriptionStatus  String    @default("never_opted_in") // subscribed | unsubscribed | bounced | complained | never_opted_in
   marketingConsentAt  DateTime?
   shopifyCustomerId   String?
+  // WhatsApp facets — phone is E.164, whatsappStatus is a separate consent axis
+  // from email subscriptionStatus (a contact can be email-subscribed but not
+  // WhatsApp-opted-in, or vice versa). WhatsappSubscription holds the detail.
+  phone               String?
+  whatsappStatus      String    @default("never_opted_in") // subscribed | unsubscribed | invalid | never_opted_in
+  whatsappOptInAt     DateTime?
   deletedAt           DateTime?
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt
@@ -85,6 +96,7 @@ model Contact {
   @@index([shop, lastSeenAt])
   @@index([shop, source])
   @@index([shop, subscriptionStatus])
+  @@index([shop, whatsappStatus])
 }
 
 // Merchant-defined tag — per shop. `nameKey` is the lowercased uniqueness key;
@@ -289,7 +301,7 @@ model JourneyStep {
   id            String   @id @default(cuid())
   journeyId     String
   stepNumber    Int
-  nodeType      String   @default("email") // email | delay | exit | push
+  nodeType      String   @default("email") // email | delay | exit | push | whatsapp
   positionY     Int      @default(0)
   delayHours    Float    @default(1)
   subject       String   @default("")
@@ -309,12 +321,20 @@ model JourneyStep {
   pushBody      String   @default("")
   pushIconUrl   String   @default("")
   pushClickUrl  String   @default("")
+  // WhatsApp fields — references a Meta-approved HSM template by name+language.
+  // waVariables maps positional template params ({{1}},{{2}}...) to a merge-tag
+  // or enrollment-payload key resolved at send time.
+  waTemplateName String  @default("")
+  waLanguage     String  @default("")
+  waVariables    Json?
+  waMediaUrl     String  @default("")
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
   journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   jobs          JourneyJob[]
   pushJobs      PushJob[]
+  whatsappJobs  WhatsappJob[]
 
   @@index([journeyId, stepNumber])
 }
@@ -348,6 +368,7 @@ model JourneyEnrollment {
   journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   jobs          JourneyJob[]
   pushJobs      PushJob[]
+  whatsappJobs  WhatsappJob[]
 
   @@index([shop, contactEmail])
   @@index([journeyId])
@@ -364,6 +385,7 @@ model JourneyJob {
   attempts        Int       @default(0)
   lastError       String    @default("")
   resendMessageId String    @default("")
+  providerMessageId String  @default("")
   sentAt          DateTime?
   openedAt        DateTime?
   clickedAt       DateTime?
@@ -376,6 +398,7 @@ model JourneyJob {
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
   @@index([resendMessageId])
+  @@index([providerMessageId])
 }
 
 // Browser push subscriptions — one row per browser per shop
@@ -415,4 +438,99 @@ model PushJob {
 
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
+}
+
+// Per-shop WhatsApp Business Account, connected via Meta Embedded Signup.
+// accessTokenEnc is AES-256-GCM ciphertext (see app/lib/crypto/secrets.server.js)
+// — the long-lived system-user token is never stored in plaintext.
+model WhatsappAccount {
+  id                 String    @id @default(cuid())
+  shop               String    @unique
+  wabaId             String    @default("")
+  phoneNumberId      String    @default("")
+  displayPhoneNumber String    @default("")
+  businessId         String    @default("")
+  accessTokenEnc     String    @default("")
+  status             String    @default("pending") // pending | connected | disconnected
+  connectedAt        DateTime?
+  lastError          String    @default("")
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+}
+
+// Meta-approved message templates (HSM) synced from a shop's WABA.
+model WhatsappTemplate {
+  id            String   @id @default(cuid())
+  shop          String
+  name          String
+  language      String
+  category      String   @default("MARKETING") // MARKETING | UTILITY | AUTHENTICATION
+  metaTemplateId String  @default("")
+  status        String   @default("PENDING")   // PENDING | APPROVED | REJECTED | DISABLED
+  bodyText      String   @default("")
+  components    Json?    // raw Meta component spec, used to map variables
+  lastSyncedAt  DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@unique([shop, name, language])
+  @@index([shop, status])
+}
+
+// WhatsApp opt-in record — one row per phone per shop. Mirrors PushSubscription's
+// contactEmail linkage back into the Contact graph.
+model WhatsappSubscription {
+  id            String    @id @default(cuid())
+  shop          String
+  phoneNumber   String    // E.164
+  contactEmail  String?
+  status        String    @default("subscribed") // subscribed | unsubscribed | invalid
+  optInMethod   String?   // popup | checkout | click_to_wa | imported | api
+  confirmedAt   DateTime? // double opt-in confirmation
+  lastInboundAt DateTime? // last customer-initiated message — drives 24h session window
+  optInAt       DateTime  @default(now())
+  optOutAt      DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([shop, phoneNumber])
+  @@index([shop, contactEmail])
+}
+
+// Scheduled WhatsApp send per whatsapp step per enrollment. Mirrors PushJob.
+model WhatsappJob {
+  id                String    @id @default(cuid())
+  shop              String
+  enrollmentId      String
+  stepId            String
+  scheduledFor      DateTime
+  status            String    @default("pending") // pending | processing | done | failed | cancelled
+  attempts          Int       @default(0)
+  lastError         String    @default("")
+  templateName      String    @default("")
+  providerMessageId String    @default("") // Meta wamid — matched by the status webhook
+  sentAt            DateTime?
+  deliveredAt       DateTime?
+  readAt            DateTime?
+  failedAt          DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  enrollment        JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step              JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
+
+  @@index([status, scheduledFor])
+  @@index([shop, enrollmentId])
+  @@index([providerMessageId])
+}
+
+// Suppression list for WhatsApp — parallel to EmailSuppression.
+model WhatsappSuppression {
+  id          String   @id @default(cuid())
+  shop        String
+  phoneNumber String
+  reason      String   // opt_out | blocked | invalid
+  createdAt   DateTime @default(now())
+
+  @@unique([shop, phoneNumber])
 }

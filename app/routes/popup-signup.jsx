@@ -1,5 +1,5 @@
 import prisma from "../db.server.js";
-import { sendEmail } from "../lib/email/resend.server.js";
+import { sendEmail, resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { renderConfirmationEmail } from "../lib/email/templates.server.js";
 import { generateConfirmToken } from "../lib/email/confirm.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
@@ -77,8 +77,8 @@ export const action = async ({ request }) => {
   const storeName = shopSettings?.senderName || shop;
   const brandColor = shopSettings?.brandColor || popupSettings?.brandColor || "#000000";
   const logoUrl = shopSettings?.logoUrl || popupSettings?.logoUrl || "";
-  const fromEmail = shopSettings?.senderEmail || process.env.RESEND_FROM_EMAIL || "noreply@retainify.app";
-  const from = `${storeName} <${fromEmail}>`;
+  const provider = resolveProvider(shopSettings);
+  const { from, replyTo } = resolveFrom({ settings: shopSettings, provider });
 
   const html = renderConfirmationEmail({ storeName, logoUrl, brandColor, confirmUrl });
 
@@ -91,13 +91,16 @@ export const action = async ({ request }) => {
   }
 
   // Fire-and-forget — don't block the popup response
-  sendEmail({
-    to: email,
-    from,
-    replyTo: shopSettings?.replyTo || fromEmail,
-    subject: `Confirm your email for ${storeName}`,
-    html,
-  }).catch((err) => console.error("[popup-signup] confirmation email failed:", err.message));
+  sendEmail(
+    {
+      to: email,
+      from,
+      replyTo,
+      subject: `Confirm your email for ${storeName}`,
+      html,
+    },
+    { shop, settings: shopSettings },
+  ).catch((err) => console.error("[popup-signup] confirmation email failed:", err.message));
 
   return new Response(JSON.stringify({ ok: true, message: "check_email" }), { status: 200, headers: CORS });
 };
