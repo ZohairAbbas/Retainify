@@ -93,6 +93,19 @@ async function handlePayload(body) {
     const changes = Array.isArray(entry?.changes) ? entry.changes : [];
     for (const change of changes) {
       const value = change?.value || {};
+
+      // Template lifecycle events (approval / category changes) — keyed by
+      // change.field, not by statuses/messages.
+      if (
+        change?.field === "message_template_status_update" ||
+        change?.field === "template_category_update"
+      ) {
+        await handleTemplateEvent(change.field, value).catch((e) =>
+          console.error("[wa-webhook] template handler:", e.message),
+        );
+        continue;
+      }
+
       const metadata = value?.metadata || {};
       const phoneNumberId = metadata.phone_number_id || "";
 
@@ -167,6 +180,39 @@ async function handleInbound(message, phoneNumberId) {
   const text = (message?.text?.body || "").trim().toLowerCase();
   if (shop && text && STOP_KEYWORDS.has(text)) {
     await recordOptOut({ shop, phoneNumber: from, reason: "opt_out" }).catch(() => {});
+  }
+}
+
+async function handleTemplateEvent(field, value) {
+  // Payloads carry the Meta template id + name/language and the new state.
+  const metaTemplateId = String(value?.message_template_id || "");
+  const name = value?.message_template_name || "";
+  const language = value?.message_template_language || "";
+
+  const data = {};
+  if (field === "message_template_status_update") {
+    const event = value?.event || value?.new_status || "";
+    if (event) data.status = String(event).toUpperCase();
+  } else if (field === "template_category_update") {
+    const cat = value?.new_category || value?.correct_category || "";
+    if (cat) data.category = String(cat).toUpperCase();
+  }
+  if (Object.keys(data).length === 0) return;
+  data.lastSyncedAt = new Date();
+
+  // Prefer matching by Meta's stable template id; fall back to name+language.
+  if (metaTemplateId) {
+    const res = await prisma.whatsappTemplate.updateMany({
+      where: { metaTemplateId },
+      data,
+    });
+    if (res.count > 0) return;
+  }
+  if (name && language) {
+    await prisma.whatsappTemplate.updateMany({
+      where: { name, language },
+      data,
+    });
   }
 }
 

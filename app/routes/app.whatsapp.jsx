@@ -4,7 +4,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { connectWhatsappAccount } from "../lib/whatsapp/embedded-signup.server.js";
-import { syncTemplates } from "../lib/whatsapp/templates.server.js";
+import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
 import { sendWhatsapp } from "../lib/whatsapp/index.server.js";
 import { normalizePhone } from "../lib/contacts/contacts.server.js";
 import Icons from "../components/ui/Icons.jsx";
@@ -86,6 +86,23 @@ export const action = async ({ request }) => {
     return { ok: true, synced: res.synced };
   }
 
+  if (intent === "create-template") {
+    const samples = [];
+    for (let i = 1; i <= 10; i++) {
+      const v = fd.get(`sample_${i}`);
+      if (v !== null) samples[i - 1] = String(v);
+    }
+    const res = await createTemplate(shop, {
+      name: String(fd.get("name") || ""),
+      language: String(fd.get("language") || "en_US"),
+      category: String(fd.get("category") || "MARKETING"),
+      bodyText: String(fd.get("bodyText") || ""),
+      samples,
+    });
+    if (!res.ok) return { ok: false, error: res.error || "Create failed." };
+    return { ok: true, created: true, status: res.status };
+  }
+
   if (intent === "send-test") {
     const to = normalizePhone(String(fd.get("to") || ""));
     const templateName = String(fd.get("templateName") || "");
@@ -112,12 +129,24 @@ export default function WhatsappPage() {
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
   const testFetcher = useFetcher();
+  const createFetcher = useFetcher();
 
   const isConnected = account?.status === "connected";
   const approvedTemplates = templates.filter((t) => t.status === "APPROVED");
 
   const [testPhone, setTestPhone] = useState("");
   const [testTemplate, setTestTemplate] = useState("");
+
+  // Template composer
+  const [tplName, setTplName] = useState("");
+  const [tplLang, setTplLang] = useState("en_US");
+  const [tplCategory, setTplCategory] = useState("MARKETING");
+  const [tplBody, setTplBody] = useState("");
+  const varCount = Math.max(
+    0,
+    ...[...tplBody.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1])),
+  );
+  const [samples, setSamples] = useState({});
 
   function toggleEnabled() {
     toggleFetcher.submit({ intent: "toggle-enabled" }, { method: "post" });
@@ -133,6 +162,17 @@ export default function WhatsappPage() {
       { intent: "send-test", to: testPhone, templateName: testTemplate },
       { method: "post" },
     );
+  }
+  function createTemplateNow() {
+    const payload = {
+      intent: "create-template",
+      name: tplName,
+      language: tplLang,
+      category: tplCategory,
+      bodyText: tplBody,
+    };
+    for (let i = 1; i <= varCount; i++) payload[`sample_${i}`] = samples[i] || "";
+    createFetcher.submit(payload, { method: "post" });
   }
 
   return (
@@ -236,6 +276,93 @@ export default function WhatsappPage() {
                 ))}
               </div>
             )}
+          </section>
+
+          {/* Create template */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>Create a template</div>
+            <div className="t-small muted" style={{ marginBottom: 16 }}>
+              Templates are reviewed by Meta before they can be sent. Approval usually takes a few minutes to a day.
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+                <div>
+                  <label className="field-label">Name</label>
+                  <input
+                    className="input"
+                    value={tplName}
+                    onChange={(e) => setTplName(e.target.value.toLowerCase().replace(/[^a-z0-9_]/g, "_"))}
+                    placeholder="abandoned_cart_reminder"
+                  />
+                  <div className="field-help">Lowercase, numbers, underscores only.</div>
+                </div>
+                <div>
+                  <label className="field-label">Language</label>
+                  <input
+                    className="input"
+                    value={tplLang}
+                    onChange={(e) => setTplLang(e.target.value)}
+                    placeholder="en_US"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="field-label">Category</label>
+                <select className="input" value={tplCategory} onChange={(e) => setTplCategory(e.target.value)}>
+                  <option value="MARKETING">Marketing</option>
+                  <option value="UTILITY">Utility</option>
+                  <option value="AUTHENTICATION">Authentication</option>
+                </select>
+              </div>
+              <div>
+                <label className="field-label">Body</label>
+                <textarea
+                  className="input"
+                  rows={4}
+                  value={tplBody}
+                  onChange={(e) => setTplBody(e.target.value)}
+                  placeholder="Hi {{1}}, your cart is waiting! Finish checkout: {{2}}"
+                />
+                <div className="field-help">Use {"{{1}}"}, {"{{2}}"}… for variables.</div>
+              </div>
+              {varCount > 0 && (
+                <div>
+                  <label className="field-label">Sample values</label>
+                  <div className="field-help" style={{ marginBottom: 8 }}>
+                    Meta requires an example for each variable.
+                  </div>
+                  {Array.from({ length: varCount }, (_, i) => i + 1).map((n) => (
+                    <input
+                      key={n}
+                      className="input"
+                      style={{ marginBottom: 8 }}
+                      value={samples[n] || ""}
+                      onChange={(e) => setSamples((s) => ({ ...s, [n]: e.target.value }))}
+                      placeholder={`Example for {{${n}}}`}
+                    />
+                  ))}
+                </div>
+              )}
+              {createFetcher.data?.ok && (
+                <div className="t-small" style={{ background: "var(--success-bg)", color: "var(--success-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
+                  Template submitted — status: {createFetcher.data.status || "PENDING"}. It will be sendable once Meta approves it.
+                </div>
+              )}
+              {createFetcher.data?.ok === false && (
+                <div className="t-small" style={{ background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
+                  {createFetcher.data.error}
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={createTemplateNow}
+                  disabled={createFetcher.state !== "idle" || !isConnected || !tplName || !tplBody}
+                >
+                  {createFetcher.state !== "idle" ? "Submitting…" : "Submit for approval"}
+                </button>
+              </div>
+            </div>
           </section>
 
           {/* Subscribers */}
