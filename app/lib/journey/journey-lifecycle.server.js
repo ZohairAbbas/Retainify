@@ -126,6 +126,24 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         pushIconUrl: s.pushIconUrl || "",
         pushClickUrl: s.pushClickUrl || "",
       });
+    } else if (s.nodeType === "whatsapp") {
+      rows.push({
+        nodeType: "whatsapp",
+        delayHours: cumulativeHours,
+        positionY: positionY++,
+        stepNumber: positionY,
+        subject: "",
+        previewText: "",
+        emailName: "",
+        templateStyle: "classic",
+        discountPct: 0,
+        isEnabled: s.isEnabled !== false,
+        waTemplateName: s.waTemplateName || "",
+        waLanguage: s.waLanguage || "",
+        // Prisma Json column — store the object directly (no stringify).
+        waVariables: s.waVariables || {},
+        waMediaUrl: s.waMediaUrl || "",
+      });
     } else {
       const emailBlocks = isEmptyBlocks(s.emailBlocks)
         ? defaultEmailBlocks(s.subject)
@@ -158,7 +176,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
     where: {
       journeyId,
       isArchived: false,
-      OR: [{ jobs: { some: {} } }, { pushJobs: { some: {} } }],
+      OR: [{ jobs: { some: {} } }, { pushJobs: { some: {} } }, { whatsappJobs: { some: {} } }],
     },
     select: { id: true },
   });

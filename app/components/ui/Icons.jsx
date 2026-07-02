@@ -62,6 +62,7 @@ export const IconLogo = (p) => <I {...p}><circle cx="12" cy="12" r="9"/><path d=
 export const IconDiscount = (p) => <I {...p}><path d="M20 13.4 13.4 20a2 2 0 0 1-2.8 0L3 12.4V4h8.4l7.6 7.6c.8.7.8 1.9 0 2.6z"/><circle cx="8" cy="8" r="1" fill="currentColor"/><path d="m9 14 5-5"/></I>;
 export const IconPhone = (p) => <I {...p}><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 19h2"/></I>;
 export const IconDesktop = (p) => <I {...p}><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8M12 17v4"/></I>;
+export const IconWhatsapp = (p) => <I {...p}><path d="M4 20l1.4-4A8 8 0 1 1 9 19.6L4 20z"/><path d="M9 9c0 3 2.5 5.5 5.5 5.5"/><path d="M9 9c0-.6.4-1 1-1M14.5 14.5c.6 0 1-.4 1-1"/></I>;
 export const IconSend = (p) => <I {...p}><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></I>;
 export const IconArrowUp = (p) => <I {...p}><path d="M12 19V5M5 12l7-7 7 7"/></I>;
 export const IconArrowDown = (p) => <I {...p}><path d="M12 5v14M5 12l7 7 7-7"/></I>;
@@ -128,6 +129,7 @@ const Icons = {
   Logo: IconLogo,
   Discount: IconDiscount,
   Phone: IconPhone,
+  Whatsapp: IconWhatsapp,
   Desktop: IconDesktop,
   Send: IconSend,
   ArrowUp: IconArrowUp,

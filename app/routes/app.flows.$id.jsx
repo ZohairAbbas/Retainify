@@ -30,12 +30,17 @@ export const loader = async ({ request, params }) => {
   const shop = session.shop;
   const { id } = params;
 
-  const [journey, settings] = await Promise.all([
+  const [journey, settings, whatsappTemplates] = await Promise.all([
     prisma.journey.findFirst({
       where: { id, shop },
       include: { steps: { where: { isArchived: false }, orderBy: { positionY: "asc" } } },
     }),
     prisma.shopSettings.findUnique({ where: { shop } }),
+    prisma.whatsappTemplate.findMany({
+      where: { shop, status: "APPROVED" },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, language: true, bodyText: true },
+    }),
   ]);
 
   if (!journey) {
@@ -86,6 +91,7 @@ export const loader = async ({ request, params }) => {
     stats,
     segmentChoices,
     triggerSegmentCount,
+    whatsappTemplates,
   };
 };
 
@@ -108,6 +114,17 @@ function expandCanvasNodes(steps) {
         pushBody: s.pushBody,
         pushIconUrl: s.pushIconUrl,
         pushClickUrl: s.pushClickUrl,
+        delayHours: s.delayHours,
+        isEnabled: s.isEnabled,
+      });
+    } else if (s.nodeType === "whatsapp") {
+      nodes.push({
+        kind: "whatsapp",
+        id: s.id,
+        waTemplateName: s.waTemplateName,
+        waLanguage: s.waLanguage,
+        waVariables: s.waVariables || {},
+        waMediaUrl: s.waMediaUrl,
         delayHours: s.delayHours,
         isEnabled: s.isEnabled,
       });
@@ -179,6 +196,17 @@ export const action = async ({ request, params }) => {
             pushClickUrl: n.pushClickUrl || "",
           };
         }
+        if (n.kind === "whatsapp") {
+          return {
+            nodeType: "whatsapp",
+            delayHours: Number(n.delayHours) || 0,
+            isEnabled: n.isEnabled !== false,
+            waTemplateName: n.waTemplateName || "",
+            waLanguage: n.waLanguage || "",
+            waVariables: n.waVariables || {},
+            waMediaUrl: n.waMediaUrl || "",
+          };
+        }
         return {
           nodeType: "email",
           subject: n.subject || "",
@@ -220,7 +248,7 @@ export const action = async ({ request, params }) => {
 };
 
 export default function FlowBuilder() {
-  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount } = useLoaderData();
+  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [] } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -297,6 +325,17 @@ export default function FlowBuilder() {
         pushBody: "",
         pushIconUrl: "",
         pushClickUrl: "",
+        delayHours: 1,
+        isEnabled: true,
+      };
+    } else if (kind === "whatsapp") {
+      newNode = {
+        kind: "whatsapp",
+        id: `tmp-${Date.now()}`,
+        waTemplateName: "",
+        waLanguage: "",
+        waVariables: {},
+        waMediaUrl: "",
         delayHours: 1,
         isEnabled: true,
       };
@@ -527,6 +566,7 @@ export default function FlowBuilder() {
             segmentChoices={segmentChoices}
             triggerSegmentCount={triggerSegmentCount}
             settings={settings}
+            whatsappTemplates={whatsappTemplates}
             onChange={(patch) => selected && updateNode(selected.id, patch)}
             onOpenEditor={setEmailEditorNodeId}
             // Block destructive cross-route nav when there are unsaved
@@ -714,6 +754,33 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
     );
   }
 
+  if (node.kind === "whatsapp") {
+    return (
+      <div
+        className={`rt-node rt-node-whatsapp${selected ? " rt-selected" : ""}`}
+        onClick={onSelect}
+      >
+        <div className="rt-node-head">
+          <div className="rt-node-glyph rt-tint-whatsapp"><Icons.Whatsapp size={14} /></div>
+          <div className="rt-node-title">{node.waTemplateName || "WhatsApp message"}</div>
+          <div className="rt-node-actions">
+            <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
+              <Icons.Copy size={13} />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Icons.Trash size={13} />
+            </button>
+          </div>
+        </div>
+        <div className="rt-node-body">
+          <div className="rt-node-line muted">
+            {node.waTemplateName ? `Template · ${node.waLanguage || "en_US"}` : "No template selected"}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Email node
   return (
     <div
@@ -829,6 +896,7 @@ function InsertMenu({ open, onClose, onAdd }) {
         <div className="t-micro muted rt-insert-heading">Send</div>
         {item("Mail", "Email", "email")}
         {item("Bell", "Push notification", "push")}
+        {item("Whatsapp", "WhatsApp message", "whatsapp")}
         {item("Sms", "SMS message", "sms", true)}
         <div className="t-micro muted rt-insert-heading">Timing</div>
         {item("Clock", "Wait (delay)", "delay")}
@@ -840,7 +908,7 @@ function InsertMenu({ open, onClose, onAdd }) {
   );
 }
 
-function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, onChange, onOpenEditor, confirmLeave }) {
+function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave }) {
   if (!node) {
     return (
       <div className="rt-ins">
@@ -1140,6 +1208,12 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
     );
   }
 
+  if (node.kind === "whatsapp") {
+    return (
+      <WhatsappInspector node={node} onChange={onChange} whatsappTemplates={whatsappTemplates} />
+    );
+  }
+
   if (node.kind === "delay") {
     return (
       <div className="rt-ins">
@@ -1213,6 +1287,139 @@ function DelayEditor({ node, onChange }) {
         <option value="hours">hours</option>
         <option value="days">days</option>
       </select>
+    </div>
+  );
+}
+
+// Merge tags the WhatsApp worker's resolveVar understands, plus a literal mode.
+const WA_MERGE_TAGS = [
+  { value: "contactName", label: "Contact name" },
+  { value: "recoveryUrl", label: "Cart recovery URL" },
+];
+
+function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
+  const selectedTpl = whatsappTemplates.find((t) => t.name === node.waTemplateName) || null;
+  // Positional params {{1}},{{2}}… declared in the template body.
+  const paramNums = selectedTpl
+    ? Array.from(new Set([...(selectedTpl.bodyText || "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1]))))
+        .sort((a, b) => a - b)
+    : [];
+  const vars = node.waVariables || {};
+
+  function pickTemplate(name) {
+    const tpl = whatsappTemplates.find((t) => t.name === name);
+    // Reset variable mappings when the template changes.
+    onChange({ waTemplateName: name, waLanguage: tpl?.language || "", waVariables: {} });
+  }
+
+  function setVar(num, value) {
+    onChange({ waVariables: { ...vars, [String(num)]: value } });
+  }
+
+  return (
+    <div className="rt-ins">
+      <div className="rt-ins-head">
+        <div className="rt-node-glyph rt-tint-whatsapp"><Icons.Whatsapp size={14} /></div>
+        <div>
+          <div className="t-micro muted">WhatsApp message</div>
+          <div className="t-h2" style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>
+            {node.waTemplateName || "WhatsApp message"}
+          </div>
+        </div>
+      </div>
+
+      <div className="rt-ins-section">
+        <div className="t-micro muted" style={{ marginBottom: 12 }}>Template</div>
+        {whatsappTemplates.length === 0 ? (
+          <div className="field-help">
+            No approved templates yet. <a href="/app/whatsapp">Connect WhatsApp and sync templates</a> to pick one here.
+          </div>
+        ) : (
+          <>
+            <select
+              className="input"
+              value={node.waTemplateName || ""}
+              onChange={(e) => pickTemplate(e.target.value)}
+            >
+              <option value="">Select a template…</option>
+              {whatsappTemplates.map((t) => (
+                <option key={t.id} value={t.name}>{t.name} ({t.language})</option>
+              ))}
+            </select>
+            {selectedTpl?.bodyText && (
+              <div className="field-help" style={{ marginTop: 8, whiteSpace: "pre-wrap" }}>{selectedTpl.bodyText}</div>
+            )}
+          </>
+        )}
+      </div>
+
+      {paramNums.length > 0 && (
+        <div className="rt-ins-section">
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Variables</div>
+          {paramNums.map((num) => {
+            const current = vars[String(num)] ?? "";
+            const isMergeTag = WA_MERGE_TAGS.some((t) => t.value === current);
+            const mode = current === "" ? "" : isMergeTag ? current : "__literal__";
+            return (
+              <div key={num} style={{ marginBottom: 12 }}>
+                <label className="field-label">{`{{${num}}}`}</label>
+                <select
+                  className="input"
+                  value={mode}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === "__literal__") setVar(num, " ");
+                    else setVar(num, v);
+                  }}
+                >
+                  <option value="">Choose value…</option>
+                  {WA_MERGE_TAGS.map((t) => (
+                    <option key={t.value} value={t.value}>{t.label}</option>
+                  ))}
+                  <option value="__literal__">Custom text…</option>
+                </select>
+                {mode === "__literal__" && (
+                  <input
+                    className="input"
+                    style={{ marginTop: 6 }}
+                    value={current}
+                    onChange={(e) => setVar(num, e.target.value)}
+                    placeholder="Literal text"
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <div className="rt-ins-section">
+        <label className="field-label">Header image URL <span className="faint">(optional)</span></label>
+        <input
+          className="input"
+          value={node.waMediaUrl || ""}
+          onChange={(e) => onChange({ waMediaUrl: e.target.value })}
+          placeholder="https://…"
+        />
+        <div className="field-help">Only if the template has a media header.</div>
+      </div>
+
+      <div className="rt-ins-section">
+        <div className="t-micro muted" style={{ marginBottom: 12 }}>Timing</div>
+        <DelayEditor node={{ hours: node.delayHours }} onChange={(p) => onChange({ delayHours: p.hours })} />
+      </div>
+
+      <div className="rt-ins-section">
+        <label className="rt-toggle">
+          <input
+            type="checkbox"
+            checked={node.isEnabled !== false}
+            onChange={() => onChange({ isEnabled: node.isEnabled === false })}
+          />
+          <span className="rt-toggle-switch" />
+          <span>Step enabled</span>
+        </label>
+      </div>
     </div>
   );
 }

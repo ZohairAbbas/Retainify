@@ -16,6 +16,7 @@ const NAV_ACTIVE = [
   { id: "home",     label: "Dashboard", href: "/app",          icon: "Home" },
   { id: "flows",    label: "Flows",     href: "/app/flows",    icon: "Flow" },
   { id: "push",     label: "Push",      href: "/app/push",     icon: "Bell" },
+  { id: "whatsapp", label: "WhatsApp",  href: "/app/whatsapp", icon: "Whatsapp" },
   { id: "contacts", label: "Contacts",  href: "/app/contacts", icon: "Users" },
   { id: "segments", label: "Segments",  href: "/app/segments", icon: "Sliders" },
   { id: "popup",    label: "Popup",     href: "/app/popup",    icon: "Tab" },

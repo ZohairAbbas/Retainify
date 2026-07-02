@@ -57,6 +57,7 @@
   --node-tag-ink:     #2A4A50;   --node-tag-bg:     #D6E6E8;
   --node-exit-ink:    #5A3F38;   --node-exit-bg:    #E4DAD7;
   --node-push-ink:    #5B21B6;   --node-push-bg:    #EDE9FE;
+  --node-whatsapp-ink: #075E54;  --node-whatsapp-bg: #DCF8E8;
 
   /* ── Type ─────────────────────────────────────────────────────────── */
   --font-display: "Instrument Serif", "Cambria", "Times New Roman", Georgia, serif;
