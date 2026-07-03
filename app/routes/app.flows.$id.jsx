@@ -1404,6 +1404,13 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
         <div className="field-help">Only if the template has a media header.</div>
       </div>
 
+      {selectedTpl?.bodyText && (
+        <div className="rt-ins-section">
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Preview</div>
+          <WhatsappPreview bodyText={selectedTpl.bodyText} vars={vars} mediaUrl={node.waMediaUrl} />
+        </div>
+      )}
+
       <div className="rt-ins-section">
         <div className="t-micro muted" style={{ marginBottom: 12 }}>Timing</div>
         <DelayEditor node={{ hours: node.delayHours }} onChange={(p) => onChange({ delayHours: p.hours })} />
@@ -1419,6 +1426,50 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
           <span className="rt-toggle-switch" />
           <span>Step enabled</span>
         </label>
+      </div>
+    </div>
+  );
+}
+
+// A lightweight WhatsApp chat-bubble preview. Substitutes {{n}} in the template
+// body with a readable label for the mapped variable so merchants see the shape
+// of the message as they configure it.
+function WhatsappPreview({ bodyText, vars = {}, mediaUrl }) {
+  const labelFor = (num) => {
+    const ref = vars[String(num)];
+    if (ref === "contactName") return "Alex";
+    if (ref === "recoveryUrl") return "yourstore.com/cart";
+    if (ref && String(ref).trim()) return String(ref);
+    return `{{${num}}}`;
+  };
+  const rendered = String(bodyText).replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => labelFor(Number(n)));
+
+  return (
+    <div style={{ background: "#E5DDD5", borderRadius: "var(--r-3)", padding: 16 }}>
+      <div
+        style={{
+          background: "#FFFFFF",
+          borderRadius: 8,
+          padding: mediaUrl ? 0 : "8px 10px",
+          maxWidth: 260,
+          boxShadow: "0 1px 1px rgba(0,0,0,.12)",
+          overflow: "hidden",
+          fontFamily: "var(--font-ui)",
+        }}
+      >
+        {mediaUrl && (
+          // eslint-disable-next-line jsx-a11y/img-redundant-alt
+          <img
+            src={mediaUrl}
+            alt="header"
+            style={{ width: "100%", maxHeight: 140, objectFit: "cover", display: "block" }}
+            onError={(e) => { e.currentTarget.style.display = "none"; }}
+          />
+        )}
+        <div style={{ padding: mediaUrl ? "8px 10px" : 0 }}>
+          <div style={{ fontSize: 13, color: "#111", lineHeight: 1.4, whiteSpace: "pre-wrap" }}>{rendered}</div>
+          <div style={{ fontSize: 10, color: "#9aa0a6", textAlign: "right", marginTop: 4 }}>now</div>
+        </div>
       </div>
     </div>
   );

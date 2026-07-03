@@ -83,21 +83,38 @@ async function processWhatsappJob(job) {
     return;
   }
 
-  // Resolve the recipient phone via the contact's WhatsApp opt-in.
+  // Resolve the recipient phone. A confirmed WhatsApp opt-in is always the
+  // preferred source. When the shop has disabled the opt-in requirement, fall
+  // back to the contact's phone (e.g. captured at checkout / from Shopify).
   const sub = await prisma.whatsappSubscription.findFirst({
     where: { shop: job.shop, contactEmail: enrollment.contactEmail, status: "subscribed" },
   });
-  if (!sub || !sub.confirmedAt) {
+  const requireOptIn = settings.whatsappRequireOptIn !== false;
+
+  let phoneNumber = sub?.confirmedAt ? sub.phoneNumber : "";
+  if (!phoneNumber && !requireOptIn) {
+    // Opt-in not required — use whatever phone we have for this contact.
+    const contact = await prisma.contact.findUnique({
+      where: { shop_email: { shop: job.shop, email: enrollment.contactEmail } },
+      select: { phone: true, whatsappStatus: true },
+    });
+    // A contact that explicitly opted out/invalid is never messaged, even here.
+    if (contact?.phone && contact.whatsappStatus !== "unsubscribed" && contact.whatsappStatus !== "invalid") {
+      phoneNumber = contact.phone;
+    }
+  }
+
+  if (!phoneNumber) {
     console.warn(
-      `[whatsapp-worker] job=${job.id} no confirmed subscription for contactEmail=${enrollment.contactEmail} on shop=${job.shop} — skipping`,
+      `[whatsapp-worker] job=${job.id} no ${requireOptIn ? "confirmed opt-in" : "phone"} for contactEmail=${enrollment.contactEmail} on shop=${job.shop} — skipping`,
     );
     await markWhatsappJobDone(job.id);
     return;
   }
 
-  // Consent / suppression gate.
+  // Suppression / STOP opt-out — ALWAYS enforced regardless of opt-in mode.
   const suppressed = await prisma.whatsappSuppression.findUnique({
-    where: { shop_phoneNumber: { shop: job.shop, phoneNumber: sub.phoneNumber } },
+    where: { shop_phoneNumber: { shop: job.shop, phoneNumber } },
   });
   if (suppressed) {
     console.warn(`[whatsapp-worker] job=${job.id} phone suppressed (${suppressed.reason}) — skipping`);
@@ -117,7 +134,7 @@ async function processWhatsappJob(job) {
 
   const result = await sendWhatsapp(
     {
-      to: sub.phoneNumber,
+      to: phoneNumber,
       templateName: step.waTemplateName,
       language: step.waLanguage || "en_US",
       components,
@@ -138,24 +155,24 @@ async function processWhatsappJob(job) {
   if (result.invalid) {
     // Permanent recipient failure — suppress the number, don't retry.
     await prisma.whatsappSuppression.upsert({
-      where: { shop_phoneNumber: { shop: job.shop, phoneNumber: sub.phoneNumber } },
-      create: { shop: job.shop, phoneNumber: sub.phoneNumber, reason: "invalid" },
+      where: { shop_phoneNumber: { shop: job.shop, phoneNumber } },
+      create: { shop: job.shop, phoneNumber, reason: "invalid" },
       update: { reason: "invalid" },
     });
-    await prisma.whatsappSubscription.update({
-      where: { id: sub.id },
-      data: { status: "invalid" },
-    });
-    if (sub.contactEmail) {
-      await prisma.contact
-        .updateMany({
-          where: { shop: job.shop, email: sub.contactEmail },
-          data: { whatsappStatus: "invalid" },
-        })
-        .catch(() => {});
+    if (sub) {
+      await prisma.whatsappSubscription.update({
+        where: { id: sub.id },
+        data: { status: "invalid" },
+      }).catch(() => {});
     }
+    await prisma.contact
+      .updateMany({
+        where: { shop: job.shop, email: enrollment.contactEmail },
+        data: { whatsappStatus: "invalid" },
+      })
+      .catch(() => {});
     await markWhatsappJobDone(job.id, { failedAt: new Date(), lastError: result.error || "invalid recipient" });
-    console.warn(`[whatsapp-worker] job=${job.id} permanent failure — suppressed ${sub.phoneNumber}`);
+    console.warn(`[whatsapp-worker] job=${job.id} permanent failure — suppressed ${phoneNumber}`);
     return;
   }
 

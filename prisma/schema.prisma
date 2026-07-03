@@ -51,6 +51,11 @@ model ShopSettings {
   // once the merchant connects a WABA via Embedded Signup and approval lands.
   whatsappEnabled  Boolean  @default(false)
   whatsappProvider String   @default("meta") // meta | (future BSP)
+  // When true (default, Meta-compliant), WhatsApp only sends to confirmed
+  // opt-ins. When a merchant explicitly disables this, the worker will send to
+  // any enrolled contact that has a phone number (opt-outs/suppression are
+  // ALWAYS honored regardless of this flag).
+  whatsappRequireOptIn Boolean @default(true)
   // Contacts feature — one-time backfill flag + Shopify customer sync state
   contactsBackfilledAt              DateTime?
   lastShopifyCustomerSyncAt         DateTime?

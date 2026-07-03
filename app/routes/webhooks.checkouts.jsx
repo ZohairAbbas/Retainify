@@ -20,6 +20,13 @@ export const action = async ({ request }) => {
     payload.billing_address?.name ||
     `${payload.billing_address?.first_name || ""} ${payload.billing_address?.last_name || ""}`.trim() ||
     "";
+  // Phone for the WhatsApp channel — checkouts carry it on the checkout itself
+  // or the billing/shipping address.
+  const phone =
+    payload.phone ||
+    payload.billing_address?.phone ||
+    payload.shipping_address?.phone ||
+    "";
 
   const lineItems = (payload.line_items || []).map((item) => ({
     title: item.title,
@@ -57,6 +64,7 @@ export const action = async ({ request }) => {
       shop,
       email,
       name: customerName,
+      phone: phone || undefined,
       source: "cart_abandoned",
     }).catch((err) =>
       console.error("[webhook] upsertContact (checkout_create) failed:", err.message),
@@ -93,6 +101,7 @@ export const action = async ({ request }) => {
       shop,
       email,
       name: customerName,
+      phone: phone || undefined,
       source: "cart_abandoned",
     }).catch((err) =>
       console.error("[webhook] upsertContact (checkout_update) failed:", err.message),

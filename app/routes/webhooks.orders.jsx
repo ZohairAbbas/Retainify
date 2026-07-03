@@ -2,12 +2,32 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { enrollContact } from "../lib/journey/journey-queue.server.js";
 import { evaluateExitCriteria } from "../lib/journey/exit-criteria.server.js";
+import { upsertContact } from "../lib/contacts/contacts.server.js";
 
 export const action = async ({ request }) => {
   const { shop, payload } = await authenticate.webhook(request);
 
   const checkoutToken = payload.checkout_token;
   const customerEmail = payload.email || payload.contact_email;
+  const phone =
+    payload.phone ||
+    payload.customer?.phone ||
+    payload.billing_address?.phone ||
+    payload.shipping_address?.phone ||
+    "";
+
+  // Capture the phone for the WhatsApp channel (used when opt-in is not required).
+  if (customerEmail && phone) {
+    const firstName = payload.customer?.first_name || "";
+    const lastName = payload.customer?.last_name || "";
+    await upsertContact({
+      shop,
+      email: customerEmail,
+      name: [firstName, lastName].filter(Boolean).join(" "),
+      phone,
+      source: "shopify_customer",
+    }).catch((err) => console.error("[webhook] upsertContact (orders) failed:", err.message));
+  }
 
   // Mark abandoned cart recovered if this order matches one. Pending journey
   // jobs are cancelled via evaluateExitCriteria below (cart_recovered event).

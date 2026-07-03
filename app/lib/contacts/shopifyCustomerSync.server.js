@@ -9,6 +9,7 @@ const CUSTOMERS_QUERY = `#graphql
       nodes {
         id
         email
+        phone
         firstName
         lastName
         createdAt
@@ -105,6 +106,7 @@ async function runSync(shop) {
           shop,
           email: node.email,
           name,
+          phone: node.phone || undefined,
           source: "shopify_customer",
           shopifyCustomerId: node.id,
           subscriptionStatus: isSubscribed ? "subscribed" : undefined,

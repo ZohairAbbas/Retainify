@@ -5,7 +5,7 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { connectWhatsappAccount } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
-import { sendWhatsapp } from "../lib/whatsapp/index.server.js";
+import { sendWhatsapp, sendWhatsappText } from "../lib/whatsapp/index.server.js";
 import { normalizePhone } from "../lib/contacts/contacts.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
@@ -35,6 +35,7 @@ export const loader = async ({ request }) => {
         }
       : null,
     whatsappEnabled: settings?.whatsappEnabled ?? false,
+    whatsappRequireOptIn: settings?.whatsappRequireOptIn ?? true,
     subCount,
     templates,
     // eslint-disable-next-line no-undef
@@ -58,6 +59,17 @@ export const action = async ({ request }) => {
       update: { whatsappEnabled: !current?.whatsappEnabled },
     });
     return { ok: true, toggled: true };
+  }
+
+  if (intent === "toggle-require-optin") {
+    const current = await prisma.shopSettings.findUnique({ where: { shop } });
+    const next = !(current?.whatsappRequireOptIn ?? true);
+    await prisma.shopSettings.upsert({
+      where: { shop },
+      create: { shop, whatsappRequireOptIn: next },
+      update: { whatsappRequireOptIn: next },
+    });
+    return { ok: true, requireOptIn: next };
   }
 
   if (intent === "connect") {
@@ -92,12 +104,30 @@ export const action = async ({ request }) => {
       const v = fd.get(`sample_${i}`);
       if (v !== null) samples[i - 1] = String(v);
     }
+    const headerFormat = String(fd.get("headerFormat") || "NONE");
+    const header =
+      headerFormat === "TEXT"
+        ? { format: "TEXT", text: String(fd.get("headerText") || "") }
+        : headerFormat === "IMAGE"
+          ? { format: "IMAGE", sampleUrl: String(fd.get("headerSampleUrl") || "") }
+          : undefined;
+
+    const buttons = [];
+    for (let i = 1; i <= 3; i++) {
+      const text = fd.get(`btn_${i}_text`);
+      if (text === null || !String(text).trim()) continue;
+      const type = String(fd.get(`btn_${i}_type`) || "QUICK_REPLY");
+      buttons.push({ type, text: String(text), url: String(fd.get(`btn_${i}_url`) || "") });
+    }
+
     const res = await createTemplate(shop, {
       name: String(fd.get("name") || ""),
       language: String(fd.get("language") || "en_US"),
       category: String(fd.get("category") || "MARKETING"),
       bodyText: String(fd.get("bodyText") || ""),
       samples,
+      header,
+      buttons,
     });
     if (!res.ok) return { ok: false, error: res.error || "Create failed." };
     return { ok: true, created: true, status: res.status };
@@ -105,10 +135,19 @@ export const action = async ({ request }) => {
 
   if (intent === "send-test") {
     const to = normalizePhone(String(fd.get("to") || ""));
-    const templateName = String(fd.get("templateName") || "");
+    const mode = String(fd.get("mode") || "template"); // template | text
     if (!to) return { ok: false, error: "Enter a test phone number in E.164 format." };
-    if (!templateName) return { ok: false, error: "Pick an approved template." };
 
+    if (mode === "text") {
+      const text = String(fd.get("text") || "");
+      if (!text.trim()) return { ok: false, error: "Enter a message to send." };
+      const result = await sendWhatsappText({ to, text }, { shop });
+      if (!result.ok) return { ok: false, error: result.error || "Send failed." };
+      return { ok: true, sent: true };
+    }
+
+    const templateName = String(fd.get("templateName") || "");
+    if (!templateName) return { ok: false, error: "Pick an approved template." };
     const tpl = await prisma.whatsappTemplate.findFirst({
       where: { shop, name: templateName, status: "APPROVED" },
     });
@@ -124,18 +163,21 @@ export const action = async ({ request }) => {
 };
 
 export default function WhatsappPage() {
-  const { account, whatsappEnabled, subCount, templates, metaAppId, esConfigId } = useLoaderData();
+  const { account, whatsappEnabled, whatsappRequireOptIn, subCount, templates, metaAppId, esConfigId } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
   const testFetcher = useFetcher();
   const createFetcher = useFetcher();
+  const optInFetcher = useFetcher();
 
   const isConnected = account?.status === "connected";
   const approvedTemplates = templates.filter((t) => t.status === "APPROVED");
 
   const [testPhone, setTestPhone] = useState("");
   const [testTemplate, setTestTemplate] = useState("");
+  const [testMode, setTestMode] = useState("template"); // template | text
+  const [testText, setTestText] = useState("Hello from Retainify 👋");
 
   // Template composer
   const [tplName, setTplName] = useState("");
@@ -147,10 +189,22 @@ export default function WhatsappPage() {
     ...[...tplBody.matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1])),
   );
   const [samples, setSamples] = useState({});
+  const [headerFormat, setHeaderFormat] = useState("NONE"); // NONE | TEXT | IMAGE
+  const [headerText, setHeaderText] = useState("");
+  const [headerSampleUrl, setHeaderSampleUrl] = useState("");
+  const [buttons, setButtons] = useState([]); // [{ type, text, url }]
 
   function toggleEnabled() {
     toggleFetcher.submit({ intent: "toggle-enabled" }, { method: "post" });
   }
+  function toggleRequireOptIn() {
+    optInFetcher.submit({ intent: "toggle-require-optin" }, { method: "post" });
+  }
+  // Optimistic value so the warning shows immediately on toggle.
+  const requireOptIn =
+    optInFetcher.state !== "idle" && optInFetcher.formData
+      ? !whatsappRequireOptIn
+      : optInFetcher.data?.requireOptIn ?? whatsappRequireOptIn;
   function disconnect() {
     connectFetcher.submit({ intent: "disconnect" }, { method: "post" });
   }
@@ -158,10 +212,11 @@ export default function WhatsappPage() {
     syncFetcher.submit({ intent: "sync-templates" }, { method: "post" });
   }
   function sendTest() {
-    testFetcher.submit(
-      { intent: "send-test", to: testPhone, templateName: testTemplate },
-      { method: "post" },
-    );
+    const payload =
+      testMode === "text"
+        ? { intent: "send-test", mode: "text", to: testPhone, text: testText }
+        : { intent: "send-test", mode: "template", to: testPhone, templateName: testTemplate };
+    testFetcher.submit(payload, { method: "post" });
   }
   function createTemplateNow() {
     const payload = {
@@ -170,9 +225,28 @@ export default function WhatsappPage() {
       language: tplLang,
       category: tplCategory,
       bodyText: tplBody,
+      headerFormat,
     };
     for (let i = 1; i <= varCount; i++) payload[`sample_${i}`] = samples[i] || "";
+    if (headerFormat === "TEXT") payload.headerText = headerText;
+    if (headerFormat === "IMAGE") payload.headerSampleUrl = headerSampleUrl;
+    buttons.forEach((b, idx) => {
+      const i = idx + 1;
+      payload[`btn_${i}_type`] = b.type;
+      payload[`btn_${i}_text`] = b.text;
+      payload[`btn_${i}_url`] = b.url || "";
+    });
     createFetcher.submit(payload, { method: "post" });
+  }
+  function addButton() {
+    if (buttons.length >= 3) return;
+    setButtons((b) => [...b, { type: "QUICK_REPLY", text: "", url: "" }]);
+  }
+  function updateButton(idx, patch) {
+    setButtons((b) => b.map((x, i) => (i === idx ? { ...x, ...patch } : x)));
+  }
+  function removeButton(idx) {
+    setButtons((b) => b.filter((_, i) => i !== idx));
   }
 
   return (
@@ -241,6 +315,43 @@ export default function WhatsappPage() {
                 <span className="rt-toggle-switch" />
               </label>
             </div>
+          </section>
+
+          {/* Audience / consent */}
+          <section className="rt-form-section">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ maxWidth: 460 }}>
+                <div className="t-micro muted" style={{ marginBottom: 4 }}>Require opt-in</div>
+                <div className="t-body" style={{ fontWeight: 500 }}>
+                  {requireOptIn ? "On — send only to opted-in contacts" : "Off — send to any contact with a phone"}
+                </div>
+                <div className="t-small muted" style={{ marginTop: 2 }}>
+                  {requireOptIn
+                    ? "Recommended. Only contacts who explicitly opted in to WhatsApp receive messages."
+                    : "Messages go to any enrolled contact who has a phone number, even without a WhatsApp opt-in."}
+                </div>
+              </div>
+              <label className="rt-toggle">
+                <input
+                  type="checkbox"
+                  checked={!requireOptIn}
+                  onChange={toggleRequireOptIn}
+                  disabled={optInFetcher.state !== "idle"}
+                />
+                <span className="rt-toggle-switch" />
+              </label>
+            </div>
+            {!requireOptIn && (
+              <div
+                className="t-small"
+                style={{ marginTop: 12, background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "10px 12px", borderRadius: "var(--r-2)" }}
+              >
+                <strong>Compliance warning:</strong> Meta's WhatsApp Business Policy requires opt-in before
+                messaging. Sending to non-opted-in contacts can lower your quality rating and lead to your
+                number being restricted or banned. Opt-outs (STOP) are always honored. Use only if you have a
+                lawful basis (e.g. phone collected at checkout).
+              </div>
+            )}
           </section>
 
           {/* Templates */}
@@ -325,6 +436,81 @@ export default function WhatsappPage() {
                 />
                 <div className="field-help">Use {"{{1}}"}, {"{{2}}"}… for variables.</div>
               </div>
+
+              {/* Header */}
+              <div>
+                <label className="field-label">Header <span className="faint">(optional)</span></label>
+                <select className="input" value={headerFormat} onChange={(e) => setHeaderFormat(e.target.value)}>
+                  <option value="NONE">None</option>
+                  <option value="TEXT">Text</option>
+                  <option value="IMAGE">Image</option>
+                </select>
+                {headerFormat === "TEXT" && (
+                  <input
+                    className="input"
+                    style={{ marginTop: 8 }}
+                    value={headerText}
+                    onChange={(e) => setHeaderText(e.target.value)}
+                    placeholder="Header text"
+                    maxLength={60}
+                  />
+                )}
+                {headerFormat === "IMAGE" && (
+                  <>
+                    <input
+                      className="input"
+                      style={{ marginTop: 8 }}
+                      value={headerSampleUrl}
+                      onChange={(e) => setHeaderSampleUrl(e.target.value)}
+                      placeholder="https://example.com/sample-image.jpg"
+                    />
+                    <div className="field-help">A sample image URL Meta uses for review.</div>
+                  </>
+                )}
+              </div>
+
+              {/* Buttons */}
+              <div>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <label className="field-label" style={{ marginBottom: 0 }}>Buttons <span className="faint">(optional, up to 3)</span></label>
+                  {buttons.length < 3 && (
+                    <button type="button" className="btn" style={{ padding: "2px 10px" }} onClick={addButton}>Add</button>
+                  )}
+                </div>
+                {buttons.map((b, idx) => (
+                  <div key={idx} style={{ display: "flex", gap: 8, marginTop: 8, alignItems: "flex-start" }}>
+                    <select
+                      className="input"
+                      style={{ flex: "0 0 130px" }}
+                      value={b.type}
+                      onChange={(e) => updateButton(idx, { type: e.target.value })}
+                    >
+                      <option value="QUICK_REPLY">Quick reply</option>
+                      <option value="URL">URL</option>
+                    </select>
+                    <div style={{ flex: 1 }}>
+                      <input
+                        className="input"
+                        value={b.text}
+                        onChange={(e) => updateButton(idx, { text: e.target.value })}
+                        placeholder="Button text"
+                        maxLength={25}
+                      />
+                      {b.type === "URL" && (
+                        <input
+                          className="input"
+                          style={{ marginTop: 6 }}
+                          value={b.url}
+                          onChange={(e) => updateButton(idx, { url: e.target.value })}
+                          placeholder="https://…"
+                        />
+                      )}
+                    </div>
+                    <button type="button" className="btn" style={{ padding: "2px 10px" }} onClick={() => removeButton(idx)}>✕</button>
+                  </div>
+                ))}
+              </div>
+
               {varCount > 0 && (
                 <div>
                   <label className="field-label">Sample values</label>
@@ -378,15 +564,53 @@ export default function WhatsappPage() {
           <section className="rt-form-section">
             <div className="t-micro muted" style={{ marginBottom: 16 }}>Send a test</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              <div>
-                <label className="field-label">Template</label>
-                <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value)}>
-                  <option value="">Select an approved template…</option>
-                  {approvedTemplates.map((t) => (
-                    <option key={t.id} value={t.name}>{t.name} ({t.language})</option>
-                  ))}
-                </select>
+              {/* Mode switch */}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  className={`btn${testMode === "template" ? " btn-primary" : ""}`}
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => setTestMode("template")}
+                >
+                  Approved template
+                </button>
+                <button
+                  type="button"
+                  className={`btn${testMode === "text" ? " btn-primary" : ""}`}
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => setTestMode("text")}
+                >
+                  Free text
+                </button>
               </div>
+
+              {testMode === "template" ? (
+                <div>
+                  <label className="field-label">Template</label>
+                  <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value)}>
+                    <option value="">Select an approved template…</option>
+                    {approvedTemplates.map((t) => (
+                      <option key={t.id} value={t.name}>{t.name} ({t.language})</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div>
+                  <label className="field-label">Message</label>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    value={testText}
+                    onChange={(e) => setTestText(e.target.value)}
+                    placeholder="Type a test message…"
+                  />
+                  <div className="field-help">
+                    Free text only works if this number has messaged your WhatsApp number in the last 24 hours.
+                    Text your business number first, then send the test.
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="field-label">Test phone (E.164)</label>
                 <input className="input" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+1 555 123 4567" />
@@ -402,7 +626,17 @@ export default function WhatsappPage() {
                 </div>
               )}
               <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button className="btn btn-primary" onClick={sendTest} disabled={testFetcher.state !== "idle" || !isConnected || approvedTemplates.length === 0}>
+                <button
+                  className="btn btn-primary"
+                  onClick={sendTest}
+                  disabled={
+                    testFetcher.state !== "idle" ||
+                    !isConnected ||
+                    !testPhone ||
+                    (testMode === "template" && approvedTemplates.length === 0) ||
+                    (testMode === "text" && !testText.trim())
+                  }
+                >
                   {Icons.Send && <Icons.Send size={14} />}
                   {testFetcher.state !== "idle" ? "Sending…" : "Send test"}
                 </button>

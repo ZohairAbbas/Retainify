@@ -37,8 +37,14 @@ async function resolveToken(shop) {
  * as PENDING. Meta reviews every template before it can be sent.
  *
  * @param {string} shop
- * @param {{ name: string, language: string, category: string, bodyText: string, samples?: string[] }} input
- *   samples: one example value per {{n}} in bodyText (required by Meta).
+ * @param {object} input
+ * @param {string} input.name
+ * @param {string} input.language
+ * @param {string} input.category
+ * @param {string} input.bodyText
+ * @param {string[]} [input.samples] - one example per {{n}} in bodyText (required by Meta).
+ * @param {{ format: "TEXT"|"IMAGE", text?: string, sampleUrl?: string }} [input.header]
+ * @param {Array<{ type: "URL"|"QUICK_REPLY", text: string, url?: string }>} [input.buttons]
  * @returns {Promise<{ ok: boolean, error?: string, status?: string }>}
  */
 export async function createTemplate(shop, input) {
@@ -72,13 +78,42 @@ export async function createTemplate(shop, input) {
   const { account, accessToken, error } = await resolveToken(shop);
   if (error) return { ok: false, error };
 
+  const components = [];
+
+  // Optional header (TEXT or IMAGE). Image headers need an example media URL.
+  const header = input.header;
+  if (header && header.format === "TEXT" && String(header.text || "").trim()) {
+    components.push({ type: "HEADER", format: "TEXT", text: String(header.text).trim() });
+  } else if (header && header.format === "IMAGE" && String(header.sampleUrl || "").trim()) {
+    components.push({
+      type: "HEADER",
+      format: "IMAGE",
+      example: { header_handle: [String(header.sampleUrl).trim()] },
+    });
+  }
+
   const bodyComponent = { type: "BODY", text: bodyText };
   if (varCount > 0) {
     // Meta requires example.body_text: an array containing one row of samples.
     bodyComponent.example = { body_text: [samples.slice(0, varCount).map((s) => String(s))] };
   }
+  components.push(bodyComponent);
 
-  const payload = { name, language, category, components: [bodyComponent] };
+  // Optional buttons: URL (with a link) or QUICK_REPLY (no link).
+  const buttons = Array.isArray(input.buttons) ? input.buttons : [];
+  const builtButtons = buttons
+    .filter((b) => b && String(b.text || "").trim())
+    .map((b) => {
+      if (b.type === "URL" && String(b.url || "").trim()) {
+        return { type: "URL", text: String(b.text).trim(), url: String(b.url).trim() };
+      }
+      return { type: "QUICK_REPLY", text: String(b.text).trim() };
+    });
+  if (builtButtons.length) {
+    components.push({ type: "BUTTONS", buttons: builtButtons });
+  }
+
+  const payload = { name, language, category, components };
 
   let json;
   try {
@@ -109,7 +144,7 @@ export async function createTemplate(shop, input) {
       metaTemplateId: json?.id || "",
       status,
       bodyText,
-      components: [bodyComponent],
+      components,
       lastSyncedAt: new Date(),
     },
     update: {
@@ -117,7 +152,7 @@ export async function createTemplate(shop, input) {
       metaTemplateId: json?.id || "",
       status,
       bodyText,
-      components: [bodyComponent],
+      components,
       lastSyncedAt: new Date(),
     },
   });

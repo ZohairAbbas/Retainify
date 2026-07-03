@@ -8,7 +8,7 @@
  */
 import prisma from "../../db.server.js";
 import { decryptSecret } from "../crypto/secrets.server.js";
-import { sendWhatsappMessage as sendViaMeta } from "./cloud-api.server.js";
+import { sendWhatsappMessage as sendViaMeta, sendSessionText } from "./cloud-api.server.js";
 
 /**
  * @param {{ whatsappProvider?: string } | null | undefined} settings
@@ -35,31 +35,55 @@ export async function resolveAccount(shop) {
  * Send a WhatsApp template message through the shop's connected provider.
  *
  * @param {{ to: string, templateName: string, language?: string, components?: Array<object> }} message
- * @param {{ shop: string, settings?: object, account?: object }} ctx
+ * @param {{ shop: string, account?: object }} ctx - `settings` is accepted for
+ *   call-site compatibility but unused (single provider today).
  * @returns {Promise<import('./adapter.server.js').SendWhatsappResult>}
  */
-export async function sendWhatsapp(message, { shop, settings, account } = {}) {
-  const resolvedAccount = account || (await resolveAccount(shop));
-  if (!resolvedAccount) {
-    return { ok: false, error: "no connected WhatsApp account for shop" };
-  }
+export async function sendWhatsapp(message, { shop, account } = {}) {
+  const creds = await resolveCreds(shop, account);
+  if (creds.error) return { ok: false, error: creds.error };
 
-  let accessToken;
-  try {
-    accessToken = decryptSecret(resolvedAccount.accessTokenEnc);
-  } catch (err) {
-    return { ok: false, error: `token decrypt failed: ${err.message}` };
-  }
-
-  const provider = resolveProvider(settings || { whatsappProvider: "meta" });
-  const send = provider === "meta" ? sendViaMeta : sendViaMeta;
-
-  return send({
-    phoneNumberId: resolvedAccount.phoneNumberId,
-    accessToken,
+  return sendViaMeta({
+    phoneNumberId: creds.phoneNumberId,
+    accessToken: creds.accessToken,
     to: message.to,
     templateName: message.templateName,
     language: message.language,
     components: message.components,
+  });
+}
+
+/**
+ * Resolve a shop's connected WABA credentials (phoneNumberId + decrypted token).
+ * @returns {Promise<{ phoneNumberId?: string, accessToken?: string, error?: string }>}
+ */
+async function resolveCreds(shop, account) {
+  const resolvedAccount = account || (await resolveAccount(shop));
+  if (!resolvedAccount) return { error: "no connected WhatsApp account for shop" };
+  try {
+    return {
+      phoneNumberId: resolvedAccount.phoneNumberId,
+      accessToken: decryptSecret(resolvedAccount.accessTokenEnc),
+    };
+  } catch (err) {
+    return { error: `token decrypt failed: ${err.message}` };
+  }
+}
+
+/**
+ * Send a free-form text message (24h session window only). For testing.
+ * @param {{ to: string, text: string }} message
+ * @param {{ shop: string, account?: object }} ctx
+ * @returns {Promise<import('./adapter.server.js').SendWhatsappResult>}
+ */
+export async function sendWhatsappText(message, { shop, account } = {}) {
+  const creds = await resolveCreds(shop, account);
+  if (creds.error) return { ok: false, error: creds.error };
+
+  return sendSessionText({
+    phoneNumberId: creds.phoneNumberId,
+    accessToken: creds.accessToken,
+    to: message.to,
+    text: message.text,
   });
 }
