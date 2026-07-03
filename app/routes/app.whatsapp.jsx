@@ -5,7 +5,7 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { connectWhatsappAccount } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
-import { sendWhatsapp, sendWhatsappText } from "../lib/whatsapp/index.server.js";
+import { sendWhatsapp, sendWhatsappText, registerWhatsappNumber } from "../lib/whatsapp/index.server.js";
 import { normalizePhone } from "../lib/contacts/contacts.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
@@ -31,6 +31,7 @@ export const loader = async ({ request }) => {
           status: account.status,
           wabaId: account.wabaId,
           displayPhoneNumber: account.displayPhoneNumber,
+          registered: !!account.registeredAt,
           lastError: account.lastError,
         }
       : null,
@@ -82,6 +83,13 @@ export const action = async ({ request }) => {
     const res = await connectWhatsappAccount({ shop, code, wabaId, businessId });
     if (!res.ok) return { ok: false, error: res.error || "Failed to connect." };
     return { ok: true, connected: true };
+  }
+
+  if (intent === "register-number") {
+    const pin = String(fd.get("pin") || "");
+    const res = await registerWhatsappNumber(shop, pin);
+    if (!res.ok) return { ok: false, error: res.error || "Registration failed." };
+    return { ok: true, registered: true };
   }
 
   if (intent === "disconnect") {
@@ -170,9 +178,13 @@ export default function WhatsappPage() {
   const testFetcher = useFetcher();
   const createFetcher = useFetcher();
   const optInFetcher = useFetcher();
+  const registerFetcher = useFetcher();
 
   const isConnected = account?.status === "connected";
+  const isRegistered = !!account?.registered;
+  const canSend = isConnected && isRegistered;
   const approvedTemplates = templates.filter((t) => t.status === "APPROVED");
+  const [pin, setPin] = useState("");
 
   const [testPhone, setTestPhone] = useState("");
   const [testTemplate, setTestTemplate] = useState("");
@@ -207,6 +219,9 @@ export default function WhatsappPage() {
       : optInFetcher.data?.requireOptIn ?? whatsappRequireOptIn;
   function disconnect() {
     connectFetcher.submit({ intent: "disconnect" }, { method: "post" });
+  }
+  function registerNumber() {
+    registerFetcher.submit({ intent: "register-number", pin }, { method: "post" });
   }
   function syncTemplatesNow() {
     syncFetcher.submit({ intent: "sync-templates" }, { method: "post" });
@@ -265,18 +280,54 @@ export default function WhatsappPage() {
           <section className="rt-form-section">
             <div className="t-micro muted" style={{ marginBottom: 16 }}>Connection</div>
             {isConnected ? (
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <div>
-                  <div className="t-body" style={{ fontWeight: 500 }}>
-                    {account.displayPhoneNumber || "Connected number"}
+              <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <div>
+                    <div className="t-body" style={{ fontWeight: 500 }}>
+                      {account.displayPhoneNumber || "Connected number"}
+                    </div>
+                    <div className="t-small muted" style={{ marginTop: 2 }}>
+                      WABA {account.wabaId} · <span style={{ color: "var(--node-whatsapp-ink)" }}>Connected</span>
+                      {isRegistered
+                        ? <> · <span style={{ color: "var(--node-whatsapp-ink)" }}>Registered</span></>
+                        : <> · <span style={{ color: "var(--danger-ink)" }}>Not registered</span></>}
+                    </div>
                   </div>
-                  <div className="t-small muted" style={{ marginTop: 2 }}>
-                    WABA {account.wabaId} · <span style={{ color: "var(--node-whatsapp-ink)" }}>Connected</span>
-                  </div>
+                  <button className="btn" onClick={disconnect} disabled={connectFetcher.state !== "idle"}>
+                    Disconnect
+                  </button>
                 </div>
-                <button className="btn" onClick={disconnect} disabled={connectFetcher.state !== "idle"}>
-                  Disconnect
-                </button>
+
+                {!isRegistered && (
+                  <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+                    <div className="t-small" style={{ marginBottom: 10, background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "10px 12px", borderRadius: "var(--r-2)" }}>
+                      This number must be registered for the Cloud API before it can send any message
+                      (template or free-text). Enter a 6-digit PIN to register it. This becomes the
+                      number's two-step verification PIN — save it somewhere safe.
+                    </div>
+                    <label className="field-label">Registration PIN (6 digits)</label>
+                    <div style={{ display: "flex", gap: 8 }}>
+                      <input
+                        className="input"
+                        value={pin}
+                        onChange={(e) => setPin(e.target.value.replace(/\D/g, "").slice(0, 6))}
+                        placeholder="123456"
+                        inputMode="numeric"
+                        style={{ maxWidth: 160 }}
+                      />
+                      <button
+                        className="btn btn-primary"
+                        onClick={registerNumber}
+                        disabled={registerFetcher.state !== "idle" || pin.length !== 6}
+                      >
+                        {registerFetcher.state !== "idle" ? "Registering…" : "Register number"}
+                      </button>
+                    </div>
+                    {registerFetcher.data?.ok === false && (
+                      <div className="t-small" style={{ marginTop: 8, color: "var(--danger-ink)" }}>{registerFetcher.data.error}</div>
+                    )}
+                  </div>
+                )}
               </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
@@ -300,9 +351,11 @@ export default function WhatsappPage() {
                   {whatsappEnabled ? "Enabled" : "Disabled"}
                 </div>
                 <div className="t-small muted" style={{ marginTop: 2 }}>
-                  {isConnected
-                    ? "WhatsApp steps in your flows will send once enabled."
-                    : "Connect an account first, then enable the channel."}
+                  {!isConnected
+                    ? "Connect an account first, then enable the channel."
+                    : !isRegistered
+                      ? "Register your number above before enabling the channel."
+                      : "WhatsApp steps in your flows will send once enabled."}
                 </div>
               </div>
               <label className="rt-toggle">
@@ -310,7 +363,7 @@ export default function WhatsappPage() {
                   type="checkbox"
                   checked={whatsappEnabled}
                   onChange={toggleEnabled}
-                  disabled={toggleFetcher.state !== "idle" || !isConnected}
+                  disabled={toggleFetcher.state !== "idle" || !canSend}
                 />
                 <span className="rt-toggle-switch" />
               </label>
@@ -631,7 +684,7 @@ export default function WhatsappPage() {
                   onClick={sendTest}
                   disabled={
                     testFetcher.state !== "idle" ||
-                    !isConnected ||
+                    !canSend ||
                     !testPhone ||
                     (testMode === "template" && approvedTemplates.length === 0) ||
                     (testMode === "text" && !testText.trim())

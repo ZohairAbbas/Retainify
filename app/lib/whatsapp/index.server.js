@@ -8,7 +8,11 @@
  */
 import prisma from "../../db.server.js";
 import { decryptSecret } from "../crypto/secrets.server.js";
-import { sendWhatsappMessage as sendViaMeta, sendSessionText } from "./cloud-api.server.js";
+import {
+  sendWhatsappMessage as sendViaMeta,
+  sendSessionText,
+  registerPhoneNumber,
+} from "./cloud-api.server.js";
 
 /**
  * @param {{ whatsappProvider?: string } | null | undefined} settings
@@ -86,4 +90,36 @@ export async function sendWhatsappText(message, { shop, account } = {}) {
     to: message.to,
     text: message.text,
   });
+}
+
+/**
+ * Register the shop's connected phone number for the Cloud API. Stamps
+ * WhatsappAccount.registeredAt on success. Required before any send works.
+ * @param {string} shop
+ * @param {string} pin - 6-digit two-step verification PIN.
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+export async function registerWhatsappNumber(shop, pin) {
+  const account = await resolveAccount(shop);
+  if (!account) return { ok: false, error: "no connected WhatsApp account for shop" };
+
+  let accessToken;
+  try {
+    accessToken = decryptSecret(account.accessTokenEnc);
+  } catch (err) {
+    return { ok: false, error: `token decrypt failed: ${err.message}` };
+  }
+
+  const result = await registerPhoneNumber({
+    phoneNumberId: account.phoneNumberId,
+    accessToken,
+    pin,
+  });
+
+  if (result.ok) {
+    await prisma.whatsappAccount
+      .update({ where: { shop }, data: { registeredAt: new Date(), lastError: "" } })
+      .catch(() => {});
+  }
+  return result;
 }

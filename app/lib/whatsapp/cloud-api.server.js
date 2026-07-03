@@ -89,6 +89,48 @@ export async function sendWhatsappMessage({
 }
 
 /**
+ * Register a phone number for the Cloud API. Required once before the number
+ * can send any message (else Meta returns #133010 "Account not registered").
+ *
+ * The `pin` is the number's 6-digit two-step verification PIN: if two-step was
+ * never enabled, this call sets it; if a PIN already exists, it must match.
+ *
+ * @param {{ phoneNumberId: string, accessToken: string, pin: string }} opts
+ * @returns {Promise<{ ok: boolean, error?: string, alreadyRegistered?: boolean }>}
+ */
+export async function registerPhoneNumber({ phoneNumberId, accessToken, pin }) {
+  if (!phoneNumberId || !accessToken) {
+    return { ok: false, error: "missing WABA phoneNumberId or accessToken" };
+  }
+  if (!/^\d{6}$/.test(String(pin || ""))) {
+    return { ok: false, error: "PIN must be exactly 6 digits." };
+  }
+
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}/register`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ messaging_product: "whatsapp", pin: String(pin) }),
+    });
+    const json = await res.json().catch(() => ({}));
+
+    if (res.ok && json?.success !== false) return { ok: true };
+
+    const err = json?.error || {};
+    const code = Number(err.code);
+    // 133005 = wrong PIN; 133006 = PIN needs reset via 2FA; 133004 = server busy.
+    // Already-registered numbers return an error we can treat as success.
+    if (/already/i.test(err.message || "")) return { ok: true, alreadyRegistered: true };
+    let message = err.error_user_msg || err.message || `HTTP ${res.status}`;
+    if (code === 133005) message = "Incorrect PIN for this number's two-step verification.";
+    return { ok: false, error: message };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
  * Send a free-form text message. Only succeeds inside the 24h customer-service
  * window; otherwise Meta returns the re-engagement error surfaced above.
  * @param {{ phoneNumberId: string, accessToken: string, to: string, text: string }} opts

@@ -458,6 +458,10 @@ model WhatsappAccount {
   accessTokenEnc     String    @default("")
   status             String    @default("pending") // pending | connected | disconnected
   connectedAt        DateTime?
+  // Cloud API registration (POST /{phoneNumberId}/register). A number must be
+  // registered before it can send ANY message (template or free-text); without
+  // it Meta returns error #133010 "Account not registered".
+  registeredAt       DateTime?
   lastError          String    @default("")
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
