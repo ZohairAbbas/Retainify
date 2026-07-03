@@ -181,7 +181,9 @@ export default function WhatsappPage() {
   const registerFetcher = useFetcher();
 
   const isConnected = account?.status === "connected";
-  const isRegistered = !!account?.registered;
+  // Optimistic: reflect a just-completed registration immediately, since a
+  // fetcher submit doesn't guarantee the loader re-read lands before render.
+  const isRegistered = !!account?.registered || registerFetcher.data?.ok === true;
   const canSend = isConnected && isRegistered;
   const approvedTemplates = templates.filter((t) => t.status === "APPROVED");
   const [pin, setPin] = useState("");
