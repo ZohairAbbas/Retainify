@@ -15,6 +15,7 @@ import UnifyBanner from "../components/contacts/UnifyBanner.jsx";
 import ContactsEmpty from "../components/contacts/ContactsEmpty.jsx";
 import BulkBar from "../components/contacts/BulkBar.jsx";
 import AddContactModal from "../components/contacts/AddContactModal.jsx";
+import ImportCsvModal from "../components/contacts/ImportCsvModal.jsx";
 import {
   SOURCE,
   TAG_PALETTE,
@@ -30,9 +31,11 @@ import {
   softDeleteContact,
   summarizeContacts,
   unsubscribeContact,
+  upsertContact,
+  normalizeEmail,
 } from "../lib/contacts/contacts.server.js";
 import { runContactsBackfillIfNeeded } from "../lib/contacts/backfill.server.js";
-import { listTagsForShop, bulkApplyTag, upsertTag } from "../lib/contacts/tags.server.js";
+import { listTagsForShop, bulkApplyTag, upsertTag, applyTagByName } from "../lib/contacts/tags.server.js";
 import { getSyncProgress } from "../lib/contacts/shopifyCustomerSync.server.js";
 import { createSegment } from "../lib/segments/segments.server.js";
 
@@ -146,6 +149,47 @@ export const action = async ({ request }) => {
     return { ok: true };
   }
 
+  if (intent === "import_csv") {
+    let rows;
+    try {
+      rows = JSON.parse(String(fd.get("rows") || "[]"));
+    } catch {
+      return { intent: "import_csv", ok: false, imported: 0, skippedDuplicate: 0, skippedInvalid: 0 };
+    }
+    let imported = 0;
+    let skippedDuplicate = 0;
+    let skippedInvalid = 0;
+    for (const row of rows) {
+      const email = normalizeEmail(row.email);
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        skippedInvalid++;
+        continue;
+      }
+      // Check if already exists before upserting.
+      const contact = await upsertContact({
+        shop,
+        email,
+        name: row.name || "",
+        source: "csv_import",
+        subscriptionStatus: "subscribed",
+        marketingConsentAt: new Date(),
+      });
+      // upsertContact returns the row; treat as new only if firstSeenAt ≈ now.
+      const isNew = contact && Math.abs(new Date(contact.firstSeenAt) - new Date(contact.createdAt)) < 5000;
+      if (isNew) {
+        imported++;
+        if (Array.isArray(row.tags)) {
+          for (const tagName of row.tags) {
+            if (tagName) await applyTagByName(shop, contact.id, tagName);
+          }
+        }
+      } else {
+        skippedDuplicate++;
+      }
+    }
+    return { intent: "import_csv", ok: true, imported, skippedDuplicate, skippedInvalid };
+  }
+
   if (intent === "bulk_save_as_segment") {
     const ids = fd.getAll("contactId").map(String).filter(Boolean);
     const name = String(fd.get("name") || "").trim();
@@ -172,6 +216,7 @@ export default function ContactsPage() {
   const [selected, setSelected] = useState(new Set());
   const [syncOpen, setSyncOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [showUnify, setShowUnify] = useState(backfill?.didRun && backfill.added > 0);
   const [openMenu, setOpenMenu] = useState(null);
 
@@ -215,6 +260,7 @@ export default function ContactsPage() {
         <ContactsEmpty onSync={() => setSyncOpen(true)} onAdd={() => setAddOpen(true)} />
         <SyncModal open={syncOpen} onClose={() => setSyncOpen(false)} initialSync={sync} />
         <AddContactModal open={addOpen} onClose={() => setAddOpen(false)} />
+        <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} />
       </div>
     );
   }
@@ -290,8 +336,11 @@ export default function ContactsPage() {
               <>
                 <div className="rt-veil" onClick={() => setOpenMenu(null)} />
                 <div className="rt-menu" style={{ right: 0, left: "auto" }}>
-                  <button type="button" disabled className="rt-menu-soon">
-                    <Icons.ArrowDown size={14} /> Import CSV <SoonPill />
+                  <button
+                    type="button"
+                    onClick={() => { setOpenMenu(null); setImportOpen(true); }}
+                  >
+                    <Icons.ArrowDown size={14} /> Import CSV
                   </button>
                   <button type="button" disabled className="rt-menu-soon">
                     <Icons.ArrowUp size={14} /> Export CSV <SoonPill />
@@ -617,6 +666,7 @@ export default function ContactsPage() {
 
       <SyncModal open={syncOpen} onClose={() => setSyncOpen(false)} initialSync={sync} />
       <AddContactModal open={addOpen} onClose={() => setAddOpen(false)} />
+      <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} />
     </div>
   );
 }

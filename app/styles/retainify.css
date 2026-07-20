@@ -1677,6 +1677,21 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-sync-done { display: flex; align-items: center; gap: 16px; padding: 8px 0; }
 .rt-sync-check { width: 44px; height: 44px; border-radius: 50%; background: var(--brand-100); color: var(--brand-700); display: flex; align-items: center; justify-content: center; }
 
+/* ── CSV import drop zone ────────────────────────────────────────────── */
+.rt-csv-dropzone {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  padding: 36px 24px;
+  border: 2px dashed var(--hair-2);
+  border-radius: var(--r-3);
+  background: var(--paper-2);
+  cursor: pointer;
+  transition: border-color 120ms, background 120ms;
+  text-align: center;
+  user-select: none;
+}
+.rt-csv-dropzone:hover { border-color: var(--brand-700); background: var(--brand-100); }
+.rt-csv-dragover { border-color: var(--brand-700) !important; background: var(--brand-100) !important; }
+
 /* ── Profile shell ───────────────────────────────────────────────────── */
 .rt-profile { max-width: 1320px; margin: 0 auto; padding: 24px 48px 96px; }
 .rt-profile-bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
