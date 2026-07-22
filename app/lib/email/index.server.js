@@ -13,6 +13,10 @@ import { sendEmail as sendViaResend } from "./resend.server.js";
 import { sendEmail as sendViaSes } from "./ses.server.js";
 
 const DEFAULT_FROM_EMAIL = "noreply@retainify.app";
+// Last-resort SES sender if SES_FROM_EMAIL is unset. Must be on our SES-verified
+// domain (mail.financifyapp.com) — SES rejects any unverified from-identity, so
+// we must NOT fall back to the Resend address here.
+const DEFAULT_SES_FROM_EMAIL = "hello@mail.financifyapp.com";
 
 /**
  * Resolve a shop's email provider. Defaults to "resend" for any
@@ -50,7 +54,7 @@ export function resolveFrom({ settings, provider }) {
   if (provider === "ses" && !settings?.domainVerified) {
     // Mode B — send from our verified SES domain, reply goes to the merchant.
     const sesFrom =
-      process.env.SES_FROM_EMAIL || process.env.RESEND_FROM_EMAIL || DEFAULT_FROM_EMAIL;
+      process.env.SES_FROM_EMAIL || DEFAULT_SES_FROM_EMAIL;
     return {
       from: `${senderName} <${sesFrom}>`,
       replyTo: merchantEmail,
