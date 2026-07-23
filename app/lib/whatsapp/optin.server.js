@@ -84,6 +84,7 @@ export async function recordOptIn({ shop, phoneNumber, contactEmail, optInMethod
       phone,
       whatsappStatus: "subscribed",
       whatsappOptInAt: now,
+      revive: true,
     }).catch(() => {});
   }
 

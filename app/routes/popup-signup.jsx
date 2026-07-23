@@ -61,7 +61,7 @@ export const action = async ({ request }) => {
 
   // Mirror the touchpoint to the unified Contact record. Fire-and-forget so
   // the popup response isn't held up by a Contacts table write.
-  upsertContact({ shop, email, source: "popup" }).catch((err) =>
+  upsertContact({ shop, email, source: "popup", revive: true }).catch((err) =>
     console.error("[popup-signup] upsertContact failed:", err.message),
   );
 

@@ -165,18 +165,18 @@ export const action = async ({ request }) => {
         skippedInvalid++;
         continue;
       }
-      // Check if already exists before upserting.
-      const contact = await upsertContact({
+      const { contact, created, revived } = await upsertContact({
         shop,
         email,
         name: row.name || "",
         source: "csv_import",
         subscriptionStatus: "subscribed",
         marketingConsentAt: new Date(),
+        revive: true,
       });
-      // upsertContact returns the row; treat as new only if firstSeenAt ≈ now.
-      const isNew = contact && Math.abs(new Date(contact.firstSeenAt) - new Date(contact.createdAt)) < 5000;
-      if (isNew) {
+      // A revived contact was deleted and is now back in the list, so it counts
+      // as imported rather than as a duplicate that was left untouched.
+      if (contact && (created || revived)) {
         imported++;
         if (Array.isArray(row.tags)) {
           for (const tagName of row.tags) {

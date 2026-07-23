@@ -225,8 +225,9 @@ export const action = async ({ request, params }) => {
   }
 
   if (intent === "publish") {
-    await publishJourney(id);
-    return { ok: true, published: true };
+    const backfillSegmentMembers = fd.get("backfillSegmentMembers") === "1";
+    const result = await publishJourney(id, { backfillSegmentMembers });
+    return { ok: true, published: true, segmentBaseline: result?.segmentBaseline ?? null };
   }
 
   if (intent === "pause") {
@@ -266,6 +267,7 @@ export default function FlowBuilder() {
   const [showPreview, setShowPreview] = useState(true);
   const [showAnalytics, setShowAnalytics] = useState(journey.status === "published");
   const [showPublishModal, setShowPublishModal] = useState(false);
+  const [toast, setToast] = useState(null);
   const [openMenuId, setOpenMenuId] = useState(null);
   const [emailEditorNodeId, setEmailEditorNodeId] = useState(null);
   // When the TriggerPicker wants to navigate to a segment route mid-edit,
@@ -290,8 +292,17 @@ export default function FlowBuilder() {
   useEffect(() => {
     if (fetcher.data?.published) {
       setShowPublishModal(false);
+      setToast(publishToastMessage(fetcher.data.segmentBaseline));
     }
   }, [fetcher.data]);
+
+  // Auto-dismiss the toast. Cleared on unmount so a navigation mid-timer
+  // doesn't setState on a gone component.
+  useEffect(() => {
+    if (!toast) return undefined;
+    const t = setTimeout(() => setToast(null), 6000);
+    return () => clearTimeout(t);
+  }, [toast]);
 
   function updateNode(id, patch) {
     setNodes((arr) => arr.map((n) => (n.id === id ? { ...n, ...patch } : n)));
@@ -377,18 +388,20 @@ export default function FlowBuilder() {
     fetcher.submit(fd, { method: "post" });
   }
 
-  function publishAction() {
+  function publishAction({ backfillSegmentMembers = false } = {}) {
+    const build = () => {
+      const fd = new FormData();
+      fd.set("intent", "publish");
+      if (backfillSegmentMembers) fd.set("backfillSegmentMembers", "1");
+      return fd;
+    };
     if (isDirty) {
       saveDraftAction();
       setTimeout(() => {
-        const fd = new FormData();
-        fd.set("intent", "publish");
-        fetcher.submit(fd, { method: "post" });
+        fetcher.submit(build(), { method: "post" });
       }, 100);
     } else {
-      const fd = new FormData();
-      fd.set("intent", "publish");
-      fetcher.submit(fd, { method: "post" });
+      fetcher.submit(build(), { method: "post" });
     }
   }
 
@@ -583,12 +596,18 @@ export default function FlowBuilder() {
         </div>
       </div>
 
+      <PublishToast toast={toast} onDismiss={() => setToast(null)} />
+
       {showPublishModal && (
         <PublishModal
           isPublished={isPublished}
           onCancel={() => setShowPublishModal(false)}
           onConfirm={publishAction}
           loading={saving}
+          segmentBackfill={{
+            eligible: triggerDraft === "segment_entered" && !!triggerSegmentKey,
+            count: triggerSegmentCount || 0,
+          }}
         />
       )}
       {pendingLeavePath && (
@@ -1646,7 +1665,52 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange }) {
   );
 }
 
-function PublishModal({ isPublished, onCancel, onConfirm, loading }) {
+/**
+ * Post-publish toast copy. `baseline` is the seedSegmentBaselineForFlow result
+ * ({ seeded, enrolled, inSegment }) and is null for non-segment flows or a
+ * re-publish, where a plain confirmation is all that's warranted.
+ *
+ * The "0 enrolled" case is the important one: publishing a segment flow onto a
+ * populated segment deliberately enrolls nobody, and merchants read that
+ * silence as a bug. Say it out loud instead.
+ */
+function publishToastMessage(baseline) {
+  if (!baseline || !baseline.inSegment) {
+    return { tone: "ok", text: "Flow published." };
+  }
+  const { enrolled = 0, inSegment = 0 } = baseline;
+  const people = (n) => `${n} ${n === 1 ? "contact" : "contacts"}`;
+  if (enrolled > 0) {
+    return {
+      tone: "ok",
+      text: `Flow published — enrolling ${people(enrolled)} already in the segment.`,
+    };
+  }
+  return {
+    tone: "info",
+    text: `Flow published. ${people(inSegment)} already in the segment ${inSegment === 1 ? "was" : "were"} not enrolled — this flow triggers when someone enters it.`,
+  };
+}
+
+function PublishToast({ toast, onDismiss }) {
+  if (!toast) return null;
+  return (
+    <div className={`rt-toast rt-toast-${toast.tone}`} role="status" aria-live="polite">
+      <span>{toast.text}</span>
+      <button className="rt-toast-close" onClick={onDismiss} aria-label="Dismiss">
+        <Icons.Close size={13} />
+      </button>
+    </div>
+  );
+}
+
+function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfill }) {
+  const [backfill, setBackfill] = useState(false);
+  // Offered only on first publish of a segment-triggered flow that has members
+  // waiting. Re-publishing never backfills, so the box would be a lie.
+  const showBackfill = !isPublished && segmentBackfill?.eligible && segmentBackfill.count > 0;
+  const n = segmentBackfill?.count || 0;
+
   return (
     <div className="rt-modal-backdrop">
       <div className="rt-publish-modal">
@@ -1658,11 +1722,40 @@ function PublishModal({ isPublished, onCancel, onConfirm, loading }) {
             ? "Your changes will go live. New enrollments will use the updated flow."
             : "This will make the flow active and start sending messages to customers."}
         </p>
+        {showBackfill && (
+          <label
+            className="t-small"
+            style={{
+              display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer",
+              margin: "0 0 24px", padding: 12, borderRadius: 8,
+              border: "1px solid var(--rt-border, #e3e3e3)",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={backfill}
+              onChange={(e) => setBackfill(e.target.checked)}
+              disabled={loading}
+              style={{ marginTop: 2 }}
+            />
+            <span>
+              Also enroll the {n} {n === 1 ? "contact" : "contacts"} already in this segment
+              <span className="muted" style={{ display: "block", marginTop: 4, lineHeight: 1.5 }}>
+                Off by default — this flow triggers when someone <em>enters</em> the segment, so
+                existing members are skipped. Ticking this sends to all {n} now.
+              </span>
+            </span>
+          </label>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button className="btn btn-secondary" onClick={onCancel} disabled={loading}>
             Cancel
           </button>
-          <button className="btn btn-primary" onClick={onConfirm} disabled={loading}>
+          <button
+            className="btn btn-primary"
+            onClick={() => onConfirm({ backfillSegmentMembers: showBackfill && backfill })}
+            disabled={loading}
+          >
             <Icons.Play size={13} /> {isPublished ? "Publish changes" : "Publish flow"}
           </button>
         </div>

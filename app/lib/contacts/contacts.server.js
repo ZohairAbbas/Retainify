@@ -49,11 +49,19 @@ export function normalizeEmail(raw) {
  *   - source is only set when the existing row has source = "manual" or empty
  *     (i.e. real sources beat the placeholder), so the first real touch wins.
  *   - name is overwritten only when a non-empty value is provided.
+ *   - a soft-deleted row is only revived when the caller passes revive: true.
+ *     Deletion is a deliberate merchant action, so passive writes (webhooks,
+ *     Shopify sync) must leave a tombstone deleted; only an explicit re-add or
+ *     a fresh opt-in brings it back, and that counts as a new acquisition
+ *     (deletedAt cleared, firstSeenAt reset to now).
+ *
+ * Returns { contact, created, revived }. `created` is a brand-new row;
+ * `revived` is a previously soft-deleted row brought back.
  */
 export async function upsertContact(input) {
   const email = normalizeEmail(input.email);
   const { shop } = input;
-  if (!shop || !email) return null;
+  if (!shop || !email) return { contact: null, created: false, revived: false };
 
   const name = input.name ? String(input.name).trim() : undefined;
   const source = VALID_SOURCES.has(input.source) ? input.source : undefined;
@@ -78,7 +86,7 @@ export async function upsertContact(input) {
   const now = new Date();
 
   if (!existing) {
-    return prisma.contact.create({
+    const contact = await prisma.contact.create({
       data: {
         shop,
         email,
@@ -94,9 +102,19 @@ export async function upsertContact(input) {
         whatsappOptInAt: whatsappOptInAt || null,
       },
     });
+    return { contact, created: true, revived: false };
   }
 
   const data = { lastSeenAt: now };
+
+  // The row survives a delete as a tombstone (deletedAt set), and findUnique
+  // above matches it regardless — so without this an explicit re-add silently
+  // updates the tombstone and stays invisible to every deletedAt: null read.
+  const revived = Boolean(existing.deletedAt) && input.revive === true;
+  if (revived) {
+    data.deletedAt = null;
+    data.firstSeenAt = now;
+  }
 
   if (name && !existing.name) data.name = name;
 
@@ -139,10 +157,11 @@ export async function upsertContact(input) {
     data.whatsappOptInAt = whatsappOptInAt;
   }
 
-  return prisma.contact.update({
+  const contact = await prisma.contact.update({
     where: { id: existing.id },
     data,
   });
+  return { contact, created: false, revived };
 }
 
 /**
@@ -377,13 +396,14 @@ export async function softDeleteContact(shop, idOrEmail) {
 export async function createManualContact(shop, { email, name, tagIds = [] }) {
   const lower = normalizeEmail(email);
   if (!lower) return null;
-  const contact = await upsertContact({
+  const { contact } = await upsertContact({
     shop,
     email: lower,
     name,
     source: "manual",
     subscriptionStatus: "subscribed",
     marketingConsentAt: new Date(),
+    revive: true,
   });
   if (contact && tagIds.length) {
     await prisma.contactTag.createMany({

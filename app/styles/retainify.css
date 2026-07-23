@@ -403,6 +403,24 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-publish-modal p { margin: 0 0 28px; color: var(--ink-3); font-size: 14px; line-height: 1.6; }
 .rt-publish-modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 
+/* Post-publish toast */
+.rt-toast {
+  position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%);
+  z-index: 60; display: flex; align-items: flex-start; gap: 12px;
+  max-width: min(560px, calc(100vw - 48px));
+  padding: 14px 14px 14px 16px;
+  border-radius: var(--r-3); border: 1px solid var(--hair-1);
+  box-shadow: var(--sh-4); font-size: 13px; line-height: 1.5;
+  animation: rt-pop-in 200ms var(--ease);
+}
+.rt-toast-ok   { background: var(--success-bg); border-color: var(--success-ink); color: var(--success-ink); }
+.rt-toast-info { background: var(--info-bg);    border-color: var(--info-ink);    color: var(--info-ink); }
+.rt-toast-close {
+  flex-shrink: 0; background: none; border: 0; padding: 2px; cursor: pointer;
+  color: currentColor; opacity: 0.65; line-height: 0; border-radius: var(--r-1);
+}
+.rt-toast-close:hover { opacity: 1; }
+
 /* ── Email Visual Editor ─────────────────────────────────────────────────── */
 /* All classes prefixed rt-emb- to avoid collisions with the flow builder.   */
 

@@ -258,6 +258,100 @@ async function applyJoinsSegmentExits(flow) {
   }
 }
 
+// ── Publish-time baseline (called from journey-lifecycle.server.js) ─────
+
+/**
+ * Establish a flow's starting position against its trigger segment at publish
+ * time, and optionally enroll the members already sitting in that segment.
+ *
+ * This exists because SegmentEntryLog is keyed on (shop, segmentKey) only —
+ * it records "who is in the segment", not "who has this flow seen". Without a
+ * baseline written at publish, the first processFlow tick computes
+ * `entered = current − previous` against whatever logs happen to exist, which
+ * breaks in both directions:
+ *
+ *   - Logs already open (segment populated before publish) → entered is empty
+ *     and the flow silently onboards nobody, ever.
+ *   - No logs at all (a dynamic segment the worker has never evaluated) →
+ *     entered is the *entire* match set and publishing blasts everyone.
+ *
+ * Seeding open log rows for the current match set pins the baseline so the
+ * first tick is a no-op either way, and makes enrolling existing members an
+ * explicit choice rather than an accident of timing.
+ *
+ * Safe to call for non-segment flows — it no-ops.
+ */
+export async function seedSegmentBaselineForFlow(flow, { enrollExisting = false } = {}) {
+  if (flow?.trigger !== "segment_entered" || !flow.triggerSegmentKey) return { seeded: 0, enrolled: 0 };
+  const { shop, triggerSegmentKey: segmentKey } = flow;
+
+  const segment = await resolveSegment(shop, segmentKey);
+  if (!segment) return { seeded: 0, enrolled: 0 };
+
+  const { matchedIds = [] } = await evaluateSegment(shop, segment, {
+    sampleSize: 0,
+    returnIds: true,
+  });
+  if (!matchedIds.length) {
+    // Still record the hash so the first tick doesn't re-evaluate needlessly.
+    await prisma.journey.update({
+      where: { id: flow.id },
+      data: {
+        lastEnrollmentAt: new Date(),
+        lastEnrollmentHash: await computeInputHash(shop, segmentKey),
+      },
+    });
+    return { seeded: 0, enrolled: 0 };
+  }
+
+  // Only seed contacts that don't already have an open log row — a segment
+  // shared by several flows will already have most of them.
+  const openLogs = await prisma.segmentEntryLog.findMany({
+    where: { shop, segmentKey, leftAt: null, contactId: { in: matchedIds } },
+    select: { contactId: true },
+  });
+  const alreadyLogged = new Set(openLogs.map((l) => l.contactId));
+  const toSeed = matchedIds.filter((id) => !alreadyLogged.has(id));
+
+  if (toSeed.length) {
+    const now = new Date();
+    await prisma.segmentEntryLog.createMany({
+      data: toSeed.map((contactId) => ({ shop, segmentKey, contactId, enteredAt: now })),
+    });
+  }
+
+  let enrolled = 0;
+  if (enrollExisting) {
+    const contacts = await resolveContacts(shop, matchedIds);
+    for (const c of contacts) {
+      try {
+        await enrollContact(flow.id, c.email, c.name || "", {
+          source: "segment_backfill",
+          segmentKey,
+        });
+        enrolled += 1;
+      } catch (e) {
+        console.error(`[segment-enrollment] backfill ${c.email} → ${flow.id} failed:`, e);
+      }
+    }
+  }
+
+  // Pin the hash last, so the next tick skips straight past this flow.
+  await prisma.journey.update({
+    where: { id: flow.id },
+    data: {
+      lastEnrollmentAt: new Date(),
+      lastEnrollmentHash: await computeInputHash(shop, segmentKey),
+    },
+  });
+
+  console.log(
+    `[segment-enrollment] baseline for flow ${flow.id}: ${matchedIds.length} in segment, ` +
+      `${toSeed.length} newly logged, ${enrolled} enrolled (backfill=${enrollExisting})`,
+  );
+  return { seeded: toSeed.length, enrolled, inSegment: matchedIds.length };
+}
+
 // ── Static-segment fast paths (called from segments.server.js) ──────────
 
 /**

@@ -84,6 +84,7 @@ export const loader = async ({ request }) => {
     source: "popup",
     subscriptionStatus: "subscribed",
     marketingConsentAt: confirmedAt,
+    revive: true,
   }).catch((err) =>
     console.error("[confirm] upsertContact failed:", err.message),
   );

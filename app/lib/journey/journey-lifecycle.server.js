@@ -31,11 +31,27 @@ function isEmptyBlocks(raw) {
   }
 }
 
-export async function publishJourney(journeyId) {
+/**
+ * Publish a flow.
+ *
+ * For `segment_entered` flows this also pins a baseline against the trigger
+ * segment (see seedSegmentBaselineForFlow). `backfillSegmentMembers` opts in
+ * to enrolling the contacts already in that segment at publish time — off by
+ * default, because the trigger means "enters the segment" and auto-enrolling
+ * a large segment would blast every member with no undo.
+ *
+ * Re-publishing an already-published flow (saving changes) never backfills:
+ * the baseline is already pinned and enrollContact's entryFrequency rules
+ * would mostly dedupe anyway, but silently re-enrolling on every save would
+ * be a nasty surprise.
+ */
+export async function publishJourney(journeyId, { backfillSegmentMembers = false } = {}) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
 
-  return prisma.journey.update({
+  const wasPublished = journey.status === "published";
+
+  const updated = await prisma.journey.update({
     where: { id: journeyId },
     data: {
       status: "published",
@@ -44,6 +60,26 @@ export async function publishJourney(journeyId) {
       publishedVersion: journey.publishedVersion + 1,
     },
   });
+
+  let segmentBaseline = null;
+  if (!wasPublished && updated.trigger === "segment_entered" && updated.triggerSegmentKey) {
+    try {
+      // Imported lazily: the segment worker pulls in the evaluator, which is a
+      // heavy dependency for a module every flow route touches.
+      const { seedSegmentBaselineForFlow } = await import(
+        "../segments/segmentEnrollmentWorker.server.js"
+      );
+      segmentBaseline = await seedSegmentBaselineForFlow(updated, {
+        enrollExisting: backfillSegmentMembers,
+      });
+    } catch (e) {
+      console.error(`[flow-lifecycle] segment baseline for ${journeyId} failed:`, e);
+    }
+  }
+
+  // segmentBaseline is surfaced to the merchant as a post-publish toast, so
+  // "enrolled 0 of N" is visible rather than only landing in the server log.
+  return { ...updated, segmentBaseline };
 }
 
 export async function pauseJourney(journeyId) {
