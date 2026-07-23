@@ -4,7 +4,7 @@
  */
 import prisma from "../../db.server.js";
 import { sendEmail, resolveFrom, resolveProvider } from "../email/index.server.js";
-import { renderVisualEmail } from "../email/visual-renderer.server.js";
+import { renderVisualEmail, renderCustomHtmlEmail } from "../email/visual-renderer.server.js";
 import { buildUnsubscribeUrl } from "../tracking/links.server.js";
 import { createDiscountCode } from "../shopify/discounts.server.js";
 import {
@@ -78,42 +78,45 @@ async function processJourneyJob(job) {
 
   const recoveryUrl = payload.recoveryUrl || "";
 
-  let parsedBlocks = [];
-  try { parsedBlocks = JSON.parse(step.emailBlocks || "[]"); } catch { parsedBlocks = []; }
-  let brand = {};
-  try { brand = JSON.parse(step.emailBrand || "{}"); } catch { brand = {}; }
+  const emailMode = step.emailMode || "blocks";
   const [firstName, ...rest] = String(enrollment.contactName || "").trim().split(/\s+/);
+
+  let parsedBlocks = [];
+  let brand = {};
 
   // Discount handling: discount blocks are the single source of truth for
   // "this email has a discount". The first discount block's percent drives a
   // single createDiscountCode() call; the resulting code is exposed via the
   // ctx.discount_code merge tag and used by the renderer for the block itself.
-  // If no discount block is present, no code is generated.
+  // If no discount block is present, no code is generated. Custom-HTML steps
+  // have no discount block, so they never generate a code (discount_code = "").
   let discountCode = "";
-  const discountBlock = parsedBlocks.find((b) => b && b.type === "discount" && Number(b.percent) > 0);
-  if (discountBlock) {
-    try {
-      discountCode = await createDiscountCode(shop, Number(discountBlock.percent));
-    } catch (err) {
-      console.error("[journey-worker] discount code failed:", err.message);
+  if (emailMode === "blocks") {
+    try { parsedBlocks = JSON.parse(step.emailBlocks || "[]"); } catch { parsedBlocks = []; }
+    try { brand = JSON.parse(step.emailBrand || "{}"); } catch { brand = {}; }
+    const discountBlock = parsedBlocks.find((b) => b && b.type === "discount" && Number(b.percent) > 0);
+    if (discountBlock) {
+      try {
+        discountCode = await createDiscountCode(shop, Number(discountBlock.percent));
+      } catch (err) {
+        console.error("[journey-worker] discount code failed:", err.message);
+      }
     }
   }
 
-  const html = await renderVisualEmail({
-    blocks: parsedBlocks,
-    brand,
-    ctx: {
-      first_name: firstName || "",
-      last_name: rest.join(" "),
-      store_name: settings.senderName || "",
-      store_url: `https://${shop}`,
-      discount_code: discountCode || "",
-      cart_url: recoveryUrl || "",
-      unsubscribeUrl,
-    },
-    stepId: step.id,
-    shop,
-  });
+  const ctx = {
+    first_name: firstName || "",
+    last_name: rest.join(" "),
+    store_name: settings.senderName || "",
+    store_url: `https://${shop}`,
+    discount_code: discountCode || "",
+    cart_url: recoveryUrl || "",
+    unsubscribeUrl,
+  };
+
+  const html = emailMode === "html"
+    ? renderCustomHtmlEmail({ html: step.emailHtml || "", ctx, stepId: step.id })
+    : await renderVisualEmail({ blocks: parsedBlocks, brand, ctx, stepId: step.id, shop });
 
   const subject = step.subject || defaultSubject(journey.trigger, step.stepNumber, settings.senderName);
   const provider = resolveProvider(settings);

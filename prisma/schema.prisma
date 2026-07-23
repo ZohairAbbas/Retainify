@@ -321,6 +321,11 @@ model JourneyStep {
   isArchived    Boolean  @default(false)
   emailBlocks   String   @default("[]")   // JSON array of block objects
   emailBrand    String   @default("{}")   // JSON brand kit object
+  // Email authoring mode. "blocks" (default) renders emailBlocks/emailBrand via
+  // the visual renderer; "html" sends the merchant's pasted emailHtml verbatim
+  // (merge tags + unsubscribe still applied at send time).
+  emailMode     String   @default("blocks") // blocks | html
+  emailHtml     String   @default("")        // raw pasted HTML (used when emailMode = "html")
   // Push notification fields
   pushTitle     String   @default("")
   pushBody      String   @default("")

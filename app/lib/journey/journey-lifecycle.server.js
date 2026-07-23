@@ -195,6 +195,8 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         templateStyle: s.templateStyle || "classic",
         discountPct: Number(s.discountPct) || 0,
         isEnabled: s.isEnabled !== false,
+        emailMode: s.emailMode === "html" ? "html" : "blocks",
+        emailHtml: s.emailHtml || "",
         emailBlocks,
         emailBrand: s.emailBrand || "{}",
       });

@@ -54,6 +54,15 @@ function mergeText(text, ctx) {
   return applyMergeTags(text, ctx).out;
 }
 
+/**
+ * Substitute merge tags in an arbitrary HTML string. Same tag set + semantics
+ * as the block renderer, exported so the custom-HTML send path stays identical
+ * to blocks. Returns just the substituted HTML.
+ */
+export function applyMergeTagsToHtml(html, ctx) {
+  return applyMergeTags(html, ctx).out;
+}
+
 function renderLogo(b, brand, fonts, ctx) {
   const sizes = { small: 14, medium: 18, large: 24 };
   const fontSize = sizes[b.size] || 18;
@@ -348,4 +357,81 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
   );
 
   return html;
+}
+
+// Minimal unsubscribe footer appended to custom HTML that doesn't provide its
+// own {unsubscribe_url}. Keeps custom-HTML sends CAN-SPAM / Shopify compliant.
+function unsubscribeFooterHtml(unsubscribeUrl) {
+  if (!unsubscribeUrl) return "";
+  return `<div style="font-family:Geist,system-ui,sans-serif;font-size:12px;color:#999;text-align:center;line-height:1.6;padding:24px 16px 8px;">
+    <a href="${escapeAttr(unsubscribeUrl)}" style="color:#999;text-decoration:underline;">Unsubscribe</a>
+    <div style="margin-top:6px;font-size:11px;opacity:0.6;">Powered by Retainify</div>
+  </div>`;
+}
+
+/**
+ * Render a merchant's pasted HTML template for send. Applies the SAME pipeline
+ * as blocks where it matters — merge tags + unsubscribe — and injects the head/
+ * wrapper without double-wrapping a full document.
+ *
+ * @param {{ html: string, ctx: object, stepId?: string }} args
+ *   ctx carries merge-tag values plus `unsubscribeUrl` (same object the worker
+ *   builds for the block path). `discount_code` is typically "" here since
+ *   custom-HTML steps don't generate a code.
+ * @returns {string} final HTML ready to send
+ */
+export function renderCustomHtmlEmail({ html, ctx = {}, stepId }) {
+  const raw = String(html || "");
+
+  // 1) Merge tags (incl. an explicit {unsubscribe_url} tag if the author used one).
+  let out = applyMergeTagsToHtml(raw, ctx);
+  const hadUnsubTag = /\{unsubscribe_url\}/.test(raw);
+  out = out.replace(/\{unsubscribe_url\}/g, ctx.unsubscribeUrl ? escapeAttr(ctx.unsubscribeUrl) : "");
+
+  // 2) Unsubscribe guarantee — only append a footer if the author didn't wire
+  //    their own {unsubscribe_url} and there's no existing unsubscribe link.
+  const hasUnsubLink = hadUnsubTag || /unsubscribe/i.test(out);
+  const footer = hasUnsubLink ? "" : unsubscribeFooterHtml(ctx.unsubscribeUrl);
+
+  const isFullDoc = /<html[\s>]/i.test(out);
+  const fontsLink = `<link rel="preconnect" href="https://fonts.googleapis.com" />\n<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n<link href="${GOOGLE_FONTS_HREF}" rel="stylesheet" />`;
+
+  let finalHtml;
+  if (isFullDoc) {
+    // 3a) Full document: pass through. Inject fonts link into <head> if present
+    //     and not already there; append footer before </body> (or at end).
+    let doc = out;
+    if (/<head[\s>]/i.test(doc) && !doc.includes("fonts.googleapis.com/css2")) {
+      doc = doc.replace(/<head([^>]*)>/i, (m) => `${m}\n${fontsLink}`);
+    }
+    if (footer) {
+      doc = /<\/body>/i.test(doc)
+        ? doc.replace(/<\/body>/i, `${footer}\n</body>`)
+        : doc + footer;
+    }
+    finalHtml = doc;
+  } else {
+    // 3b) Fragment: wrap in the same shell shape the block renderer uses.
+    finalHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta http-equiv="X-UA-Compatible" content="IE=edge" />
+<title>${escapeAttr(ctx.store_name || "")}</title>
+${fontsLink}
+</head>
+<body style="margin:0;padding:0;font-family:Geist,system-ui,sans-serif;">
+${out}
+${footer}
+</body>
+</html>`;
+  }
+
+  console.log(
+    `[email-render] step=${stepId || "?"} mode=html htmlBytes=${finalHtml.length}` +
+    ` fullDoc=${isFullDoc} unsubAppended=${footer ? 1 : 0}`,
+  );
+
+  return finalHtml;
 }

@@ -139,6 +139,8 @@ function expandCanvasNodes(steps) {
         templateStyle: s.templateStyle,
         discountPct: s.discountPct,
         isEnabled: s.isEnabled,
+        emailMode: s.emailMode || "blocks",
+        emailHtml: s.emailHtml || "",
         emailBlocks: safeJson(s.emailBlocks, []),
         emailBrand: safeJson(s.emailBrand, {}),
       });
@@ -215,6 +217,8 @@ export const action = async ({ request, params }) => {
           templateStyle: n.templateStyle || "classic",
           discountPct: Number(n.discountPct) || 0,
           isEnabled: n.isEnabled !== false,
+          emailMode: n.emailMode === "html" ? "html" : "blocks",
+          emailHtml: n.emailHtml || "",
           emailBlocks: JSON.stringify(n.emailBlocks || []),
           emailBrand: JSON.stringify(n.emailBrand || {}),
         };

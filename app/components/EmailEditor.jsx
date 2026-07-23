@@ -1071,6 +1071,83 @@ export function RenderedBlockPreview({ node }) {
   );
 }
 
+// ── Custom-HTML editor (source textarea + live iframe preview) ─────────────
+function HtmlEditorBody({ html, onChange, viewport }) {
+  const previewWidth = viewport === "mobile" ? 375 : 600;
+  return (
+    <div className="rt-emb-html">
+      <div className="rt-emb-html-pane">
+        <div className="rt-emb-html-pane-head t-micro muted">HTML source</div>
+        <textarea
+          className="rt-emb-html-code"
+          value={html}
+          spellCheck={false}
+          placeholder="Paste your email HTML here…"
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </div>
+      <div className="rt-emb-html-pane">
+        <div className="rt-emb-html-pane-head t-micro muted">Preview</div>
+        <div className="rt-emb-html-preview">
+          {/* Sandboxed so pasted markup can't touch the admin. */}
+          <iframe
+            title="HTML preview"
+            className="rt-emb-html-frame"
+            style={{ width: previewWidth }}
+            sandbox=""
+            srcDoc={html || "<!-- Your email preview appears here -->"}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Right-rail help shown in HTML mode: supported merge tags + unsubscribe note.
+function HtmlHelpInspector({ onInsertTag }) {
+  const tags = [...MERGE_TAGS, "{unsubscribe_url}"];
+  return (
+    <div className="rt-ins">
+      <div className="rt-ins-head">
+        <div className="rt-node-glyph rt-tint-email"><Icons.Code size={14} /></div>
+        <div>
+          <div className="t-micro muted">Custom HTML</div>
+          <div className="t-h2" style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>Your template</div>
+        </div>
+      </div>
+      <div className="rt-ins-section">
+        <div className="t-small muted" style={{ lineHeight: 1.6 }}>
+          Paste a complete email (a full <code style={{ fontFamily: "var(--font-mono)" }}>&lt;html&gt;</code> document
+          or a body snippet). It's sent as-is, with merge tags filled in at send time.
+        </div>
+      </div>
+      <div className="rt-ins-section">
+        <div className="t-micro muted" style={{ marginBottom: 10 }}>Merge tags</div>
+        <div className="t-small muted" style={{ marginBottom: 12 }}>Click to copy, then paste into your HTML.</div>
+        <div className="rt-emb-tag-grid">
+          {tags.map((t) => (
+            <button
+              key={t}
+              className="rt-emb-tag-chip"
+              onClick={() => onInsertTag(t)}
+              title="Copy to clipboard"
+            >{t}</button>
+          ))}
+        </div>
+      </div>
+      <div className="rt-ins-section">
+        <div className="rt-emb-linked-note">
+          <Icons.Bolt size={12} />
+          <span>
+            If you don't include <code style={{ fontFamily: "var(--font-mono)" }}>{"{unsubscribe_url}"}</code>,
+            a compliant unsubscribe link is added automatically before sending.
+          </span>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main editor ────────────────────────────────────────────────────────────
 export default function EmailEditor({ flow, node, onBack, onSave }) {
   const [blocks, setBlocks] = useState(() => node.emailBlocks?.length ? node.emailBlocks : defaultBlocks(node, flow?.trigger));
@@ -1081,6 +1158,9 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
   const [openGapId, setOpenGapId] = useState(null);
   const [saved, setSaved] = useState(true);
   const [templatesOpen, setTemplatesOpen] = useState(false);
+  // Authoring mode: "blocks" (visual editor) or "html" (paste your own template).
+  const [emailMode, setEmailMode] = useState(node.emailMode === "html" ? "html" : "blocks");
+  const [emailHtml, setEmailHtml] = useState(node.emailHtml || "");
 
   const selected = useMemo(() => blocks.find((b) => b.id === selectedId), [selectedId, blocks]);
 
@@ -1100,7 +1180,7 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
   useEffect(() => {
     if (firstRun.current) { firstRun.current = false; return; }
     setSaved(false);
-  }, [blocks, brand, nodeMeta]);
+  }, [blocks, brand, nodeMeta, emailMode, emailHtml]);
 
   function updateBlock(id, patch) {
     setBlocks((bs) => bs.map((b) => b.id === id ? { ...b, ...patch } : b));
@@ -1150,6 +1230,8 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
       ...node,
       subject: nodeMeta.subject,
       previewText: nodeMeta.previewText,
+      emailMode,
+      emailHtml,
       emailBlocks: blocks,
       emailBrand: brand,
     });
@@ -1200,27 +1282,39 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
         </div>
 
         <div className="rt-bt-center" style={{ gap: 18, alignItems: "center" }}>
-          <button
-            className="rt-emb-browse-btn"
-            onClick={() => setTemplatesOpen(true)}
-            title="Browse all email designs"
-          >
-            <span className="rt-emb-browse-btn-swatches">
-              <span style={{ background: brand.accent || "#1F3D2F" }} />
-              <span style={{ background: brand.bg || "#FFFFFF" }} />
-              <span style={{ background: "#14201A" }} />
-            </span>
-            <span>Browse templates</span>
-            <span className="rt-emb-browse-btn-pill">{TEMPLATE_ORDER.length}</span>
-          </button>
           <div className="rt-view-toggle">
-            <button className={viewport === "desktop" ? "rt-vt-on" : ""} onClick={() => setViewport("desktop")}>
-              <Icons.Desktop size={13} /> Desktop
+            <button className={emailMode === "blocks" ? "rt-vt-on" : ""} onClick={() => setEmailMode("blocks")}>
+              <Icons.Tab size={13} /> Visual
             </button>
-            <button className={viewport === "mobile" ? "rt-vt-on" : ""} onClick={() => setViewport("mobile")}>
-              <Icons.Phone size={13} /> Mobile
+            <button className={emailMode === "html" ? "rt-vt-on" : ""} onClick={() => setEmailMode("html")}>
+              <Icons.Code size={13} /> Custom HTML
             </button>
           </div>
+          {emailMode === "blocks" && (
+            <>
+              <button
+                className="rt-emb-browse-btn"
+                onClick={() => setTemplatesOpen(true)}
+                title="Browse all email designs"
+              >
+                <span className="rt-emb-browse-btn-swatches">
+                  <span style={{ background: brand.accent || "#1F3D2F" }} />
+                  <span style={{ background: brand.bg || "#FFFFFF" }} />
+                  <span style={{ background: "#14201A" }} />
+                </span>
+                <span>Browse templates</span>
+                <span className="rt-emb-browse-btn-pill">{TEMPLATE_ORDER.length}</span>
+              </button>
+              <div className="rt-view-toggle">
+                <button className={viewport === "desktop" ? "rt-vt-on" : ""} onClick={() => setViewport("desktop")}>
+                  <Icons.Desktop size={13} /> Desktop
+                </button>
+                <button className={viewport === "mobile" ? "rt-vt-on" : ""} onClick={() => setViewport("mobile")}>
+                  <Icons.Phone size={13} /> Mobile
+                </button>
+              </div>
+            </>
+          )}
         </div>
 
         <div className="rt-bt-right">
@@ -1233,6 +1327,18 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
       </div>
 
       {/* Body */}
+      {emailMode === "html" ? (
+        <div className="rt-builder-body rt-emb-builder">
+          <div className="rt-builder-canvas rt-emb-builder" style={{ padding: 0 }}>
+            <HtmlEditorBody html={emailHtml} onChange={setEmailHtml} viewport={viewport} />
+          </div>
+          <div className="rt-builder-inspector">
+            <HtmlHelpInspector
+              onInsertTag={(t) => { try { navigator.clipboard?.writeText(t); } catch { /* noop */ } }}
+            />
+          </div>
+        </div>
+      ) : (
       <div className="rt-builder-body rt-emb-builder">
         <BlockLibraryRail onAdd={addToEnd} />
 
@@ -1298,6 +1404,7 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
           )}
         </div>
       </div>
+      )}
 
       {templatesOpen && (
         <EmailTemplateGallery
