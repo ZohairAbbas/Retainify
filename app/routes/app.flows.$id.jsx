@@ -433,6 +433,8 @@ export default function FlowBuilder() {
             updateNode(updatedNode.id, {
               subject: updatedNode.subject,
               previewText: updatedNode.previewText,
+              emailMode: updatedNode.emailMode,
+              emailHtml: updatedNode.emailHtml,
               emailBlocks: updatedNode.emailBlocks,
               emailBrand: updatedNode.emailBrand,
             });
@@ -829,7 +831,9 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
         </div>
         {showPreview && (
           <div className="rt-node-preview">
-            {node.emailBlocks?.length ? (
+            {node.emailMode === "html" ? (
+              <CustomHtmlPreview node={node} />
+            ) : node.emailBlocks?.length ? (
               <RenderedBlockPreview node={node} />
             ) : (
               <EmailPreview node={node} />
@@ -867,6 +871,32 @@ function EmailPreview({ node }) {
         Hi Alex, thanks for joining us. We hand-pick a few favourites each week — here's something we think you'll love.
       </div>
       <div className="rt-email-btn">Shop now</div>
+    </div>
+  );
+}
+
+// Node-card preview for custom-HTML email steps. Renders the pasted HTML in a
+// small sandboxed, non-interactive iframe so the merchant sees their real
+// design (not the default block template).
+function CustomHtmlPreview({ node }) {
+  const html = (node.emailHtml || "").trim();
+  if (!html) {
+    return (
+      <div className="rt-email-html-card rt-email-html-empty">
+        <span>Custom HTML — nothing pasted yet</span>
+      </div>
+    );
+  }
+  return (
+    <div className="rt-email-html-card">
+      <div className="rt-email-html-badge">Custom HTML</div>
+      <iframe
+        title="Custom HTML preview"
+        className="rt-email-html-thumb"
+        sandbox=""
+        scrolling="no"
+        srcDoc={html}
+      />
     </div>
   );
 }

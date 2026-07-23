@@ -1072,8 +1072,7 @@ export function RenderedBlockPreview({ node }) {
 }
 
 // ── Custom-HTML editor (source textarea + live iframe preview) ─────────────
-function HtmlEditorBody({ html, onChange, viewport }) {
-  const previewWidth = viewport === "mobile" ? 375 : 600;
+function HtmlEditorBody({ html, onChange }) {
   return (
     <div className="rt-emb-html">
       <div className="rt-emb-html-pane">
@@ -1089,13 +1088,13 @@ function HtmlEditorBody({ html, onChange, viewport }) {
       <div className="rt-emb-html-pane">
         <div className="rt-emb-html-pane-head t-micro muted">Preview</div>
         <div className="rt-emb-html-preview">
-          {/* Sandboxed so pasted markup can't touch the admin. */}
+          {/* Sandboxed so pasted markup can't touch the admin. Fills the pane
+              width (capped by CSS) so wide email tables aren't clipped. */}
           <iframe
             title="HTML preview"
             className="rt-emb-html-frame"
-            style={{ width: previewWidth }}
             sandbox=""
-            srcDoc={html || "<!-- Your email preview appears here -->"}
+            srcDoc={html || "<!doctype html><body style='font-family:system-ui;color:#8a8a8a;padding:24px'>Your email preview appears here…</body>"}
           />
         </div>
       </div>
@@ -1328,9 +1327,9 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
 
       {/* Body */}
       {emailMode === "html" ? (
-        <div className="rt-builder-body rt-emb-builder">
-          <div className="rt-builder-canvas rt-emb-builder" style={{ padding: 0 }}>
-            <HtmlEditorBody html={emailHtml} onChange={setEmailHtml} viewport={viewport} />
+        <div className="rt-builder-body rt-emb-html-body">
+          <div className="rt-emb-html-canvas">
+            <HtmlEditorBody html={emailHtml} onChange={setEmailHtml} />
           </div>
           <div className="rt-builder-inspector">
             <HtmlHelpInspector
