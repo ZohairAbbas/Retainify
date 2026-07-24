@@ -19,7 +19,9 @@ export async function sendEmail({ to, from, replyTo, subject, html }) {
     const { data, error } = await client.emails.send({
       from,
       to,
-      reply_to: replyTo || undefined,
+      // Resend SDK v6 expects camelCase `replyTo` (it maps to the API's `reply_to`
+      // internally). Passing snake_case here is silently dropped → no Reply-To header.
+      replyTo: replyTo || undefined,
       subject,
       html,
     });
