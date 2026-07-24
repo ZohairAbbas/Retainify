@@ -57,7 +57,7 @@ export function resolveFrom({ settings, provider }) {
       process.env.SES_FROM_EMAIL || DEFAULT_SES_FROM_EMAIL;
     return {
       from: `${senderName} <${sesFrom}>`,
-      replyTo: merchantEmail,
+      replyTo: merchantReplyTo,
     };
   }
 

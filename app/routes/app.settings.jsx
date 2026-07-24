@@ -3,12 +3,21 @@ import { useLoaderData, useFetcher } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
+import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const settings = await prisma.shopSettings.findUnique({ where: { shop } });
-  return { settings: settings ?? {} };
+
+  // The real from-address this shop sends from, computed by the same seam the
+  // send path uses (Resend/SES Mode A → merchant domain; SES Mode B → our domain).
+  // Shown read-only so it never drifts from what actually goes out.
+  const provider = resolveProvider(settings);
+  const { from } = resolveFrom({ settings, provider });
+  const sendingFromAddress = from.match(/<([^>]+)>/)?.[1] || from;
+
+  return { settings: settings ?? {}, sendingFromAddress };
 };
 
 export const action = async ({ request }) => {
@@ -19,7 +28,6 @@ export const action = async ({ request }) => {
 
   if (intent === "save-settings") {
     const senderName = String(formData.get("senderName") || "").trim();
-    const senderEmail = String(formData.get("senderEmail") || "").trim();
     const replyTo = String(formData.get("replyTo") || "").trim();
     const brandColor = String(formData.get("brandColor") || "#000000").trim();
     const logoUrl = String(formData.get("logoUrl") || "").trim();
@@ -27,10 +35,13 @@ export const action = async ({ request }) => {
     const quietHoursEnd = parseInt(formData.get("quietHoursEnd") || "8", 10);
     const storeTimezone = String(formData.get("storeTimezone") || "UTC").trim();
 
+    // senderEmail is intentionally NOT written here: it's no longer merchant-editable
+    // (all sends use our shared from-address in Mode B). Existing values are preserved
+    // for Mode A (domainVerified) shops rather than being wiped to "".
     await prisma.shopSettings.upsert({
       where: { shop },
-      create: { shop, senderName, senderEmail, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
-      update: { senderName, senderEmail, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
+      create: { shop, senderName, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
+      update: { senderName, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
     });
     return { ok: true, saved: true };
   }
@@ -44,13 +55,12 @@ const HOURS = Array.from({ length: 24 }, (_, i) => ({
 }));
 
 export default function Settings() {
-  const { settings } = useLoaderData();
+  const { settings, sendingFromAddress } = useLoaderData();
   const fetcher = useFetcher();
   const saving = fetcher.state !== "idle";
   const saved = fetcher.data?.saved;
 
   const [senderName, setSenderName] = useState(settings.senderName || "");
-  const [senderEmail, setSenderEmail] = useState(settings.senderEmail || "");
   const [replyTo, setReplyTo] = useState(settings.replyTo || "");
   const [brandColor, setBrandColor] = useState(settings.brandColor || "#000000");
   const [logoUrl, setLogoUrl] = useState(settings.logoUrl || "");
@@ -63,7 +73,6 @@ export default function Settings() {
       {
         intent: "save-settings",
         senderName,
-        senderEmail,
         replyTo,
         brandColor,
         logoUrl,
@@ -105,10 +114,14 @@ export default function Settings() {
               <input
                 className="input"
                 type="email"
-                value={senderEmail}
-                onChange={(e) => setSenderEmail(e.target.value)}
-                placeholder="hello@yourstore.com"
+                value={sendingFromAddress}
+                disabled
+                readOnly
               />
+              <div className="field-help">
+                Emails are sent from this shared, deliverability-optimized address.
+                Contact support to use your own domain for email sending.
+              </div>
             </div>
             <div>
               <label className="field-label">Reply-to email</label>
@@ -119,6 +132,10 @@ export default function Settings() {
                 onChange={(e) => setReplyTo(e.target.value)}
                 placeholder="support@yourstore.com"
               />
+              <div className="field-help">
+                When a customer replies to your emails, their reply goes here.
+                Use any inbox you can receive mail at.
+              </div>
             </div>
           </div>
         </section>
