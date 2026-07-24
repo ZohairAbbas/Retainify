@@ -9,7 +9,7 @@ import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
 import { evaluateSegment } from "../lib/segments/evaluator.server.js";
-import { getSystemSegmentById, isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
+import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
 import SoonPill from "../components/contacts/SoonPill.jsx";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
@@ -49,34 +49,35 @@ export const loader = async ({ request, params }) => {
 
   const canvasNodes = expandCanvasNodes(journey.steps);
 
-  const stats = {};
-  for (const step of journey.steps) {
-    if (step.nodeType === "email") {
-      stats[step.id] = await getStepStats(step.id, 30);
-    }
-  }
+  const emailSteps = journey.steps.filter((s) => s.nodeType === "email");
 
   // Segment trigger metadata: choices for the dropdown, plus a current-match
   // count when the flow already points at a segment. The count is the same
   // number the segment detail page shows.
-  const segmentChoices = await listSegmentChoices(shop);
+  const [stepStats, segmentChoices] = await Promise.all([
+    Promise.all(emailSteps.map((step) => getStepStats(step.id, 30))),
+    listSegmentChoices(shop),
+  ]);
+  const stats = Object.fromEntries(emailSteps.map((s, i) => [s.id, stepStats[i]]));
+
   let triggerSegmentCount = null;
   if (journey.trigger === "segment_entered" && journey.triggerSegmentKey) {
     const key = journey.triggerSegmentKey;
-    let segment = null;
     if (isSystemSegmentId(key)) {
-      segment = { ...getSystemSegmentById(key), shop };
+      // listSegmentChoices already evaluated every system segment live — reuse
+      // that count instead of paying for a second full evaluation.
+      triggerSegmentCount = segmentChoices.find((c) => c.key === key)?.contactCount ?? null;
     } else {
-      segment = await prisma.segment.findFirst({
+      const segment = await prisma.segment.findFirst({
         where: { id: key, shop, deletedAt: null },
       });
-    }
-    if (segment) {
-      try {
-        const { count } = await evaluateSegment(shop, segment, { sampleSize: 0 });
-        triggerSegmentCount = count;
-      } catch (_e) {
-        triggerSegmentCount = null;
+      if (segment) {
+        try {
+          const { count } = await evaluateSegment(shop, segment, { sampleSize: 0 });
+          triggerSegmentCount = count;
+        } catch (_e) {
+          triggerSegmentCount = null;
+        }
       }
     }
   }
