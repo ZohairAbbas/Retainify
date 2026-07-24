@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import prisma from "../../db.server.js";
 
 const SUPPRESSION_STATUSES = new Set(["unsubscribed", "bounced", "complained"]);
@@ -249,26 +250,119 @@ export async function getContactStats(shop, email) {
     }),
   ]);
 
-  const cartAbandonCount = cartAggregate._count?._all || 0;
-  const lastCartAbandonAt = cartAggregate._max?.abandonedAt || null;
-  const lastCartValue = cartAggregate._max?.totalPrice || 0;
+  return buildStats({
+    cartAbandonCount: cartAggregate._count?._all || 0,
+    lastCartAbandonAt: cartAggregate._max?.abandonedAt || null,
+    lastCartValue: cartAggregate._max?.totalPrice || 0,
+    emailsSent: emailSent,
+    emailsOpened: emailOpened,
+    emailsClicked: emailClicked,
+    pushesSent: pushSent,
+    pushesClicked: pushClicked,
+  });
+}
 
+/** Shared stats shape — keeps getContactStats and the batch variant identical. */
+function buildStats(parts = {}) {
+  const emailsSent = parts.emailsSent || 0;
+  const emailsOpened = parts.emailsOpened || 0;
+  const emailsClicked = parts.emailsClicked || 0;
   return {
     totalSpent: 0,
     orderCount: 0,
     lastOrderAt: null,
     averageOrderValue: 0,
-    cartAbandonCount,
-    lastCartAbandonAt,
-    lastCartValue,
-    emailsSent: emailSent,
-    emailsOpened: emailOpened,
-    emailsClicked: emailClicked,
-    openRate: emailSent > 0 ? (emailOpened / emailSent) * 100 : 0,
-    clickRate: emailSent > 0 ? (emailClicked / emailSent) * 100 : 0,
-    pushesSent: pushSent,
-    pushesClicked: pushClicked,
+    cartAbandonCount: parts.cartAbandonCount || 0,
+    lastCartAbandonAt: parts.lastCartAbandonAt || null,
+    lastCartValue: parts.lastCartValue || 0,
+    emailsSent,
+    emailsOpened,
+    emailsClicked,
+    openRate: emailsSent > 0 ? (emailsOpened / emailsSent) * 100 : 0,
+    clickRate: emailsSent > 0 ? (emailsClicked / emailsSent) * 100 : 0,
+    pushesSent: parts.pushesSent || 0,
+    pushesClicked: parts.pushesClicked || 0,
   };
+}
+
+export function emptyContactStats() {
+  return buildStats();
+}
+
+/**
+ * Batch version of getContactStats. Same per-contact shape, but computed with
+ * three grouped queries instead of six per contact — segment evaluation scans
+ * thousands of contacts and the per-contact form was an N+1 (see the JS-eval
+ * path in segments/evaluator.server.js).
+ *
+ * Returns a Map keyed by normalized email. Emails with no activity are present
+ * with a zeroed stats object, so callers never need a null check.
+ */
+export async function getContactStatsBatch(shop, emails) {
+  const list = [...new Set((emails || []).map(normalizeEmail).filter(Boolean))];
+  const out = new Map(list.map((e) => [e, buildStats()]));
+  if (list.length === 0) return out;
+
+  // Past a few hundred emails the IN list costs more than it saves, and callers
+  // that big (segment scans) are asking for most of the shop anyway — aggregate
+  // shop-wide and let the map lookup drop the rows we didn't ask for.
+  const wide = list.length > 200;
+  const emailFilter = wide
+    ? Prisma.empty
+    : Prisma.sql`AND e."contactEmail" IN (${Prisma.join(list)})`;
+
+  const [cartRows, journeyRows, pushRows] = await Promise.all([
+    prisma.abandonedCart.groupBy({
+      by: ["customerEmail"],
+      where: { shop, ...(wide ? {} : { customerEmail: { in: list } }) },
+      _count: { _all: true },
+      _max: { abandonedAt: true, totalPrice: true },
+    }),
+    // JourneyJob/PushJob only reach the contact through their enrollment, which
+    // Prisma's groupBy cannot traverse — one grouped join each instead.
+    prisma.$queryRaw`
+      SELECT e."contactEmail" AS email,
+             COUNT(*) FILTER (WHERE j."sentAt" IS NOT NULL)    AS sent,
+             COUNT(*) FILTER (WHERE j."openedAt" IS NOT NULL)  AS opened,
+             COUNT(*) FILTER (WHERE j."clickedAt" IS NOT NULL) AS clicked
+        FROM "JourneyJob" j
+        JOIN "JourneyEnrollment" e ON e."id" = j."enrollmentId"
+       WHERE j."shop" = ${shop} ${emailFilter}
+       GROUP BY e."contactEmail"`,
+    prisma.$queryRaw`
+      SELECT e."contactEmail" AS email,
+             COUNT(*) FILTER (WHERE p."sentAt" IS NOT NULL)   AS sent,
+             COUNT(*) FILTER (WHERE p."status" = 'done')      AS clicked
+        FROM "PushJob" p
+        JOIN "JourneyEnrollment" e ON e."id" = p."enrollmentId"
+       WHERE p."shop" = ${shop} ${emailFilter}
+       GROUP BY e."contactEmail"`,
+  ]);
+
+  for (const row of cartRows) {
+    const s = out.get(normalizeEmail(row.customerEmail));
+    if (!s) continue;
+    s.cartAbandonCount = row._count?._all || 0;
+    s.lastCartAbandonAt = row._max?.abandonedAt || null;
+    s.lastCartValue = row._max?.totalPrice || 0;
+  }
+  for (const row of journeyRows) {
+    const s = out.get(normalizeEmail(row.email));
+    if (!s) continue;
+    s.emailsSent = Number(row.sent) || 0;
+    s.emailsOpened = Number(row.opened) || 0;
+    s.emailsClicked = Number(row.clicked) || 0;
+    s.openRate = s.emailsSent > 0 ? (s.emailsOpened / s.emailsSent) * 100 : 0;
+    s.clickRate = s.emailsSent > 0 ? (s.emailsClicked / s.emailsSent) * 100 : 0;
+  }
+  for (const row of pushRows) {
+    const s = out.get(normalizeEmail(row.email));
+    if (!s) continue;
+    s.pushesSent = Number(row.sent) || 0;
+    s.pushesClicked = Number(row.clicked) || 0;
+  }
+
+  return out;
 }
 
 /**

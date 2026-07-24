@@ -20,7 +20,11 @@
 
 import prisma from "../../db.server.js";
 import { FIELD_BY_ID } from "./fields.server.js";
-import { computeLifecycle, getContactStats } from "../contacts/contacts.server.js";
+import {
+  computeLifecycle,
+  getContactStatsBatch,
+  emptyContactStats,
+} from "../contacts/contacts.server.js";
 
 const MAX_SCAN = 5000;
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -32,16 +36,9 @@ const PRISMA_SAFE_FIELDS = new Set([
   "firstSeenAt",
   "lastSeenAt",
 ]);
-const STATS_FIELDS = new Set([
-  "cartAbandonCount",
-  "lastCartAt",
-  "lastCartValue",
-  "hasActiveCart",
-  "emailsSent",
-  "emailsOpened",
-  "emailsClicked",
-  "lifecycleStage",
-]);
+// Fields that can only be evaluated in JS, from batched contact stats:
+//   cartAbandonCount, lastCartAt, lastCartValue, hasActiveCart,
+//   emailsSent, emailsOpened, emailsClicked, lifecycleStage
 
 function isGroup(node) {
   return node && node.type === "group";
@@ -232,18 +229,6 @@ export function evalTreeForContact(tree, ctx) {
   return evalTreeJs(tree, ctx);
 }
 
-// Whether the tree references any rule that needs JS-side evaluation.
-function needsJsEval(node) {
-  if (isRule(node)) {
-    const f = FIELD_BY_ID[node.field];
-    if (!f) return false;
-    if (!f.supported) return false;
-    return STATS_FIELDS.has(node.field);
-  }
-  if (!isGroup(node)) return false;
-  return (node.children || []).some(needsJsEval);
-}
-
 // Build a Prisma where-fragment that prefilters to a smaller candidate set
 // before JS evaluation. Conservative: only ANDs in safe positive leaves at
 // the root, so we never over-narrow when the tree contains OR groups.
@@ -318,13 +303,7 @@ async function evaluateStatic(shop, segment, sampleSize, returnIds = false) {
     where: { id: { in: ids }, shop, deletedAt: null },
     include: { tags: { include: { tag: true } } },
   });
-  const sampleContacts = contacts.slice(0, sampleSize);
-  const sample = await Promise.all(
-    sampleContacts.map(async (c) => {
-      const stats = await getContactStats(shop, c.email);
-      return { id: c.id, email: c.email, name: c.name, lifecycle: computeLifecycle(c, stats) };
-    }),
-  );
+  const sample = await buildSample(shop, contacts.slice(0, sampleSize));
   return {
     count: contacts.length,
     sample,
@@ -344,12 +323,7 @@ async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
       orderBy: { lastSeenAt: "desc" },
       include: { tags: { include: { tag: true } } },
     });
-    const sample = await Promise.all(
-      sampleRows.map(async (c) => ({
-        id: c.id, email: c.email, name: c.name,
-        lifecycle: computeLifecycle(c, await getContactStats(shop, c.email)),
-      })),
-    );
+    const sample = await buildSample(shop, sampleRows);
     let matchedIds;
     if (returnIds) {
       const idRows = await prisma.contact.findMany({
@@ -383,12 +357,7 @@ async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
         include: { tags: { include: { tag: true } } },
       }),
     ]);
-    const sample = await Promise.all(
-      sampleRows.map(async (c) => ({
-        id: c.id, email: c.email, name: c.name,
-        lifecycle: computeLifecycle(c, await getContactStats(shop, c.email)),
-      })),
-    );
+    const sample = await buildSample(shop, sampleRows);
     let matchedIds;
     if (returnIds) {
       const idRows = await prisma.contact.findMany({
@@ -421,16 +390,17 @@ async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
   const capped = candidates.length > MAX_SCAN;
   const scanList = capped ? candidates.slice(0, MAX_SCAN) : candidates;
 
+  // One batched stats fetch for the whole scan window — this used to be six
+  // queries per contact, which dominated load time on shops with more than a
+  // few hundred contacts.
+  const statsByEmail = await getContactStatsBatch(shop, scanList.map((c) => c.email));
+
   const matched = [];
   for (const c of scanList) {
-    const stats = await getContactStats(shop, c.email);
+    const stats = statsFor(statsByEmail, c);
     const lifecycle = computeLifecycle(c, stats);
     if (evalTreeJs(tree, { contact: c, stats, lifecycle })) {
       matched.push({ contact: c, lifecycle });
-      if (matched.length >= sampleSize * 4 && needsJsEval(tree)) {
-        // Continue scanning but no need to accumulate further — we only
-        // need the sample. We still want a true count so don't break.
-      }
     }
   }
 
@@ -462,10 +432,22 @@ function mixFromLifecycles(stages) {
 }
 
 async function mixFromContacts(shop, contacts) {
-  const stages = [];
-  for (const c of contacts) {
-    const stats = await getContactStats(shop, c.email);
-    stages.push(computeLifecycle(c, stats));
-  }
-  return mixFromLifecycles(stages);
+  const statsByEmail = await getContactStatsBatch(shop, contacts.map((c) => c.email));
+  return mixFromLifecycles(contacts.map((c) => computeLifecycle(c, statsFor(statsByEmail, c))));
+}
+
+/** Map lookup with the same normalization getContactStatsBatch keys on. */
+function statsFor(statsByEmail, contact) {
+  return statsByEmail.get(String(contact.email || "").trim().toLowerCase()) || emptyContactStats();
+}
+
+/** Build the sample rows for a set of contacts with one batched stats fetch. */
+async function buildSample(shop, contacts) {
+  const statsByEmail = await getContactStatsBatch(shop, contacts.map((c) => c.email));
+  return contacts.map((c) => ({
+    id: c.id,
+    email: c.email,
+    name: c.name,
+    lifecycle: computeLifecycle(c, statsFor(statsByEmail, c)),
+  }));
 }
