@@ -604,6 +604,33 @@ export default function ContactsPage() {
           <div className="rt-tnum">Last seen</div>
           <div />
         </div>
+
+        {/* Select-all-filtered banner — sits directly under the column headers */}
+        {showSelectAllBanner && (
+          <div className="rt-select-all-banner">
+            All <strong>{contacts.length}</strong> contacts on this page are selected.{" "}
+            <button
+              type="button"
+              className="rt-link"
+              onClick={() => setSelectAllFiltered(true)}
+            >
+              Select all {filteredTotal.toLocaleString()} contacts matching this filter
+            </button>
+          </div>
+        )}
+        {selectAllFiltered && (
+          <div className="rt-select-all-banner rt-select-all-banner--active">
+            All <strong>{filteredTotal.toLocaleString()}</strong> contacts matching this filter are selected.{" "}
+            <button
+              type="button"
+              className="rt-link"
+              onClick={() => { setSelectAllFiltered(false); setSelected(new Set()); }}
+            >
+              Clear selection
+            </button>
+          </div>
+        )}
+
         {contacts.map((c) => {
           const isOn = selected.has(c.id);
           return (
@@ -725,53 +752,25 @@ export default function ContactsPage() {
         )}
       </div>
 
-      {/* Select-all-filtered banner */}
-      {showSelectAllBanner && (
-        <div className="rt-select-all-banner">
-          All <strong>{contacts.length}</strong> contacts on this page are selected.{" "}
-          <button
-            type="button"
-            className="rt-link"
-            onClick={() => setSelectAllFiltered(true)}
-          >
-            Select all {filteredTotal.toLocaleString()} contacts matching this filter
-          </button>
-        </div>
-      )}
-      {selectAllFiltered && (
-        <div className="rt-select-all-banner rt-select-all-banner--active">
-          All <strong>{filteredTotal.toLocaleString()}</strong> contacts matching this filter are selected.{" "}
-          <button
-            type="button"
-            className="rt-link"
-            onClick={() => { setSelectAllFiltered(false); setSelected(new Set()); }}
-          >
-            Clear selection
-          </button>
-        </div>
-      )}
-
       <div className="rt-table-foot">
         <span className="muted">
           Showing <strong style={{ color: "var(--ink-1)" }}>{contacts.length}</strong> of{" "}
-          {filteredTotal.toLocaleString()} contacts
+          {filteredTotal.toLocaleString()} contacts · Sorted by last seen, newest first
         </span>
-        <span className="muted">·</span>
-        <span className="muted">Sorted by last seen, newest first</span>
-        {nextCursor && (
-          <>
-            <span className="muted">·</span>
-            <button
-              type="button"
-              className="rt-link"
-              onClick={loadMore}
-              disabled={moreFetcher.state !== "idle"}
-            >
-              {moreFetcher.state !== "idle" ? "Loading…" : "Load more"}
-            </button>
-          </>
-        )}
       </div>
+
+      {nextCursor && (
+        <div style={{ display: "flex", justifyContent: "center", padding: "16px 0 8px" }}>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={loadMore}
+            disabled={moreFetcher.state !== "idle"}
+          >
+            {moreFetcher.state !== "idle" ? "Loading…" : `Load more · ${(filteredTotal - contacts.length).toLocaleString()} remaining`}
+          </button>
+        </div>
+      )}
 
       <BulkBar
         selectedCount={selectAllFiltered ? filteredTotal : selected.size}

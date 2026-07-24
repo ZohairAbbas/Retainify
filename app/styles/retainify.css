@@ -1767,13 +1767,13 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 
 /* ── Select-all-filtered banner ──────────────────────────────────────── */
 .rt-select-all-banner {
+  /* span all grid columns when placed inside .rt-ctable */
+  grid-column: 1 / -1;
   padding: 10px 16px;
   background: var(--info-bg, #e8f0fe);
-  border: 1px solid var(--hair-1);
-  border-radius: var(--r-2);
+  border-bottom: 1px solid var(--hair-1);
   font-size: 13px;
   color: var(--ink-2);
-  margin-bottom: 4px;
 }
 .rt-select-all-banner--active { background: var(--brand-100); }
 
