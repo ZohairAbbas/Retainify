@@ -396,6 +396,8 @@ export async function summarizeContacts(shop) {
 /**
  * Cursor-paginated list. Server applies filter chips (status, source, tagId,
  * lifecycle-ish via createdAt). `search` does an OR on email/name (capped 200).
+ * Also returns filteredTotal (count of ALL rows matching the filter, not just
+ * the current page) so the UI can show "Showing X of Y" accurately.
  */
 export async function listContacts({
   shop,
@@ -422,22 +424,48 @@ export async function listContacts({
 
   const take = search ? Math.min(limit, 200) : limit;
 
-  const rows = await prisma.contact.findMany({
-    where,
-    take: take + 1,
-    ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-    orderBy: [{ lastSeenAt: "desc" }, { id: "desc" }],
-    include: {
-      tags: { include: { tag: true } },
-    },
-  });
+  const [rows, filteredTotal] = await Promise.all([
+    prisma.contact.findMany({
+      where,
+      take: take + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      orderBy: [{ lastSeenAt: "desc" }, { id: "desc" }],
+      include: {
+        tags: { include: { tag: true } },
+      },
+    }),
+    prisma.contact.count({ where }),
+  ]);
 
   let nextCursor = null;
   if (rows.length > take) {
     const last = rows.pop();
     nextCursor = last.id;
   }
-  return { rows, nextCursor };
+  return { rows, nextCursor, filteredTotal };
+}
+
+/**
+ * Returns all contact IDs (and emails) matching the given filters — used for
+ * server-side "select all filtered" bulk actions.
+ */
+export async function listAllContactIds({ shop, status, source, tagId, search }) {
+  const where = { shop, deletedAt: null };
+  if (status && status !== "all") where.subscriptionStatus = status;
+  if (source && source !== "all") where.source = source;
+  if (tagId && tagId !== "all") where.tags = { some: { tagId } };
+  if (search) {
+    const q = search.trim();
+    where.OR = [
+      { email: { contains: q, mode: "insensitive" } },
+      { name: { contains: q, mode: "insensitive" } },
+    ];
+  }
+  return prisma.contact.findMany({
+    where,
+    select: { id: true, email: true },
+    orderBy: [{ lastSeenAt: "desc" }, { id: "desc" }],
+  });
 }
 
 export async function getContactById(shop, id) {

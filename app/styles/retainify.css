@@ -1765,6 +1765,18 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-sync-done { display: flex; align-items: center; gap: 16px; padding: 8px 0; }
 .rt-sync-check { width: 44px; height: 44px; border-radius: 50%; background: var(--brand-100); color: var(--brand-700); display: flex; align-items: center; justify-content: center; }
 
+/* ── Select-all-filtered banner ──────────────────────────────────────── */
+.rt-select-all-banner {
+  padding: 10px 16px;
+  background: var(--info-bg, #e8f0fe);
+  border: 1px solid var(--hair-1);
+  border-radius: var(--r-2);
+  font-size: 13px;
+  color: var(--ink-2);
+  margin-bottom: 4px;
+}
+.rt-select-all-banner--active { background: var(--brand-100); }
+
 /* ── CSV import drop zone ────────────────────────────────────────────── */
 .rt-csv-dropzone {
   display: flex; flex-direction: column; align-items: center; justify-content: center;

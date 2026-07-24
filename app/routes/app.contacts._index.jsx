@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
@@ -27,6 +27,7 @@ import {
   createManualContact,
   getContactStats,
   listContacts,
+  listAllContactIds,
   resubscribeContact,
   softDeleteContact,
   summarizeContacts,
@@ -48,11 +49,12 @@ export const loader = async ({ request }) => {
   const source = url.searchParams.get("source") || "all";
   const tagId = url.searchParams.get("tag") || "all";
   const search = url.searchParams.get("q") || "";
+  const cursor = url.searchParams.get("cursor") || undefined;
 
   const backfill = await runContactsBackfillIfNeeded(shop);
 
-  const [{ rows }, summary, tags, sync] = await Promise.all([
-    listContacts({ shop, status, source, tagId, search }),
+  const [{ rows, nextCursor, filteredTotal }, summary, tags, sync] = await Promise.all([
+    listContacts({ shop, status, source, tagId, search, cursor }),
     summarizeContacts(shop),
     listTagsForShop(shop),
     getSyncProgress(shop),
@@ -88,6 +90,8 @@ export const loader = async ({ request }) => {
     tags,
     sync,
     backfill,
+    nextCursor: nextCursor || null,
+    filteredTotal,
     filters: { status, source, tagId, search },
   };
 };
@@ -119,27 +123,55 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "bulk_unsubscribe") {
-    const emails = fd.getAll("email").map(String).filter(Boolean);
-    for (const email of emails) {
-      await unsubscribeContact(shop, email);
+    const selectAllFiltered = fd.get("selectAllFiltered") === "1";
+    if (selectAllFiltered) {
+      const filterStatus = String(fd.get("filterStatus") || "all");
+      const filterSource = String(fd.get("filterSource") || "all");
+      const filterTagId = String(fd.get("filterTagId") || "all");
+      const filterSearch = String(fd.get("filterSearch") || "");
+      const all = await listAllContactIds({ shop, status: filterStatus, source: filterSource, tagId: filterTagId, search: filterSearch });
+      for (const { email } of all) await unsubscribeContact(shop, email);
+    } else {
+      const emails = fd.getAll("email").map(String).filter(Boolean);
+      for (const email of emails) await unsubscribeContact(shop, email);
     }
     return { ok: true };
   }
 
   if (intent === "bulk_delete") {
-    const ids = fd.getAll("contactId").map(String).filter(Boolean);
-    for (const id of ids) {
-      await softDeleteContact(shop, id);
+    const selectAllFiltered = fd.get("selectAllFiltered") === "1";
+    if (selectAllFiltered) {
+      const filterStatus = String(fd.get("filterStatus") || "all");
+      const filterSource = String(fd.get("filterSource") || "all");
+      const filterTagId = String(fd.get("filterTagId") || "all");
+      const filterSearch = String(fd.get("filterSearch") || "");
+      const all = await listAllContactIds({ shop, status: filterStatus, source: filterSource, tagId: filterTagId, search: filterSearch });
+      for (const { id } of all) await softDeleteContact(shop, id);
+    } else {
+      const ids = fd.getAll("contactId").map(String).filter(Boolean);
+      for (const id of ids) await softDeleteContact(shop, id);
     }
     return { ok: true };
   }
 
   if (intent === "bulk_apply_tag") {
-    const ids = fd.getAll("contactId").map(String).filter(Boolean);
+    const selectAllFiltered = fd.get("selectAllFiltered") === "1";
     const tagName = String(fd.get("tagName") || "").trim();
-    if (!ids.length || !tagName) return { ok: false };
+    if (!tagName) return { ok: false };
     const tag = await upsertTag(shop, tagName);
-    if (tag) await bulkApplyTag(shop, ids, tag.id);
+    if (!tag) return { ok: false };
+    if (selectAllFiltered) {
+      const filterStatus = String(fd.get("filterStatus") || "all");
+      const filterSource = String(fd.get("filterSource") || "all");
+      const filterTagId = String(fd.get("filterTagId") || "all");
+      const filterSearch = String(fd.get("filterSearch") || "");
+      const all = await listAllContactIds({ shop, status: filterStatus, source: filterSource, tagId: filterTagId, search: filterSearch });
+      await bulkApplyTag(shop, all.map((c) => c.id), tag.id);
+    } else {
+      const ids = fd.getAll("contactId").map(String).filter(Boolean);
+      if (!ids.length) return { ok: false };
+      await bulkApplyTag(shop, ids, tag.id);
+    }
     return { ok: true };
   }
 
@@ -208,31 +240,82 @@ export const action = async ({ request }) => {
 };
 
 export default function ContactsPage() {
-  const { contacts, summary, tags, sync, backfill, filters } = useLoaderData();
+  const loaderData = useLoaderData();
+  const { summary, tags, sync, backfill, filters } = loaderData;
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const fetcher = useFetcher();
+  const moreFetcher = useFetcher();
+
+  // Accumulate pages. Reset when filters change (tracked via a serialized key).
+  const filtersKey = JSON.stringify(filters);
+  const filtersKeyRef = useRef(filtersKey);
+  const [allContacts, setAllContacts] = useState(loaderData.contacts);
+  const [nextCursor, setNextCursor] = useState(loaderData.nextCursor);
+  const filteredTotal = loaderData.filteredTotal;
+
+  // When the filter key changes (user changed a filter chip), reset to the
+  // fresh loader data. When "load more" completes, append.
+  useEffect(() => {
+    if (filtersKey !== filtersKeyRef.current) {
+      filtersKeyRef.current = filtersKey;
+      setAllContacts(loaderData.contacts);
+      setNextCursor(loaderData.nextCursor);
+      setSelected(new Set());
+      setSelectAllFiltered(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtersKey, loaderData.contacts, loaderData.nextCursor]);
+
+  useEffect(() => {
+    if (moreFetcher.state === "idle" && moreFetcher.data?.contacts) {
+      setAllContacts((prev) => [...prev, ...moreFetcher.data.contacts]);
+      setNextCursor(moreFetcher.data.nextCursor);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [moreFetcher.state, moreFetcher.data]);
+
+  const contacts = allContacts;
+
+  const loadMore = () => {
+    if (!nextCursor) return;
+    const next = new URLSearchParams(params);
+    next.set("cursor", nextCursor);
+    moreFetcher.load(`/app/contacts?${next.toString()}`);
+  };
 
   const [selected, setSelected] = useState(new Set());
+  // selectAllFiltered = true means the user chose "select all N matching filter"
+  const [selectAllFiltered, setSelectAllFiltered] = useState(false);
   const [syncOpen, setSyncOpen] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
   const [showUnify, setShowUnify] = useState(backfill?.didRun && backfill.added > 0);
   const [openMenu, setOpenMenu] = useState(null);
 
-  const allChecked = contacts.length > 0 && contacts.every((c) => selected.has(c.id));
+  const allPageChecked = contacts.length > 0 && contacts.every((c) => selected.has(c.id));
+  // Show "select all N" banner when the full page is checked but not everything is selected yet
+  const showSelectAllBanner = allPageChecked && !selectAllFiltered && filteredTotal > contacts.length;
 
   const setFilter = (key, value) => {
     const next = new URLSearchParams(params);
+    next.delete("cursor");
     if (!value || value === "all") next.delete(key);
     else next.set(key, value);
     setParams(next, { replace: true });
+    setSelectAllFiltered(false);
   };
 
   const toggleAll = () => {
+    if (selectAllFiltered) {
+      setSelectAllFiltered(false);
+      setSelected(new Set());
+      return;
+    }
     const next = new Set(selected);
-    if (allChecked) {
+    if (allPageChecked) {
       for (const c of contacts) next.delete(c.id);
+      setSelectAllFiltered(false);
     } else {
       for (const c of contacts) next.add(c.id);
     }
@@ -240,6 +323,7 @@ export default function ContactsPage() {
   };
 
   const toggleOne = (id) => {
+    setSelectAllFiltered(false);
     const next = new Set(selected);
     if (next.has(id)) next.delete(id);
     else next.add(id);
@@ -268,15 +352,24 @@ export default function ContactsPage() {
   const submitBulk = (intent, extras = {}) => {
     const fd = new FormData();
     fd.set("intent", intent);
-    for (const id of selected) {
-      const c = contacts.find((x) => x.id === id);
-      if (!c) continue;
-      fd.append("contactId", id);
-      fd.append("email", c.email);
+    if (selectAllFiltered) {
+      fd.set("selectAllFiltered", "1");
+      fd.set("filterStatus", filters.status || "all");
+      fd.set("filterSource", filters.source || "all");
+      fd.set("filterTagId", filters.tagId || "all");
+      fd.set("filterSearch", filters.search || "");
+    } else {
+      for (const id of selected) {
+        const c = contacts.find((x) => x.id === id);
+        if (!c) continue;
+        fd.append("contactId", id);
+        fd.append("email", c.email);
+      }
     }
     for (const [k, v] of Object.entries(extras)) fd.set(k, v);
     fetcher.submit(fd, { method: "post" });
     setSelected(new Set());
+    setSelectAllFiltered(false);
   };
 
   const submitRowAction = (intent, contact) => {
@@ -498,7 +591,7 @@ export default function ContactsPage() {
             <input
               type="checkbox"
               className="rt-checkbox"
-              checked={allChecked}
+              checked={allPageChecked || selectAllFiltered}
               onChange={toggleAll}
               aria-label="Select all"
             />
@@ -632,24 +725,64 @@ export default function ContactsPage() {
         )}
       </div>
 
+      {/* Select-all-filtered banner */}
+      {showSelectAllBanner && (
+        <div className="rt-select-all-banner">
+          All <strong>{contacts.length}</strong> contacts on this page are selected.{" "}
+          <button
+            type="button"
+            className="rt-link"
+            onClick={() => setSelectAllFiltered(true)}
+          >
+            Select all {filteredTotal.toLocaleString()} contacts matching this filter
+          </button>
+        </div>
+      )}
+      {selectAllFiltered && (
+        <div className="rt-select-all-banner rt-select-all-banner--active">
+          All <strong>{filteredTotal.toLocaleString()}</strong> contacts matching this filter are selected.{" "}
+          <button
+            type="button"
+            className="rt-link"
+            onClick={() => { setSelectAllFiltered(false); setSelected(new Set()); }}
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       <div className="rt-table-foot">
         <span className="muted">
           Showing <strong style={{ color: "var(--ink-1)" }}>{contacts.length}</strong> of{" "}
-          {summary.total} contacts
+          {filteredTotal.toLocaleString()} contacts
         </span>
         <span className="muted">·</span>
         <span className="muted">Sorted by last seen, newest first</span>
+        {nextCursor && (
+          <>
+            <span className="muted">·</span>
+            <button
+              type="button"
+              className="rt-link"
+              onClick={loadMore}
+              disabled={moreFetcher.state !== "idle"}
+            >
+              {moreFetcher.state !== "idle" ? "Loading…" : "Load more"}
+            </button>
+          </>
+        )}
       </div>
 
       <BulkBar
-        selectedCount={selected.size}
+        selectedCount={selectAllFiltered ? filteredTotal : selected.size}
         onAddTag={() => {
           const name = window.prompt("Tag name");
           if (name) submitBulk("bulk_apply_tag", { tagName: name });
         }}
         onSaveAsSegment={() => {
+          const count = selectAllFiltered ? filteredTotal : selected.size;
           const name = window.prompt(
-            `Save these ${selected.size} contact(s) as a static segment. Name?`,
+            `Save these ${count} contact(s) as a static segment. Name?`,
           );
           if (name && name.trim()) {
             submitBulk("bulk_save_as_segment", { name: name.trim() });
@@ -657,7 +790,8 @@ export default function ContactsPage() {
         }}
         onUnsubscribe={() => submitBulk("bulk_unsubscribe")}
         onDelete={() => {
-          if (window.confirm(`Delete ${selected.size} contact(s)?`)) {
+          const count = selectAllFiltered ? filteredTotal : selected.size;
+          if (window.confirm(`Delete ${count} contact(s)?`)) {
             submitBulk("bulk_delete");
           }
         }}
