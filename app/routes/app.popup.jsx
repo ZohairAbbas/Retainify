@@ -169,8 +169,10 @@ export default function PopupRoute() {
     toggleFetcher.submit({ intent: "toggle-enabled" }, { method: "post" });
   }
 
+  // Clicking a gallery card is purely a navigation action — it opens the
+  // editor with the picked template. Nothing is persisted until Save.
+  // Cancel/Back leaves the currently-saved popup untouched.
   function handleUseTemplate(templateId) {
-    fetcher.submit({ intent: "use-template", template: templateId }, { method: "post" });
     enterEditor(templateId);
   }
 
