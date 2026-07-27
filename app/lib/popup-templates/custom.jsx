@@ -3,7 +3,9 @@ import { CommonTimingFields } from "./shared.jsx";
 import { sanitizePopupHtml, findMissingHooks, STARTER_HTML } from "./html-sanitize.js";
 
 export function RenderCustom({ data, scale }) {
-  const safe = useMemo(() => sanitizePopupHtml(data.html || ""), [data.html]);
+  // Scope merchant CSS to the popup wrapper so `body {}` / `:root {}` /
+  // bare tag selectors don't leak into the admin page.
+  const safe = useMemo(() => sanitizePopupHtml(data.html || "", ".tpl-custom"), [data.html]);
   return (
     <div
       className="tpl-custom"

@@ -209,13 +209,115 @@
   var RT_EVENT_HANDLER_RE = /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
   var RT_JS_URL_RE = /\s(href|src|action|formaction|xlink:href)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]+)/gi;
   var RT_DATA_HREF_RE = /\s(href)\s*=\s*(?:"\s*data:[^"]*"|'\s*data:[^']*')/gi;
-  function sanitizeMerchantHtml(s) {
+  var RT_STYLE_BLOCK_RE = /<style\b([^>]*)>([\s\S]*?)<\/style\s*>/gi;
+
+  var RT_RAW_AT_RULES = /^@(keyframes|-webkit-keyframes|-moz-keyframes|-o-keyframes|font-face|font-feature-values|counter-style|property|page|viewport)\b/i;
+  var RT_NESTED_AT_RULES = /^@(media|supports|container|layer|scope|document)\b/i;
+
+  function rtPrefixSelectorList(selectorList, scope) {
+    var parts = [];
+    var depth = 0, start = 0;
+    for (var k = 0; k < selectorList.length; k++) {
+      var c = selectorList.charAt(k);
+      if (c === "(") depth++;
+      else if (c === ")") depth--;
+      else if (c === "," && depth === 0) { parts.push(selectorList.slice(start, k)); start = k + 1; }
+    }
+    parts.push(selectorList.slice(start));
+    var mapped = [];
+    for (var p = 0; p < parts.length; p++) {
+      var sel = parts[p].trim();
+      if (!sel) continue;
+      if (sel === ":root") { mapped.push(scope); continue; }
+      if (/^:root\b/.test(sel)) { mapped.push(scope + sel.slice(5)); continue; }
+      if (sel === scope || sel.indexOf(scope + " ") === 0 || sel.indexOf(scope + ":") === 0 || sel.indexOf(scope + ".") === 0 || sel.indexOf(scope + "[") === 0) {
+        mapped.push(sel); continue;
+      }
+      mapped.push(scope + " " + sel);
+    }
+    return mapped.join(", ");
+  }
+
+  function rtScopeCss(css, scope) {
+    var src = String(css || "");
+    var i = 0, n = src.length, out = "";
+    function matchBrace(startPos) {
+      var depth = 0;
+      for (var k = startPos; k < n; k++) {
+        var ch = src.charAt(k);
+        if (ch === "/" && src.charAt(k + 1) === "*") {
+          var e1 = src.indexOf("*/", k + 2);
+          k = e1 === -1 ? n : e1 + 1;
+          continue;
+        }
+        if (ch === '"' || ch === "'") {
+          var q = ch; k++;
+          while (k < n && src.charAt(k) !== q) { if (src.charAt(k) === "\\") k++; k++; }
+          continue;
+        }
+        if (ch === "{") depth++;
+        else if (ch === "}") { depth--; if (depth === 0) return k; }
+      }
+      return n;
+    }
+    while (i < n) {
+      if (src.charAt(i) === "/" && src.charAt(i + 1) === "*") {
+        var e = src.indexOf("*/", i + 2);
+        if (e === -1) { out += src.slice(i); i = n; continue; }
+        out += src.slice(i, e + 2); i = e + 2; continue;
+      }
+      var c = src.charAt(i);
+      if (c === " " || c === "\n" || c === "\t" || c === "\r") { out += c; i++; continue; }
+      var j = i, inStr = null;
+      while (j < n) {
+        var ch = src.charAt(j);
+        if (inStr) {
+          if (ch === "\\") { j += 2; continue; }
+          if (ch === inStr) inStr = null;
+          j++; continue;
+        }
+        if (ch === '"' || ch === "'") { inStr = ch; j++; continue; }
+        if (ch === "/" && src.charAt(j + 1) === "*") {
+          var e2 = src.indexOf("*/", j + 2);
+          j = e2 === -1 ? n : e2 + 2;
+          continue;
+        }
+        if (ch === "{" || ch === ";") break;
+        j++;
+      }
+      var head = src.slice(i, j).replace(/^\s+|\s+$/g, "");
+      if (!head) {
+        i = j;
+        if (src.charAt(i) === ";" || src.charAt(i) === "{") { out += src.charAt(i); i++; }
+        continue;
+      }
+      if (src.charAt(j) === ";" || j >= n) { out += src.slice(i, j + 1); i = j + 1; continue; }
+      var bodyEnd = matchBrace(j);
+      var body = src.slice(j + 1, bodyEnd);
+      if (head.charAt(0) === "@") {
+        if (RT_RAW_AT_RULES.test(head)) out += head + "{" + body + "}";
+        else if (RT_NESTED_AT_RULES.test(head)) out += head + "{" + rtScopeCss(body, scope) + "}";
+        else out += head + "{" + body + "}";
+      } else {
+        out += rtPrefixSelectorList(head, scope) + "{" + body + "}";
+      }
+      i = bodyEnd + 1;
+    }
+    return out;
+  }
+
+  function sanitizeMerchantHtml(s, scope) {
     if (s == null) return "";
     var out = String(s);
     out = out.replace(RT_BLOCKED_TAGS_RE, "");
     out = out.replace(RT_EVENT_HANDLER_RE, "");
     out = out.replace(RT_JS_URL_RE, "");
     out = out.replace(RT_DATA_HREF_RE, "");
+    if (scope) {
+      out = out.replace(RT_STYLE_BLOCK_RE, function (_m, attrs, css) {
+        return "<style" + attrs + ">" + rtScopeCss(css, scope) + "</style>";
+      });
+    }
     return out;
   }
 
@@ -683,7 +785,7 @@
     injectCss("rt-tpl-custom-css",
       ".rt-tpl-custom{display:inline-block;max-width:calc(100vw - 32px)}"
     );
-    return '<div class="rt-tpl-custom">' + sanitizeMerchantHtml(d.html || "") + '</div>';
+    return '<div class="rt-tpl-custom">' + sanitizeMerchantHtml(d.html || "", ".rt-tpl-custom") + '</div>';
   }
 
   var RENDERERS = {
