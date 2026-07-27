@@ -13,10 +13,14 @@ const BLOCKED_TAGS = [
   "link",
   "meta",
   "base",
-  "form",
   "frame",
   "frameset",
 ];
+
+// <form> is intentionally NOT blocked — merchants often wrap their inputs in one
+// for accessibility/semantics. We strip its submit-related attributes so it
+// can't actually POST anywhere; email capture is wired via data-rt-submit.
+const FORM_ATTR_STRIP_RE = /(<form\b[^>]*?)\s(action|method|enctype|target|formaction)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
 
 // Matches any of the blocked tags (opening or self-closing) along with their
 // entire contents up to the matching close tag. Non-greedy so multiple
@@ -40,6 +44,11 @@ export function sanitizePopupHtml(input, scopeSelector) {
   if (input == null) return "";
   let out = String(input);
   out = out.replace(BLOCKED_TAG_RE, "");
+  // Neutralize <form> — allow it as a container but strip submit-related attrs
+  // so it can't POST anywhere. Loop until stable in case a tag has multiple
+  // stripped attributes (regex only matches one per pass).
+  let prev;
+  do { prev = out; out = out.replace(FORM_ATTR_STRIP_RE, "$1"); } while (out !== prev);
   out = out.replace(EVENT_HANDLER_RE, "");
   out = out.replace(JS_URL_RE, "");
   out = out.replace(DATA_HREF_RE, "");

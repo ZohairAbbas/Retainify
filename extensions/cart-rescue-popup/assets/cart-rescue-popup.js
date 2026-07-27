@@ -205,7 +205,8 @@
   // Sanitize merchant-authored popup HTML. Kept in sync with the server-side
   // sanitizer at app/lib/popup-templates/html-sanitize.js. We can't reuse the
   // module because this file is a standalone IIFE served by the theme extension.
-  var RT_BLOCKED_TAGS_RE = /<(script|iframe|object|embed|link|meta|base|form|frame|frameset)\b[^>]*>[\s\S]*?<\/\1\s*>|<(script|iframe|object|embed|link|meta|base|form|frame|frameset)\b[^>]*\/?>/gi;
+  var RT_BLOCKED_TAGS_RE = /<(script|iframe|object|embed|link|meta|base|frame|frameset)\b[^>]*>[\s\S]*?<\/\1\s*>|<(script|iframe|object|embed|link|meta|base|frame|frameset)\b[^>]*\/?>/gi;
+  var RT_FORM_ATTR_STRIP_RE = /(<form\b[^>]*?)\s(action|method|enctype|target|formaction)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
   var RT_EVENT_HANDLER_RE = /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
   var RT_JS_URL_RE = /\s(href|src|action|formaction|xlink:href)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]+)/gi;
   var RT_DATA_HREF_RE = /\s(href)\s*=\s*(?:"\s*data:[^"]*"|'\s*data:[^']*')/gi;
@@ -310,6 +311,8 @@
     if (s == null) return "";
     var out = String(s);
     out = out.replace(RT_BLOCKED_TAGS_RE, "");
+    var prev;
+    do { prev = out; out = out.replace(RT_FORM_ATTR_STRIP_RE, "$1"); } while (out !== prev);
     out = out.replace(RT_EVENT_HANDLER_RE, "");
     out = out.replace(RT_JS_URL_RE, "");
     out = out.replace(RT_DATA_HREF_RE, "");
