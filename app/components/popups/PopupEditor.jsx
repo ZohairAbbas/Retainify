@@ -1,6 +1,7 @@
 import { useState } from "react";
 import Icons from "../ui/Icons.jsx";
 import { TEMPLATES } from "../../lib/popup-templates/index.js";
+import { findMissingHooks } from "../../lib/popup-templates/html-sanitize.js";
 import FitToParent from "./FitToParent.jsx";
 import StorefrontFrame from "./StorefrontFrame.jsx";
 import TemplateSwitcher from "./TemplateSwitcher.jsx";
@@ -12,6 +13,9 @@ export default function PopupEditor({ initialDraft, onSave, onCancel, onSwitchTe
   const template = TEMPLATES[draft.template] || TEMPLATES.editorial;
 
   const update = (patch) => setDraft((d) => ({ ...d, ...patch }));
+
+  const customMissingHooks = draft.template === "custom" ? findMissingHooks(draft.html || "") : [];
+  const saveBlocked = customMissingHooks.length > 0;
 
   const nw = device === "mobile" ? 320 : 720;
   const nh = device === "mobile" ? Math.round((320 * 16) / 9) : Math.round(720 / 1.4);
@@ -43,7 +47,13 @@ export default function PopupEditor({ initialDraft, onSave, onCancel, onSwitchTe
             </button>
           </div>
           <button type="button" className="btn btn-secondary btn-sm" onClick={onCancel}>Cancel</button>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => onSave(draft)} disabled={saving}>
+          <button
+            type="button"
+            className="btn btn-primary btn-sm"
+            onClick={() => onSave(draft)}
+            disabled={saving || saveBlocked}
+            title={saveBlocked ? `Add required hooks: ${customMissingHooks.join(", ")}` : undefined}
+          >
             {saving ? "Saving…" : "Save & publish"}
           </button>
         </div>

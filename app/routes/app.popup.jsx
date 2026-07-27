@@ -3,6 +3,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { getDefaults, mergeOnTemplateSwitch, TEMPLATES } from "../lib/popup-templates/index.js";
+import { findMissingHooks } from "../lib/popup-templates/html-sanitize.js";
 import PopupsPage from "../components/popups/PopupsPage.jsx";
 import PopupEditor from "../components/popups/PopupEditor.jsx";
 
@@ -116,6 +117,17 @@ export const action = async ({ request }) => {
       return { ok: false, error: "invalid_config_json" };
     }
     config.template = template;
+
+    // Custom HTML must include the email-capture hooks. Client blocks the Save
+    // button when hooks are missing, but re-validate on the server so a crafted
+    // request can't bypass it.
+    if (template === "custom") {
+      const missing = findMissingHooks(config.html || "");
+      if (missing.length > 0) {
+        return { ok: false, error: "missing_hooks", missing };
+      }
+    }
+
     const legacy = configToLegacy(config);
 
     await prisma.popupSettings.upsert({

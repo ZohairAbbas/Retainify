@@ -115,13 +115,15 @@
     wheel:     ["DM Serif Display:ital@0;1", "Geist:wght@400;500;700"],
     sticker:   ["Caveat:wght@400;700", "Geist:wght@400;500;700", "Geist Mono"],
     holiday:   ["DM Serif Display:ital@0;1", "Instrument Serif", "Geist:wght@400;500;700"],
+    // custom: merchant supplies their own fonts inline; we don't preload anything.
   };
 
   var _fontsLoaded = false;
   function loadTemplateFonts(templateId) {
     if (_fontsLoaded) return;
+    var families = FONT_FAMILIES_BY_TEMPLATE[templateId];
+    if (!families) return; // e.g. custom template — nothing to load
     _fontsLoaded = true;
-    var families = FONT_FAMILIES_BY_TEMPLATE[templateId] || FONT_FAMILIES_BY_TEMPLATE.editorial;
     var preconnect1 = document.createElement("link");
     preconnect1.rel = "preconnect";
     preconnect1.href = "https://fonts.googleapis.com";
@@ -197,6 +199,23 @@
         i = nextLt === -1 ? raw.length : nextLt;
       }
     }
+    return out;
+  }
+
+  // Sanitize merchant-authored popup HTML. Kept in sync with the server-side
+  // sanitizer at app/lib/popup-templates/html-sanitize.js. We can't reuse the
+  // module because this file is a standalone IIFE served by the theme extension.
+  var RT_BLOCKED_TAGS_RE = /<(script|iframe|object|embed|link|meta|base|form|frame|frameset)\b[^>]*>[\s\S]*?<\/\1\s*>|<(script|iframe|object|embed|link|meta|base|form|frame|frameset)\b[^>]*\/?>/gi;
+  var RT_EVENT_HANDLER_RE = /\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+  var RT_JS_URL_RE = /\s(href|src|action|formaction|xlink:href)\s*=\s*(?:"\s*javascript:[^"]*"|'\s*javascript:[^']*'|javascript:[^\s>]+)/gi;
+  var RT_DATA_HREF_RE = /\s(href)\s*=\s*(?:"\s*data:[^"]*"|'\s*data:[^']*')/gi;
+  function sanitizeMerchantHtml(s) {
+    if (s == null) return "";
+    var out = String(s);
+    out = out.replace(RT_BLOCKED_TAGS_RE, "");
+    out = out.replace(RT_EVENT_HANDLER_RE, "");
+    out = out.replace(RT_JS_URL_RE, "");
+    out = out.replace(RT_DATA_HREF_RE, "");
     return out;
   }
 
@@ -658,12 +677,22 @@
     }).observe(document.body, { childList: true, subtree: true });
   }
 
+  function renderCustom(d) {
+    // Minimal frame around merchant-owned HTML. No template CSS injected —
+    // merchant supplies all styling via inline <style> in their HTML.
+    injectCss("rt-tpl-custom-css",
+      ".rt-tpl-custom{display:inline-block;max-width:calc(100vw - 32px)}"
+    );
+    return '<div class="rt-tpl-custom">' + sanitizeMerchantHtml(d.html || "") + '</div>';
+  }
+
   var RENDERERS = {
     editorial: renderEditorial,
     brutalist: renderBrutal,
     wheel: renderWheel,
     sticker: renderSticker,
     holiday: renderHoliday,
+    custom: renderCustom,
   };
 
   // ── Trigger ─────────────────────────────────────────────────────────────

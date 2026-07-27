@@ -10,7 +10,20 @@ function ThumbStage({ template, naturalWidth = 600, naturalHeight = 420 }) {
     wheel: "linear-gradient(155deg, #2A1B4E 0%, #4E2570 100%)",
     sticker: "linear-gradient(135deg, #FFB8B8 0%, #FFD93D 100%)",
     holiday: "linear-gradient(180deg, #1A2E1F 0%, #0A1410 100%)",
+    custom: "linear-gradient(135deg, #1F2937 0%, #0F172A 100%)",
   }[template.id];
+
+  if (template.id === "custom") {
+    return (
+      <div className="rt-pop-card-thumb-inner rt-pop-thumb-custom" style={{ background: bg, inset: 0 }}>
+        <div className="rt-pop-thumb-custom-inner">
+          <div className="rt-pop-thumb-custom-glyph">&lt;/&gt;</div>
+          <div className="rt-pop-thumb-custom-label">Bring your own HTML</div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="rt-pop-card-thumb-inner" style={{ background: bg, inset: 0 }}>
       <FitToParent naturalWidth={naturalWidth} naturalHeight={naturalHeight}>

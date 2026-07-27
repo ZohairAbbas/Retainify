@@ -3,6 +3,7 @@ import { brutalistTemplate } from "./brutalist.jsx";
 import { wheelTemplate } from "./wheel.jsx";
 import { stickerTemplate } from "./sticker.jsx";
 import { holidayTemplate } from "./holiday.jsx";
+import { customTemplate } from "./custom.jsx";
 
 export const TEMPLATES = {
   editorial: editorialTemplate,
@@ -10,9 +11,10 @@ export const TEMPLATES = {
   wheel: wheelTemplate,
   sticker: stickerTemplate,
   holiday: holidayTemplate,
+  custom: customTemplate,
 };
 
-export const TEMPLATE_ORDER = ["editorial", "brutalist", "wheel", "sticker", "holiday"];
+export const TEMPLATE_ORDER = ["editorial", "brutalist", "wheel", "sticker", "holiday", "custom"];
 
 export function getTemplate(id) {
   return TEMPLATES[id] || TEMPLATES.editorial;
