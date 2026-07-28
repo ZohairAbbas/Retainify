@@ -46,6 +46,10 @@ model ShopSettings {
   // Onboarding
   onboardingStep   Int      @default(0) // 0=not started, 1=sender saved, 2=done
   isActive         Boolean  @default(false)
+  // Per-task onboarding/setup-guide state. Shape: { done: { [taskId]: true },
+  // skipped: { [taskId]: true } }. Auto-detected tasks (sender/popup/flow) are
+  // derived from real data at read time; manual tasks (store/embed/call) live here.
+  onboardingProgress Json?
   pushEnabled      Boolean  @default(false)
   // WhatsApp channel (Meta Cloud API). Off by default; flipped on per shop
   // once the merchant connects a WABA via Embedded Signup and approval lands.

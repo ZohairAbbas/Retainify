@@ -5,16 +5,19 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { getCartRescueStats, getEmailBreakdown } from "../lib/analytics/stats.server.js";
 import { seedJourneyTemplates } from "../lib/journey/journey-templates.server.js";
+import { getOnboardingState } from "../lib/onboarding/onboarding.server.js";
 import { OtherAppsCarousel } from "../components/OtherAppsCarousel.jsx";
+import Icons from "../components/ui/Icons.jsx";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const [settings, stats, breakdown] = await Promise.all([
+  const [settings, stats, breakdown, onboarding] = await Promise.all([
     prisma.shopSettings.findUnique({ where: { shop } }),
     getCartRescueStats(shop, 30),
     getEmailBreakdown(shop, 30),
+    getOnboardingState(shop),
   ]);
 
   if (!settings || settings.onboardingStep < 2) {
@@ -31,7 +34,17 @@ export const loader = async ({ request }) => {
     console.error("[dashboard] seed templates failed:", err.message),
   );
 
-  return { settings, stats, breakdown };
+  const setupRemaining = Object.keys(onboarding.done).filter(
+    (id) => !onboarding.done[id] && !onboarding.skipped[id],
+  ).length;
+
+  return {
+    settings,
+    stats,
+    breakdown,
+    setupComplete: onboarding.setupComplete,
+    setupRemaining,
+  };
 };
 
 function fmt(n) {
@@ -67,7 +80,7 @@ function FunnelCell({ count, label, color }) {
 }
 
 export default function Dashboard() {
-  const { settings, stats, breakdown } = useLoaderData();
+  const { settings, stats, breakdown, setupComplete, setupRemaining } = useLoaderData();
   const location = useLocation();
 
   const hasEmailData = breakdown.some((row) => row.sent > 0);
@@ -80,6 +93,24 @@ export default function Dashboard() {
           <h1 className="t-display-2" style={{ margin: 0 }}>Dashboard</h1>
         </div>
       </header>
+
+      {!setupComplete && (
+        <Link
+          to={`/app/setup${location.search}`}
+          className="ob-banner"
+          style={{ textDecoration: "none" }}
+        >
+          <span className="ob-banner-ic"><Icons.Sparkles size={20} /></span>
+          <span className="ob-banner-body">
+            <span className="ob-banner-title" style={{ display: "block" }}>Finish setting up Retainify</span>
+            <span className="ob-banner-sub">
+              {setupRemaining} {setupRemaining === 1 ? "step" : "steps"} left — publish a popup, launch a flow, and more.
+            </span>
+          </span>
+          <span className="ob-banner-progress">{setupRemaining} left</span>
+          <span className="ob-banner-cta">Open guide <Icons.Arrow size={14} /></span>
+        </Link>
+      )}
 
       {!settings?.isActive && (
         <div style={{

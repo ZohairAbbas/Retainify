@@ -5,11 +5,19 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
 import Icons, { IconChevron } from "../components/ui/Icons.jsx";
+import { getOnboardingState } from "../lib/onboarding/onboarding.server.js";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
-  // eslint-disable-next-line no-undef
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+  const { session } = await authenticate.admin(request);
+  // Setup-guide nav item + dashboard banner are shown only until every setup
+  // task is resolved (done or skipped). Cheap enough to compute per app load.
+  const state = await getOnboardingState(session.shop).catch(() => null);
+  return {
+    // eslint-disable-next-line no-undef
+    apiKey: process.env.SHOPIFY_API_KEY || "",
+    setupComplete: state ? state.setupComplete : true,
+    activated: state ? state.activated : true,
+  };
 };
 
 const NAV_ACTIVE = [
@@ -28,8 +36,12 @@ const NAV_SOON = [
   { id: "analytics", label: "Analytics" },
 ];
 
-function AppNav({ currentPath }) {
+function AppNav({ currentPath, showSetup }) {
   const [collapsed, setCollapsed] = useState(false);
+
+  const navItems = showSetup
+    ? [{ id: "setup", label: "Setup guide", href: "/app/setup", icon: "Sparkles" }, ...NAV_ACTIVE]
+    : NAV_ACTIVE;
 
   return (
     <aside style={{
@@ -61,7 +73,7 @@ function AppNav({ currentPath }) {
 
       {/* Active nav items */}
       <div className="rt-retainify-subnav">
-        {NAV_ACTIVE.map((n) => {
+        {navItems.map((n) => {
           const Icon = Icons[n.icon];
           const active =
             n.href === "/app"
@@ -141,13 +153,28 @@ function AppNav({ currentPath }) {
 }
 
 export default function App() {
-  const { apiKey } = useLoaderData();
+  const { apiKey, setupComplete, activated } = useLoaderData();
   const location = useLocation();
+
+  // Hide the whole shell while the pre-activation onboarding takeover is on
+  // screen — it renders its own full-bleed chrome.
+  const isOnboarding = location.pathname.startsWith("/app/onboarding");
+  const showSetup = activated && !setupComplete;
+
+  if (isOnboarding) {
+    return (
+      <AppProvider embedded apiKey={apiKey}>
+        <main style={{ minHeight: "100vh", background: "var(--paper-1)" }}>
+          <Outlet />
+        </main>
+      </AppProvider>
+    );
+  }
 
   return (
     <AppProvider embedded apiKey={apiKey}>
       <div style={{ display: "flex", minHeight: "100vh" }}>
-        <AppNav currentPath={location.pathname} />
+        <AppNav currentPath={location.pathname} showSetup={showSetup} />
         <main style={{ flex: 1, minWidth: 0, background: "var(--paper-1)" }}>
           <Outlet />
         </main>

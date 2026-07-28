@@ -1,0 +1,104 @@
+﻿node.exe : npm warn Unknown project config "shamefully-hoist". This will stop working in the next major version of npm.
+At line:1 char:1
++ & "C:\Program Files\nodejs/node.exe" "C:\Program Files\nodejs/node_mo ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (npm warn Unknow...version of npm.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[36mvite v6.4.2 [32mbuilding for production...[36m[39m
+transforming...
+[32m✓[39m 63 modules transformed.
+[31m✗[39m Build failed in 957ms
+[31m[commonjs--resolver] [31mServer-only module referenced by client[31m
+
+    '../lib/onboarding/onboarding.server.js' imported by route 'app/routes/app.onboarding.jsx'
+
+  React Router automatically removes server-code from these exports:
+    `loader`, `action`, `middleware`, `headers`
+
+  But other route exports in 'app/routes/app.onboarding.jsx' depend on '../lib/onboarding/onboarding.server.js'.
+
+  See https://reactrouter.com/explanation/code-splitting#removal-of-server-code
+[39m
+    at Object.resolveId (C:\Users\zohair.abbas\Retainify\node_modules\@react-router\dev\dist\vite.js:4224:17)
+    at PluginDriver.hookFirstAndGetPlugin 
+(file:///C:/Users/zohair.abbas/Retainify/node_modules/rollup/dist/es/shared/node-entry.js:22863:28)
+    at resolveId (file:///C:/Users/zohair.abbas/Retainify/node_modules/rollup/dist/es/shared/node-entry.js:21314:26)
+    at ModuleLoader.resolveId 
+(file:///C:/Users/zohair.abbas/Retainify/node_modules/rollup/dist/es/shared/node-entry.js:21760:15)
+    at Object.resolveId 
+(file:///C:/Users/zohair.abbas/Retainify/node_modules/vite/dist/node/chunks/dep-Dq2t6Dq0.js:2835:10)
+    at PluginDriver.hookFirstAndGetPlugin 
+(file:///C:/Users/zohair.abbas/Retainify/node_modules/rollup/dist/es/shared/node-entry.js:22863:28)
+    at resolveId (file:///C:/Users/zohair.abbas/Retainify/node_modules/rollup/dist/es/shared/node-entry.js:21314:26)
+    at ModuleLoader.resolveId 
+(file:///C:/Users/zohair.abbas/Retainify/node_modules/rollup/dist/es/shared/node-entry.js:21760:15)
+    at file:///C:/Users/zohair.abbas/Retainify/node_modules/rollup/dist/es/shared/node-entry.js:22080:50 {
+  code: 'PLUGIN_ERROR',
+  plugin: 'commonjs--resolver',
+  hook: 'resolveId',
+  watchFiles: [
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.customers.data_request.jsx',
+    'C:/Users/zohair.abbas/Retainify/node_modules/@react-router/dev/dist/config/defaults/entry.client.tsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.customers.redact.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.app.scopes_update.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/root.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.checkouts.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.customers.create.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.shop.redact.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.whatsapp.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/track.unsubscribe.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.app.uninstalled.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/push-unsubscribe.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.orders.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/push-subscribe.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/popup-signup.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/track.confirm.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.resend.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/popup-config.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/auth.login/route.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/_index/route.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/webhooks.ses.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.segments.preview.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.segments.$id_.edit.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/auth.$.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/push-sw.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.segments.search.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.contacts._index.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.segments._index.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.contacts.$id.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.contacts.sync.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.api.products.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.contacts.tags.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.playbook.$id.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.flows._index.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.segments.$id.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.additional.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.flows.$id.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.segments.new.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.api.upload.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.onboarding.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.playbooks.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.settings.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.whatsapp.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app._index.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.popup.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.journey.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.setup.jsx',
+    'C:/Users/zohair.abbas/Retainify/app/routes/app.push.jsx',
+    'C:\\Users\\zohair.abbas\\Retainify\\package.json',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react/jsx-runtime.js',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react-dom/client.js',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react/index.js',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react-router/dist/development/dom-export.mjs',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react/cjs/react.production.min.js',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react-router/dist/development/index.mjs',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react-router/dist/development/chunk-YQSHRJWW.mjs',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react-dom/index.js',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react/cjs/react-jsx-runtime.production.min.js',
+    'C:/Users/zohair.abbas/Retainify/app/routes/_index/styles.module.css',
+    'C:/Users/zohair.abbas/Retainify/node_modules/react-router/dist/development/chunk-EVOBXE3Y.mjs'
+  ]
+}
+

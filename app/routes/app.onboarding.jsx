@@ -1,172 +1,227 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
+import Icons from "../components/ui/Icons.jsx";
+import OnboardingChecklist from "../components/onboarding/OnboardingChecklist.jsx";
+import { TASKS, themeEditorEmbedUrl } from "../lib/onboarding/tasks.js";
+import {
+  getOnboardingState,
+  setTaskState,
+} from "../lib/onboarding/onboarding.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  const settings = await prisma.shopSettings.findUnique({ where: { shop } });
+  const state = await getOnboardingState(shop);
 
   return {
     shop,
-    step: settings?.onboardingStep ?? 0,
-    settings: settings ?? {},
     apiKey: process.env.SHOPIFY_API_KEY || "",
+    callUrl: process.env.ONBOARDING_CALL_URL || "#",
+    owner: session.firstName || "",
+    storeName: state.settings?.senderName && state.settings.senderName !== "Your Store"
+      ? state.settings.senderName
+      : shop.replace(".myshopify.com", ""),
+    settings: state.settings ?? {},
+    done: state.done,
+    skipped: state.skipped,
+    essentialsDone: state.essentialsDone,
+    activated: state.activated,
   };
 };
 
 export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
-  const formData = await request.formData();
-  const intent = formData.get("intent");
+  const fd = await request.formData();
+  const intent = String(fd.get("intent") || "");
 
-  if (intent === "save-step-1") {
-    const senderName = String(formData.get("senderName") || "").trim();
-    const senderEmail = String(formData.get("senderEmail") || "").trim();
-    const replyTo = String(formData.get("replyTo") || "").trim();
-
+  if (intent === "save-sender") {
+    const senderName = String(fd.get("senderName") || "").trim();
+    const senderEmail = String(fd.get("senderEmail") || "").trim();
+    const replyTo = String(fd.get("replyTo") || "").trim();
     await prisma.shopSettings.upsert({
       where: { shop },
-      create: { shop, senderName, senderEmail, replyTo, onboardingStep: 1 },
-      update: { senderName, senderEmail, replyTo, onboardingStep: 1 },
+      create: { shop, senderName, senderEmail, replyTo },
+      update: { senderName, senderEmail, replyTo },
     });
-    return { ok: true, step: 1 };
+    return { ok: true };
+  }
+
+  if (intent === "complete-task") {
+    const taskId = String(fd.get("taskId") || "");
+    await setTaskState(shop, taskId, "complete");
+    return { ok: true };
+  }
+
+  if (intent === "skip-task") {
+    const taskId = String(fd.get("taskId") || "");
+    await setTaskState(shop, taskId, "skip");
+    return { ok: true };
   }
 
   if (intent === "activate") {
-    await prisma.shopSettings.update({
+    // Only allow activation once the essentials are actually resolved.
+    const state = await getOnboardingState(shop);
+    if (!state.essentialsDone) {
+      return { ok: false, error: "essentials-incomplete" };
+    }
+    await prisma.shopSettings.upsert({
       where: { shop },
-      data: { onboardingStep: 2, isActive: true },
+      create: { shop, onboardingStep: 2, isActive: true },
+      update: { onboardingStep: 2, isActive: true },
     });
-    return { ok: true, step: 2 };
+    return { ok: true, activated: true };
   }
 
   return { ok: false };
 };
 
+// ── Welcome takeover ───────────────────────────────────────────────────
+function Welcome({ owner, storeName, onStart, onLater }) {
+  return (
+    <div className="ob-welcome">
+      <div className="ob-welcome-inner">
+        <span className="ob-eyebrow"><span className="ob-dot" /> Setup · about 5 minutes</span>
+        <h1>Welcome{owner ? `, ${owner}` : ""}.<br />Let&apos;s turn visitors into <em>repeat customers.</em></h1>
+        <p className="ob-welcome-lede">A few quick steps and <b>{storeName}</b> will be recovering carts, capturing emails, and running automations on autopilot.</p>
+        <div className="ob-preview-tasks">
+          {TASKS.map((t, i) => (
+            <div className="ob-preview-task" key={t.id}>
+              <span className="ob-ptn">{i + 1}</span>
+              <span>{t.title}</span>
+              <span className="ob-pt-time">{t.time}</span>
+            </div>
+          ))}
+        </div>
+        <div className="ob-welcome-cta">
+          <button className="ob-btn ob-btn-primary ob-btn-lg" onClick={onStart}>Get started <Icons.Arrow size={16} /></button>
+          <button className="ob-later" onClick={onLater}>I&apos;ll set up later</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Live celebration ───────────────────────────────────────────────────
+function Confetti() {
+  const colors = ["#E8F25A", "#1F3D2F", "#356A53", "#C0B697", "#DCE7DF"];
+  const pieces = Array.from({ length: 70 }).map((_, i) => ({
+    left: Math.random() * 100,
+    delay: Math.random() * 0.6,
+    dur: 2.6 + Math.random() * 1.8,
+    color: colors[i % colors.length],
+    rot: Math.random() * 360,
+    w: 6 + Math.random() * 6,
+  }));
+  return (
+    <div className="ob-confetti">
+      {pieces.map((p, i) => (
+        <span key={i} className="ob-conf" style={{ left: `${p.left}%`, background: p.color, animationDelay: `${p.delay}s`, animationDuration: `${p.dur}s`, width: p.w, height: p.w * 1.5, transform: `rotate(${p.rot}deg)` }} />
+      ))}
+    </div>
+  );
+}
+
+function Live({ onDashboard, onSetup, hasOptionalLeft }) {
+  return (
+    <div className="ob-live">
+      <Confetti />
+      <div className="ob-live-inner">
+        <div className="ob-live-badge"><Icons.Sparkles size={44} /></div>
+        <h1>Retainify is live.</h1>
+        <p className="ob-live-lede">Your store is now set up and ready. Head to your dashboard to see performance as it comes in.</p>
+        <div className="ob-live-cta">
+          <button className="ob-btn ob-btn-primary ob-btn-lg" onClick={onDashboard}>Go to dashboard <Icons.Arrow size={16} /></button>
+          {hasOptionalLeft && (
+            <button className="ob-btn ob-btn-secondary ob-btn-lg" onClick={onSetup}>Finish setup guide</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TopBar({ storeName }) {
+  const initial = (storeName || "R").trim().charAt(0).toUpperCase();
+  return (
+    <div className="ob-top">
+      <div className="ob-brand"><span className="ob-mark">R</span><span className="ob-brand-name">Retainify</span></div>
+      <div className="ob-top-right">
+        <div className="ob-store-chip"><span className="ob-store-dot">{initial}</span> {storeName}</div>
+      </div>
+    </div>
+  );
+}
+
 export default function Onboarding() {
-  const { shop, step, settings, apiKey } = useLoaderData();
-  const themeEditorUrl = `https://${shop}/admin/themes/current/editor?context=apps&template=index&activateAppId=${apiKey}/popup`;
-  const fetcher = useFetcher();
+  const data = useLoaderData();
+  const { shop, apiKey, callUrl, owner, storeName, done, skipped } = data;
   const navigate = useNavigate();
   const location = useLocation();
-  const saving = fetcher.state !== "idle";
-  const data = fetcher.data;
+  const activateFetcher = useFetcher();
 
-  const currentStep = data?.step ?? step;
+  // Phase: welcome → checklist → live. If the merchant is already activated
+  // (shouldn't normally land here), jump straight to the live celebration.
+  const [phase, setPhase] = useState(data.activated ? "live" : "welcome");
 
-  // Step 1 state
-  const [senderName, setSenderName] = useState(settings.senderName || "");
-  const [senderEmail, setSenderEmail] = useState(settings.senderEmail || "");
-  const [replyTo, setReplyTo] = useState(settings.replyTo || "");
+  useEffect(() => { window.scrollTo(0, 0); }, [phase]);
 
-  function submitStep1() {
-    fetcher.submit(
-      { intent: "save-step-1", senderName, senderEmail, replyTo },
-      { method: "post" },
-    );
-  }
+  // When activation succeeds, advance to the live celebration.
+  useEffect(() => {
+    if (activateFetcher.state === "idle" && activateFetcher.data?.activated) {
+      setPhase("live");
+    }
+  }, [activateFetcher.state, activateFetcher.data]);
 
-  function submitActivate() {
-    fetcher.submit({ intent: "activate" }, { method: "post" });
-  }
+  const ctx = {
+    shop,
+    storeName,
+    senderName: data.settings.senderName === "Your Store" ? "" : data.settings.senderName,
+    senderEmail: data.settings.senderEmail || "",
+    replyTo: data.settings.replyTo || "",
+    themeEditorUrl: themeEditorEmbedUrl(shop, apiKey),
+    callUrl,
+    search: location.search,
+  };
 
-  if (currentStep >= 2) {
-    return (
-      <s-page heading="You're all set!">
-        <s-section>
-          <s-stack direction="block" gap="base" align="center">
-            <s-text variant="headingLg">Retainify is live 🎉</s-text>
-            <s-paragraph>
-              You can now build cart-rescue, post-purchase, and other automations in Flows.
-            </s-paragraph>
-            <s-button onClick={() => navigate(`/app${location.search}`)}>Go to dashboard</s-button>
-          </s-stack>
-        </s-section>
-      </s-page>
-    );
-  }
+  const hasOptionalLeft = TASKS.some((t) => t.optional && !done[t.id] && !skipped[t.id]);
 
   return (
-    <s-page heading="Set up Retainify">
-      <s-section heading={`Step ${currentStep + 1} of 2`}>
+    <div className="ob-root">
+      <div className="ob-noise" />
+      <TopBar storeName={storeName} />
 
-        {/* Step 1 — Sender details */}
-        {currentStep === 0 && (
-          <s-stack direction="block" gap="base">
-            <s-text variant="headingMd">Configure your sender details</s-text>
-            <s-text tone="subdued">These appear as the "From" name and address in emails.</s-text>
-            <s-form-layout>
-              <s-text-field
-                label="Sender name"
-                value={senderName}
-                onInput={(e) => setSenderName(e.target.value)}
-                placeholder="Your Store"
-                helpText="Shown as the From name in emails."
-              />
-              <s-text-field
-                label="Sender email"
-                type="email"
-                value={senderEmail}
-                onInput={(e) => setSenderEmail(e.target.value)}
-                placeholder="hello@yourstore.com"
-                helpText="Use your store email or a verified domain."
-              />
-              <s-text-field
-                label="Reply-to email (optional)"
-                type="email"
-                value={replyTo}
-                onInput={(e) => setReplyTo(e.target.value)}
-                placeholder="support@yourstore.com"
-              />
-            </s-form-layout>
-            <s-button
-              onClick={submitStep1}
-              {...(saving ? { loading: true } : {})}
-            >
-              Continue
-            </s-button>
-          </s-stack>
-        )}
+      {phase === "welcome" && (
+        <Welcome
+          owner={owner}
+          storeName={storeName}
+          onStart={() => setPhase("checklist")}
+          onLater={() => setPhase("checklist")}
+        />
+      )}
 
-        {/* Step 2 — Activate */}
-        {currentStep === 1 && (
-          <s-stack direction="block" gap="base">
-            <s-text variant="headingMd">Enable the popup on your storefront</s-text>
-            <s-paragraph>
-              The exit-intent popup is an app embed and needs to be turned on in your theme editor.
-              Click below to open the editor — the Retainify embed will be highlighted, then click
-              <strong> Save</strong> in the top-right.
-            </s-paragraph>
-            <s-button
-              href={themeEditorUrl}
-              target="_blank"
-            >
-              Open theme editor to enable popup
-            </s-button>
+      {phase === "checklist" && (
+        <OnboardingChecklist
+          state={{ done, skipped }}
+          ctx={ctx}
+          variant="onboarding"
+          owner={owner}
+          onActivate={() => activateFetcher.submit({ intent: "activate" }, { method: "post" })}
+        />
+      )}
 
-            <s-divider />
-
-            <s-paragraph>
-              Once the popup is enabled, activate Retainify to start running your flows.
-              You can build cart-rescue, post-purchase, and other automations from the Flows page.
-            </s-paragraph>
-            <s-button
-              tone="success"
-              onClick={submitActivate}
-              {...(saving ? { loading: true } : {})}
-            >
-              Activate Retainify
-            </s-button>
-          </s-stack>
-        )}
-
-      </s-section>
-    </s-page>
+      {phase === "live" && (
+        <Live
+          hasOptionalLeft={hasOptionalLeft}
+          onDashboard={() => navigate(`/app${location.search}`)}
+          onSetup={() => navigate(`/app/setup${location.search}`)}
+        />
+      )}
+    </div>
   );
 }
 
