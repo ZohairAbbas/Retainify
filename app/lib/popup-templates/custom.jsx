@@ -61,6 +61,18 @@ export function EditorCustom({ data, onUpdate }) {
           </div>
         )}
 
+        {missing.length > 0 && (
+          <div className="rt-pop-validation-error" style={{ marginBottom: 12 }}>
+            <strong>Missing required hooks:</strong>{" "}
+            {missing.map((m, i) => (
+              <span key={m}>
+                <code>{m}</code>{i < missing.length - 1 ? ", " : ""}
+              </span>
+            ))}
+            . Your popup can’t capture emails without these — you won’t be able to save until they’re added.
+          </div>
+        )}
+
         <div className="rt-pop-field">
           <label className="field-label">HTML</label>
           <textarea
@@ -71,17 +83,6 @@ export function EditorCustom({ data, onUpdate }) {
             onChange={(e) => onUpdate({ html: e.target.value })}
             placeholder="Paste your HTML here, or click ‘Load starter template’ above."
           />
-          {missing.length > 0 && (
-            <div className="rt-pop-validation-error">
-              <strong>Missing required hooks:</strong>{" "}
-              {missing.map((m, i) => (
-                <span key={m}>
-                  <code>{m}</code>{i < missing.length - 1 ? ", " : ""}
-                </span>
-              ))}
-              . Your popup can’t capture emails without these — you won’t be able to save until they’re added.
-            </div>
-          )}
         </div>
       </div>
 
