@@ -51,8 +51,8 @@ export function EditorCustom({ data, onUpdate }) {
             <ul className="rt-pop-hooks-list">
               <li><code>data-rt-email</code> <span>on your email <code>&lt;input&gt;</code> (required)</span></li>
               <li><code>data-rt-submit</code> <span>on your submit <code>&lt;button&gt;</code> (required)</span></li>
-              <li><code>data-rt-close</code> <span>on your close/dismiss button</span></li>
-              <li><code>data-rt-status</code> <span>on an element where the “check your inbox” message should appear</span></li>
+              <li><code>data-rt-close</code> <span>on your close/dismiss button (required — visitors need a way out)</span></li>
+              <li><code>data-rt-status</code> <span>on an element where the “check your inbox” message should appear (optional)</span></li>
             </ul>
             <div className="rt-pop-hooks-note">
               <strong>Safety:</strong> <code>&lt;script&gt;</code>, <code>&lt;iframe&gt;</code>,

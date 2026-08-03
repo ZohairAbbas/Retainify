@@ -332,6 +332,30 @@
     document.head.appendChild(style);
   }
 
+  // Bare mount for custom HTML — no overlay, no modal chrome. Merchant supplies
+  // their own backdrop and positioning. We just inject the HTML into <body> and
+  // wire dismissal. Returns the same shape as mountOverlay() so wireSubmit()
+  // works unchanged.
+  function mountBare(innerHTML) {
+    var host = document.createElement("div");
+    host.id = "rt-custom-host";
+    host.innerHTML = innerHTML;
+    document.body.appendChild(host);
+
+    function close() {
+      host.remove();
+      markShown(_frequency);
+    }
+
+    host.querySelectorAll("[data-rt-close]").forEach(function (btn) {
+      btn.addEventListener("click", close);
+    });
+
+    // Merchant's "modal" is the host itself — pass it as the second arg so
+    // wireSubmit() can find [data-rt-email] / [data-rt-submit] / [data-rt-status].
+    return { overlay: host, modal: host, close: close };
+  }
+
   // Shared overlay + close handling
   function mountOverlay(innerHTML) {
     var overlay = document.createElement("div");
@@ -806,7 +830,10 @@
     triggered = true;
     var renderer = RENDERERS[_templateId] || RENDERERS.editorial;
     var html = renderer(_tplData || {});
-    var mounted = mountOverlay(html);
+    // Custom template: merchant HTML owns the visible experience end-to-end
+    // (backdrop, positioning, close chrome). Skip our overlay so we don't
+    // double-wrap fixed-positioned merchant markup.
+    var mounted = (_templateId === "custom") ? mountBare(html) : mountOverlay(html);
     wireSubmit(mounted.modal, mounted.close);
     if (_templateId === "holiday") wireCountdown(mounted.modal);
   }

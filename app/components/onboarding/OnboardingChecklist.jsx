@@ -51,12 +51,11 @@ function SenderPanel({ ctx, onAdvance }) {
   const fetcher = useFetcher();
   const busy = fetcher.state !== "idle";
   const [name, setName] = useState(ctx.senderName || ctx.storeName || "");
-  const [email, setEmail] = useState(ctx.senderEmail || "");
   const [reply, setReply] = useState(ctx.replyTo || "");
-  const valid = name.trim() && /.+@.+\..+/.test(email);
+  const valid = !!name.trim();
   return (
     <div className="ob-panel-pad">
-      <p className="ob-panel-lede">This is the “From” name and address shoppers see in their inbox. A recognizable sender lifts open rates — use your store name and a branded address.</p>
+      <p className="ob-panel-lede">This is the “From” name shoppers see in their inbox. A recognizable sender lifts open rates — use your store name. Emails go out from our shared, deliverability-optimized address.</p>
       <div className="ob-field-row">
         <div>
           <label className="ob-field-label">Sender name</label>
@@ -64,20 +63,20 @@ function SenderPanel({ ctx, onAdvance }) {
         </div>
         <div>
           <label className="ob-field-label">Sender email</label>
-          <input className="ob-input" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="hello@yourstore.com" />
+          <input className="ob-input" type="email" value={ctx.sendingFromAddress || ""} disabled readOnly />
         </div>
       </div>
       <div className="ob-field-full">
         <label className="ob-field-label">Reply-to email <span className="ob-faint">(optional)</span></label>
         <input className="ob-input" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Where replies should land" />
       </div>
-      <div className="ob-hint"><InfoDot /><span>Sending from a domain you own (not a free inbox) keeps you out of spam. You can verify your domain later in Settings.</span></div>
+      <div className="ob-hint"><InfoDot /><span>Emails are sent from this shared, deliverability-optimized address. Contact support to use your own domain for email sending.</span></div>
       <div className="ob-panel-actions">
         <button
           className={`ob-btn ob-btn-primary ${valid ? "" : "is-disabled"}`}
           disabled={busy || !valid}
           onClick={() => fetcher.submit(
-            { intent: "save-sender", senderName: name, senderEmail: email, replyTo: reply },
+            { intent: "save-sender", senderName: name, replyTo: reply },
             { method: "post" },
           )}
         >

@@ -102,7 +102,7 @@ function PopupOverview({ popup, signupCount, onEdit, onBrowse, onToggle }) {
         <div className="rt-pop-preview-stage">
           <FitToParent naturalWidth={720} naturalHeight={520}>
             <div style={{ width: 720, height: 520 }}>
-              <StorefrontFrame>
+              <StorefrontFrame dim={popup.template !== "custom"}>
                 <template.Render data={config} />
               </StorefrontFrame>
             </div>

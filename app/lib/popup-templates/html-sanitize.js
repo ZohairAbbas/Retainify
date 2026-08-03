@@ -214,12 +214,15 @@ function prefixSelectorList(selectorList, scope) {
   }).filter(Boolean).join(", ");
 }
 
-// Required hook checks. Both must be present for email capture to work.
+// Required hook checks. All three must be present because for custom HTML we
+// don't wrap the merchant markup in our own overlay/close chrome — the merchant
+// is fully responsible for the visible experience, including dismissal.
 export function findMissingHooks(html) {
   const s = String(html || "");
   const missing = [];
   if (!/data-rt-email\b/i.test(s)) missing.push("data-rt-email");
   if (!/data-rt-submit\b/i.test(s)) missing.push("data-rt-submit");
+  if (!/data-rt-close\b/i.test(s)) missing.push("data-rt-close");
   return missing;
 }
 

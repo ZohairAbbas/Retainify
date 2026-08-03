@@ -21,9 +21,12 @@ export async function getOnboardingState(shop) {
 
   const progress = normalizeProgress(settings?.onboardingProgress);
 
-  // Auto-detected signals.
+  // Auto-detected signals. Sender email is not merchant-editable (all sends use
+  // our shared from-address), so the sender step completes once the merchant has
+  // set a real sender NAME — the only field they actually fill in.
+  const senderName = (settings?.senderName || "").trim();
   const auto = {
-    sender: !!settings?.senderEmail && settings.senderEmail.trim().length > 0,
+    sender: senderName.length > 0 && senderName !== "Your Store",
     popup: !!popup?.enabled,
     flow: journeyCount > 0,
   };

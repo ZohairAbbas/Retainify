@@ -3,6 +3,7 @@ import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-route
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
+import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import OnboardingChecklist from "../components/onboarding/OnboardingChecklist.jsx";
 import { TASKS, themeEditorEmbedUrl } from "../lib/onboarding/tasks.js";
@@ -17,10 +18,17 @@ export const loader = async ({ request }) => {
 
   const state = await getOnboardingState(shop);
 
+  // The real from-address this shop sends from — shown read-only, same seam the
+  // send path and Settings use. Sender email is not merchant-editable.
+  const provider = resolveProvider(state.settings);
+  const { from } = resolveFrom({ settings: state.settings, provider });
+  const sendingFromAddress = from.match(/<([^>]+)>/)?.[1] || from;
+
   return {
     shop,
     apiKey: process.env.SHOPIFY_API_KEY || "",
     callUrl: process.env.ONBOARDING_CALL_URL || "#",
+    sendingFromAddress,
     owner: session.firstName || "",
     storeName: state.settings?.senderName && state.settings.senderName !== "Your Store"
       ? state.settings.senderName
@@ -40,13 +48,14 @@ export const action = async ({ request }) => {
   const intent = String(fd.get("intent") || "");
 
   if (intent === "save-sender") {
+    // senderEmail is intentionally NOT written — it's not merchant-editable
+    // (all sends use our shared from-address). Mirrors app.settings.jsx.
     const senderName = String(fd.get("senderName") || "").trim();
-    const senderEmail = String(fd.get("senderEmail") || "").trim();
     const replyTo = String(fd.get("replyTo") || "").trim();
     await prisma.shopSettings.upsert({
       where: { shop },
-      create: { shop, senderName, senderEmail, replyTo },
-      update: { senderName, senderEmail, replyTo },
+      create: { shop, senderName, replyTo },
+      update: { senderName, replyTo },
     });
     return { ok: true };
   }
@@ -181,7 +190,7 @@ export default function Onboarding() {
     shop,
     storeName,
     senderName: data.settings.senderName === "Your Store" ? "" : data.settings.senderName,
-    senderEmail: data.settings.senderEmail || "",
+    sendingFromAddress: data.sendingFromAddress,
     replyTo: data.settings.replyTo || "",
     themeEditorUrl: themeEditorEmbedUrl(shop, apiKey),
     callUrl,

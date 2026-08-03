@@ -80,7 +80,7 @@ export default function PopupEditor({ initialDraft, onSave, onCancel, onSwitchTe
             <div className="rt-pop-preview-stage-big">
               <FitToParent naturalWidth={nw} naturalHeight={nh}>
                 <div style={{ width: nw, height: nh }}>
-                  <StorefrontFrame device={device}>
+                  <StorefrontFrame device={device} dim={draft.template !== "custom"}>
                     <template.Render data={draft} />
                   </StorefrontFrame>
                 </div>
