@@ -40,9 +40,12 @@ model ShopSettings {
   quietHoursStart  Int      @default(22) // hour 0-23 in store timezone
   quietHoursEnd    Int      @default(8)
   storeTimezone    String   @default("UTC")
-  // Domain verification
-  verifiedDomain   String   @default("")
-  domainVerified   Boolean  @default(false)
+  // Domain verification (Resend custom sending domain, Mode A)
+  verifiedDomain   String   @default("")   // the domain name, e.g. "theirbrand.com"
+  domainVerified   Boolean  @default(false) // true only when Resend status == "verified"
+  resendDomainId   String   @default("")   // Resend domain UUID
+  domainStatus     String   @default("")   // "" | pending | verified | failed
+  domainRecords    String   @default("")   // JSON: DNS records to display (cached from create)
   // Onboarding
   onboardingStep   Int      @default(0) // 0=not started, 1=sender saved, 2=done
   isActive         Boolean  @default(false)

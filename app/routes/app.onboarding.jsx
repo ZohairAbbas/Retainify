@@ -4,6 +4,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
+import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
+import { addDomain, verifyOrCheckDomain, removeDomain } from "../lib/email/domain-actions.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import OnboardingChecklist from "../components/onboarding/OnboardingChecklist.jsx";
 import { TASKS, themeEditorEmbedUrl } from "../lib/onboarding/tasks.js";
@@ -24,8 +26,18 @@ export const loader = async ({ request }) => {
   const { from } = resolveFrom({ settings: state.settings, provider });
   const sendingFromAddress = from.match(/<([^>]+)>/)?.[1] || from;
 
+  const slotAvailable = await canUseDomainSlot(shop);
+  let domainRecords = [];
+  try {
+    domainRecords = state.settings?.domainRecords ? JSON.parse(state.settings.domainRecords) : [];
+  } catch {
+    domainRecords = [];
+  }
+
   return {
     shop,
+    slotAvailable,
+    domainRecords,
     apiKey: process.env.SHOPIFY_API_KEY || "",
     callUrl: process.env.ONBOARDING_CALL_URL || "#",
     sendingFromAddress,
@@ -58,6 +70,16 @@ export const action = async ({ request }) => {
       update: { senderName, replyTo },
     });
     return { ok: true };
+  }
+
+  if (intent === "add-domain") {
+    return addDomain(shop, fd.get("domain"));
+  }
+  if (intent === "verify-domain" || intent === "check-domain") {
+    return verifyOrCheckDomain(shop, { verify: intent === "verify-domain" });
+  }
+  if (intent === "remove-domain") {
+    return removeDomain(shop);
   }
 
   if (intent === "complete-task") {
@@ -195,6 +217,12 @@ export default function Onboarding() {
     themeEditorUrl: themeEditorEmbedUrl(shop, apiKey),
     callUrl,
     search: location.search,
+    // Custom-domain step context
+    domainVerified: !!data.settings.domainVerified,
+    verifiedDomain: data.settings.verifiedDomain || "",
+    domainStatus: data.settings.domainStatus || "",
+    domainRecords: data.domainRecords || [],
+    slotAvailable: data.slotAvailable,
   };
 
   const hasOptionalLeft = TASKS.some((t) => t.optional && !done[t.id] && !skipped[t.id]);

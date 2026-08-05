@@ -227,9 +227,91 @@ function CallPanel({ ctx, onComplete, onSkip }) {
   );
 }
 
+function DomainPanel({ ctx, onComplete, onSkip }) {
+  const fetcher = useFetcher();
+  const busy = fetcher.state !== "idle";
+  const [domain, setDomain] = useState("");
+  const err = fetcher.data?.domainError;
+  const records = ctx.domainRecords || [];
+
+  // Verified — nothing more to do here.
+  if (ctx.domainVerified) {
+    return (
+      <div className="ob-panel-pad">
+        <p className="ob-panel-lede">✅ <b>{ctx.verifiedDomain}</b> is verified. Your emails now send from your own domain.</p>
+        <CompleteWatcher fetcher={fetcher} onComplete={onComplete} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="ob-panel-pad">
+      <p className="ob-panel-lede">
+        Optional. Send emails from your own domain instead of our shared address —
+        better brand recognition and deliverability. This needs DNS changes, so you
+        can skip and set it up later from Settings.
+      </p>
+
+      {err && <div className="ob-hint" style={{ color: "var(--danger, #c0392b)" }}><span>{err}</span></div>}
+
+      {ctx.verifiedDomain ? (
+        <>
+          <div className="ob-hint"><InfoDot /><span>Add these DNS records for <b>{ctx.verifiedDomain}</b> at your domain provider, then click Verify. Status: <b>{ctx.domainStatus || "pending"}</b>.</span></div>
+          <div style={{ overflowX: "auto", margin: "10px 0" }}>
+            <table className="ob-dns-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
+              <thead><tr style={{ textAlign: "left" }}><th>Type</th><th>Name</th><th>Value</th><th>Priority</th></tr></thead>
+              <tbody>
+                {records.map((r, i) => (
+                  <tr key={i}>
+                    <td>{r.type}</td>
+                    <td style={{ wordBreak: "break-all", fontFamily: "monospace" }}>{r.name}</td>
+                    <td style={{ wordBreak: "break-all", fontFamily: "monospace" }}>{r.value}</td>
+                    <td>{r.priority ?? "—"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="ob-panel-actions">
+            <button className="ob-btn ob-btn-primary" disabled={busy}
+              onClick={() => fetcher.submit({ intent: "verify-domain" }, { method: "post" })}>
+              {busy ? <><span className="ob-spin" />Checking…</> : "Verify domain"}
+            </button>
+            <button className="ob-skip-btn" onClick={onSkip}>Skip for now</button>
+          </div>
+        </>
+      ) : ctx.slotAvailable ? (
+        <>
+          <div className="ob-field-full">
+            <label className="ob-field-label">Your domain</label>
+            <input className="ob-input" value={domain} onChange={(e) => setDomain(e.target.value)} placeholder="yourbrand.com" />
+          </div>
+          <div className="ob-panel-actions">
+            <button className={`ob-btn ob-btn-primary ${domain.trim() ? "" : "is-disabled"}`} disabled={busy || !domain.trim()}
+              onClick={() => fetcher.submit({ intent: "add-domain", domain: domain.trim() }, { method: "post" })}>
+              {busy ? <><span className="ob-spin" />Adding…</> : "Add domain"}
+            </button>
+            <button className="ob-skip-btn" onClick={onSkip}>Skip for now</button>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="ob-hint"><InfoDot /><span>Custom sending domains are currently full. You can use the shared address for now — contact us to request your own.</span></div>
+          <div className="ob-panel-actions">
+            <button className="ob-skip-btn" onClick={onSkip}>Continue</button>
+          </div>
+        </>
+      )}
+      {/* Re-render happens via loader revalidation after add/verify; onComplete
+          fires only when the step becomes verified (handled by the verified branch). */}
+    </div>
+  );
+}
+
 const PANELS = {
   store: StorePanel,
   sender: SenderPanel,
+  domain: DomainPanel,
   embed: EmbedPanel,
   popup: PopupPanel,
   flow: FlowPanel,

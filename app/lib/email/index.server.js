@@ -47,21 +47,28 @@ export function resolveProvider(settings) {
  */
 export function resolveFrom({ settings, provider }) {
   const senderName = settings?.senderName || "Your Store";
-  const merchantEmail =
-    settings?.senderEmail || process.env.RESEND_FROM_EMAIL || DEFAULT_FROM_EMAIL;
-  const merchantReplyTo = settings?.replyTo || merchantEmail;
+  const merchantReplyTo =
+    settings?.replyTo || settings?.senderEmail || process.env.RESEND_FROM_EMAIL || DEFAULT_FROM_EMAIL;
 
-  if (provider === "ses" && !settings?.domainVerified) {
-    // Mode B — send from our verified SES domain, reply goes to the merchant.
-    const sesFrom =
-      process.env.SES_FROM_EMAIL || DEFAULT_SES_FROM_EMAIL;
+  // Mode B (default) — the merchant's sending domain is NOT verified, so we send
+  // from OUR shared verified address and put the merchant in Reply-To. This holds
+  // for BOTH providers: SES and Resend each reject an unverified from-domain, so
+  // the gate is `domainVerified`, not the provider.
+  if (!settings?.domainVerified) {
+    const sharedFrom =
+      provider === "ses"
+        ? process.env.SES_FROM_EMAIL || DEFAULT_SES_FROM_EMAIL
+        : process.env.RESEND_FROM_EMAIL || DEFAULT_FROM_EMAIL;
     return {
-      from: `${senderName} <${sesFrom}>`,
+      from: `${senderName} <${sharedFrom}>`,
       replyTo: merchantReplyTo,
     };
   }
 
-  // Resend, or SES with a verified merchant domain (Mode A).
+  // Mode A — merchant's own domain is verified; send as their chosen mailbox.
+  // senderEmail is `[mailbox]@verifiedDomain`, validated at save time.
+  const merchantEmail =
+    settings?.senderEmail || process.env.RESEND_FROM_EMAIL || DEFAULT_FROM_EMAIL;
   return {
     from: `${senderName} <${merchantEmail}>`,
     replyTo: merchantReplyTo,

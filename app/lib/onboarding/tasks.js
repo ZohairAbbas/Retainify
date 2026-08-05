@@ -31,6 +31,15 @@ export const TASKS = [
     panel: "sender",
   },
   {
+    id: "domain",
+    title: "Use your own domain (optional)",
+    sub: "Send from your brand instead of the shared address",
+    time: "5 min",
+    optional: true,
+    detect: "auto",
+    panel: "domain",
+  },
+  {
     id: "embed",
     title: "Enable the on-site popup",
     sub: "Turn on the Retainify embed in your theme",

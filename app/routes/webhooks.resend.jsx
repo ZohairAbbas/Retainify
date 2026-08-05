@@ -3,7 +3,8 @@
  *
  * Configure in Resend dashboard → Webhooks. Point at:
  *   https://<your-app-domain>/webhooks/resend
- * Enable events: email.opened, email.clicked, email.bounced, email.complained.
+ * Enable events: email.opened, email.clicked, email.bounced, email.complained,
+ * and domain.updated (for the custom sending-domain flow).
  * Copy the signing secret into env var RESEND_WEBHOOK_SECRET.
  *
  * Resend uses Svix-style signed webhooks. We verify the signature using the
@@ -14,12 +15,14 @@
  *   email.clicked   → JourneyJob.clickedAt = now (if null)
  *   email.bounced   → EmailSuppression upsert with reason='bounce'
  *   email.complained → EmailSuppression upsert with reason='complaint'
+ *   domain.updated  → ShopSettings.domainStatus/domainVerified synced from Resend
  *
- * Unmatched messageId → log + 200 (Resend stops retrying).
+ * Unmatched messageId / domainId → log + 200 (Resend stops retrying).
  */
 import { Webhook } from "svix";
 import prisma from "../db.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
+import { canUseDomainSlot, MAX_CUSTOM_DOMAINS } from "../lib/email/domain-slots.server.js";
 
 const SECRET = process.env.RESEND_WEBHOOK_SECRET || "";
 
@@ -47,6 +50,18 @@ export const action = async ({ request }) => {
 
   const eventType = payload?.type || "";
   const data = payload?.data || {};
+
+  // Domain lifecycle events carry a domain object, not an email_id — handle them
+  // on their own path so the email-event messageId guard below doesn't reject them.
+  if (eventType === "domain.updated") {
+    try {
+      await handleDomainUpdated(data);
+    } catch (err) {
+      console.error(`[resend-webhook] domain.updated handler threw:`, err.message);
+    }
+    return new Response(null, { status: 200 });
+  }
+
   const messageId = data.email_id || "";
 
   if (!eventType || !messageId) {
@@ -63,6 +78,59 @@ export const action = async ({ request }) => {
 
   return new Response(null, { status: 200 });
 };
+
+/**
+ * Sync a shop's domain state from a Resend `domain.updated` event. The event data
+ * is a domain object: `{ id, name, status, records? }`. We match on resendDomainId,
+ * mirror the status, and flip domainVerified only when status === "verified" AND a
+ * slot is still free (re-checking the cap here guards a race where two shops both
+ * finish verification against the last slot).
+ */
+async function handleDomainUpdated(data) {
+  const domainId = data?.id || "";
+  const status = data?.status || "";
+  if (!domainId) {
+    console.warn("[resend-webhook] domain.updated with no domain id — ignored");
+    return;
+  }
+
+  const shopSettings = await prisma.shopSettings.findFirst({
+    where: { resendDomainId: domainId },
+    select: { shop: true, domainVerified: true },
+  });
+  if (!shopSettings) {
+    console.log(`[resend-webhook] domain.updated for unknown domainId=${domainId} — ignored`);
+    return;
+  }
+
+  let verified = status === "verified";
+
+  // Cap re-check: only let a NEWLY verifying shop consume a slot if one is free.
+  if (verified && !shopSettings.domainVerified) {
+    const free = await canUseDomainSlot(shopSettings.shop);
+    if (!free) {
+      verified = false;
+      console.warn(
+        `[resend-webhook] ${shopSettings.shop} verified domain ${domainId} but all ${MAX_CUSTOM_DOMAINS} slots are taken — not activating`,
+      );
+    }
+  }
+
+  const update = { domainStatus: status };
+  if (verified) update.domainVerified = true;
+  // If Resend reports it's no longer verified, revoke Mode A so we fall back to
+  // the shared address rather than sending from an unverifiable domain.
+  if (status && status !== "verified") update.domainVerified = false;
+  if (Array.isArray(data.records)) update.domainRecords = JSON.stringify(data.records);
+
+  await prisma.shopSettings.update({
+    where: { shop: shopSettings.shop },
+    data: update,
+  });
+  console.log(
+    `[resend-webhook] domain.updated ${shopSettings.shop} domainId=${domainId} status=${status} verified=${!!update.domainVerified}`,
+  );
+}
 
 async function handleEvent(eventType, messageId, data) {
   // For open/click we update the JourneyJob row by resendMessageId.

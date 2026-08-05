@@ -4,6 +4,8 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
+import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
+import { addDomain, verifyOrCheckDomain, removeDomain } from "../lib/email/domain-actions.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -11,13 +13,23 @@ export const loader = async ({ request }) => {
   const settings = await prisma.shopSettings.findUnique({ where: { shop } });
 
   // The real from-address this shop sends from, computed by the same seam the
-  // send path uses (Resend/SES Mode A → merchant domain; SES Mode B → our domain).
-  // Shown read-only so it never drifts from what actually goes out.
+  // send path uses (Mode A → merchant domain; Mode B → our shared domain).
+  // Shown read-only (Mode B) or as the editable local part (Mode A).
   const provider = resolveProvider(settings);
   const { from } = resolveFrom({ settings, provider });
   const sendingFromAddress = from.match(/<([^>]+)>/)?.[1] || from;
 
-  return { settings: settings ?? {}, sendingFromAddress };
+  // Whether a custom-domain slot is available to this shop (excludes itself).
+  const slotAvailable = await canUseDomainSlot(shop);
+
+  let domainRecords = [];
+  try {
+    domainRecords = settings?.domainRecords ? JSON.parse(settings.domainRecords) : [];
+  } catch {
+    domainRecords = [];
+  }
+
+  return { settings: settings ?? {}, sendingFromAddress, slotAvailable, domainRecords };
 };
 
 export const action = async ({ request }) => {
@@ -35,15 +47,38 @@ export const action = async ({ request }) => {
     const quietHoursEnd = parseInt(formData.get("quietHoursEnd") || "8", 10);
     const storeTimezone = String(formData.get("storeTimezone") || "UTC").trim();
 
-    // senderEmail is intentionally NOT written here: it's no longer merchant-editable
-    // (all sends use our shared from-address in Mode B). Existing values are preserved
-    // for Mode A (domainVerified) shops rather than being wiped to "".
+    // senderEmail (the from mailbox) is editable ONLY for a verified-domain shop,
+    // and only as `[mailbox]@verifiedDomain`. We validate server-side so a stale
+    // or forged value can't flip an unverified shop to an arbitrary from-address.
+    const mailbox = String(formData.get("senderMailbox") || "").trim().toLowerCase();
+    const update = { senderName, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone };
+
+    const current = await prisma.shopSettings.findUnique({ where: { shop } });
+    if (current?.domainVerified && current?.verifiedDomain && mailbox) {
+      // Accept only a bare local part (no @) — the domain is always verifiedDomain.
+      const localPart = mailbox.includes("@") ? mailbox.split("@")[0] : mailbox;
+      if (/^[a-z0-9._%+-]+$/.test(localPart)) {
+        update.senderEmail = `${localPart}@${current.verifiedDomain}`;
+      }
+    }
+
     await prisma.shopSettings.upsert({
       where: { shop },
       create: { shop, senderName, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
-      update: { senderName, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
+      update,
     });
     return { ok: true, saved: true };
+  }
+
+  // ── Custom sending-domain flow (shared handlers) ───────────────────────────
+  if (intent === "add-domain") {
+    return addDomain(shop, formData.get("domain"));
+  }
+  if (intent === "verify-domain" || intent === "check-domain") {
+    return verifyOrCheckDomain(shop, { verify: intent === "verify-domain" });
+  }
+  if (intent === "remove-domain") {
+    return removeDomain(shop);
   }
 
   return { ok: false };
@@ -55,18 +90,32 @@ const HOURS = Array.from({ length: 24 }, (_, i) => ({
 }));
 
 export default function Settings() {
-  const { settings, sendingFromAddress } = useLoaderData();
+  const { settings, sendingFromAddress, slotAvailable, domainRecords } = useLoaderData();
   const fetcher = useFetcher();
   const saving = fetcher.state !== "idle";
   const saved = fetcher.data?.saved;
 
+  const domainVerified = !!settings.domainVerified;
+  const verifiedDomain = settings.verifiedDomain || "";
+  const domainStatus = settings.domainStatus || "";
+  const domainError = fetcher.data?.domainError;
+
   const [senderName, setSenderName] = useState(settings.senderName || "");
   const [replyTo, setReplyTo] = useState(settings.replyTo || "");
+  // Mailbox local-part for a verified domain (Mode A). Prefill from senderEmail.
+  const [senderMailbox, setSenderMailbox] = useState(
+    (settings.senderEmail || "").split("@")[0] || "hello",
+  );
+  const [domainInput, setDomainInput] = useState("");
   const [brandColor, setBrandColor] = useState(settings.brandColor || "#000000");
   const [logoUrl, setLogoUrl] = useState(settings.logoUrl || "");
   const [quietHoursStart, setQuietHoursStart] = useState(String(settings.quietHoursStart ?? "22"));
   const [quietHoursEnd, setQuietHoursEnd] = useState(String(settings.quietHoursEnd ?? "8"));
   const [storeTimezone, setStoreTimezone] = useState(settings.storeTimezone || "UTC");
+
+  function submitIntent(fields) {
+    fetcher.submit(fields, { method: "post" });
+  }
 
   function saveSettings() {
     fetcher.submit(
@@ -74,6 +123,7 @@ export default function Settings() {
         intent: "save-settings",
         senderName,
         replyTo,
+        senderMailbox: domainVerified ? senderMailbox : "",
         brandColor,
         logoUrl,
         quietHoursStart,
@@ -111,17 +161,38 @@ export default function Settings() {
             </div>
             <div>
               <label className="field-label">Sender email</label>
-              <input
-                className="input"
-                type="email"
-                value={sendingFromAddress}
-                disabled
-                readOnly
-              />
-              <div className="field-help">
-                Emails are sent from this shared, deliverability-optimized address.
-                Contact support to use your own domain for email sending.
-              </div>
+              {domainVerified ? (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      className="input"
+                      value={senderMailbox}
+                      onChange={(e) => setSenderMailbox(e.target.value)}
+                      placeholder="hello"
+                      style={{ maxWidth: 200 }}
+                    />
+                    <span className="t-small muted">@{verifiedDomain}</span>
+                  </div>
+                  <div className="field-help">
+                    Pick the mailbox emails are sent from. Your verified domain
+                    (<b>{verifiedDomain}</b>) is fixed.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <input
+                    className="input"
+                    type="email"
+                    value={sendingFromAddress}
+                    disabled
+                    readOnly
+                  />
+                  <div className="field-help">
+                    Emails are sent from this shared, deliverability-optimized address.
+                    Set up your own domain below to send from your brand.
+                  </div>
+                </>
+              )}
             </div>
             <div>
               <label className="field-label">Reply-to email</label>
@@ -138,6 +209,93 @@ export default function Settings() {
               </div>
             </div>
           </div>
+        </section>
+
+        {/* Sending domain (custom, Mode A) */}
+        <section className="rt-form-section">
+          <div className="t-micro muted" style={{ marginBottom: 4 }}>Sending domain</div>
+          <div className="t-small muted" style={{ marginBottom: 16 }}>
+            Send emails from your own domain instead of the shared address.
+          </div>
+
+          {domainError && (
+            <div className="t-small" style={{ color: "var(--danger, #c0392b)", marginBottom: 12 }}>
+              {domainError}
+            </div>
+          )}
+
+          {/* State: verified */}
+          {domainVerified ? (
+            <div>
+              <div className="t-small" style={{ marginBottom: 8 }}>
+                ✅ <b>{verifiedDomain}</b> is verified. Emails send from your domain.
+              </div>
+              <button
+                className="btn"
+                disabled={saving}
+                onClick={() => submitIntent({ intent: "remove-domain" })}
+              >
+                Remove domain
+              </button>
+            </div>
+          ) : verifiedDomain ? (
+            /* State: pending — domain added, awaiting DNS + verification */
+            <div>
+              <div className="t-small" style={{ marginBottom: 12 }}>
+                Add these DNS records at your domain provider for <b>{verifiedDomain}</b>,
+                then click Verify. Status: <b>{domainStatus || "pending"}</b>.
+              </div>
+              <DnsRecordsTable records={domainRecords} />
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button
+                  className="btn btn-primary"
+                  disabled={saving}
+                  onClick={() => submitIntent({ intent: "verify-domain" })}
+                >
+                  Verify domain
+                </button>
+                <button
+                  className="btn"
+                  disabled={saving}
+                  onClick={() => submitIntent({ intent: "check-domain" })}
+                >
+                  Check now
+                </button>
+                <button
+                  className="btn"
+                  disabled={saving}
+                  onClick={() => submitIntent({ intent: "remove-domain" })}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : slotAvailable ? (
+            /* State: no domain, slot free — offer to add */
+            <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+              <div style={{ flex: 1 }}>
+                <label className="field-label">Your domain</label>
+                <input
+                  className="input"
+                  value={domainInput}
+                  onChange={(e) => setDomainInput(e.target.value)}
+                  placeholder="yourbrand.com"
+                />
+              </div>
+              <button
+                className="btn btn-primary"
+                disabled={saving || !domainInput.trim()}
+                onClick={() => submitIntent({ intent: "add-domain", domain: domainInput.trim() })}
+              >
+                Add domain
+              </button>
+            </div>
+          ) : (
+            /* State: no domain, no slot */
+            <div className="t-small muted">
+              Custom sending domains are currently full. Please contact us to request one.
+            </div>
+          )}
         </section>
 
         {/* Brand */}
@@ -232,6 +390,36 @@ export default function Settings() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DnsRecordsTable({ records }) {
+  if (!records || !records.length) {
+    return <div className="t-small muted">No DNS records available yet.</div>;
+  }
+  return (
+    <div style={{ overflowX: "auto" }}>
+      <table className="t-small" style={{ width: "100%", borderCollapse: "collapse" }}>
+        <thead>
+          <tr style={{ textAlign: "left", borderBottom: "1px solid var(--hair-1)" }}>
+            <th style={{ padding: "6px 8px" }}>Type</th>
+            <th style={{ padding: "6px 8px" }}>Name</th>
+            <th style={{ padding: "6px 8px" }}>Value</th>
+            <th style={{ padding: "6px 8px" }}>Priority</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((r, i) => (
+            <tr key={i} style={{ borderBottom: "1px solid var(--hair-1)" }}>
+              <td style={{ padding: "6px 8px" }}>{r.type}</td>
+              <td style={{ padding: "6px 8px", wordBreak: "break-all", fontFamily: "monospace" }}>{r.name}</td>
+              <td style={{ padding: "6px 8px", wordBreak: "break-all", fontFamily: "monospace" }}>{r.value}</td>
+              <td style={{ padding: "6px 8px" }}>{r.priority ?? "—"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }

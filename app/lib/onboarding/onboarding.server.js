@@ -27,6 +27,9 @@ export async function getOnboardingState(shop) {
   const senderName = (settings?.senderName || "").trim();
   const auto = {
     sender: senderName.length > 0 && senderName !== "Your Store",
+    // Optional custom-domain step completes once the domain is verified. It's
+    // skippable, so an unverified/absent domain never blocks activation.
+    domain: !!settings?.domainVerified,
     popup: !!popup?.enabled,
     flow: journeyCount > 0,
   };
