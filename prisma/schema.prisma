@@ -29,80 +29,128 @@ model Session {
 
 // Per-shop configuration for the Cart Rescue journey
 model ShopSettings {
-  id               String   @id @default(cuid())
-  shop             String   @unique
-  senderName       String   @default("Your Store")
-  senderEmail      String   @default("")
-  replyTo          String   @default("")
-  emailProvider    String   @default("resend") // resend | ses
-  brandColor       String   @default("#000000")
-  logoUrl          String   @default("")
-  quietHoursStart  Int      @default(22) // hour 0-23 in store timezone
-  quietHoursEnd    Int      @default(8)
-  storeTimezone    String   @default("UTC")
+  id                                 String    @id @default(cuid())
+  shop                               String    @unique
+  senderName                         String    @default("Your Store")
+  senderEmail                        String    @default("")
+  replyTo                            String    @default("")
+  emailProvider                      String    @default("resend") // resend | ses
+  brandColor                         String    @default("#000000")
+  logoUrl                            String    @default("")
+  quietHoursStart                    Int       @default(22) // hour 0-23 in store timezone
+  quietHoursEnd                      Int       @default(8)
+  storeTimezone                      String    @default("UTC")
   // Domain verification (Resend custom sending domain, Mode A)
-  verifiedDomain   String   @default("")   // the domain name, e.g. "theirbrand.com"
-  domainVerified   Boolean  @default(false) // true only when Resend status == "verified"
-  resendDomainId   String   @default("")   // Resend domain UUID
-  domainStatus     String   @default("")   // "" | pending | verified | failed
-  domainRecords    String   @default("")   // JSON: DNS records to display (cached from create)
+  verifiedDomain                     String    @default("") // the domain name, e.g. "theirbrand.com"
+  domainVerified                     Boolean   @default(false) // true only when Resend status == "verified"
+  resendDomainId                     String    @default("") // Resend domain UUID
+  domainStatus                       String    @default("") // "" | pending | verified | failed
+  domainRecords                      String    @default("") // JSON: DNS records to display (cached from create)
   // Onboarding
-  onboardingStep   Int      @default(0) // 0=not started, 1=sender saved, 2=done
-  isActive         Boolean  @default(false)
+  onboardingStep                     Int       @default(0) // 0=not started, 1=sender saved, 2=done
+  isActive                           Boolean   @default(false)
   // Per-task onboarding/setup-guide state. Shape: { done: { [taskId]: true },
   // skipped: { [taskId]: true } }. Auto-detected tasks (sender/popup/flow) are
   // derived from real data at read time; manual tasks (store/embed/call) live here.
-  onboardingProgress Json?
-  pushEnabled      Boolean  @default(false)
+  onboardingProgress                 Json?
+  pushEnabled                        Boolean   @default(false)
   // WhatsApp channel (Meta Cloud API). Off by default; flipped on per shop
   // once the merchant connects a WABA via Embedded Signup and approval lands.
-  whatsappEnabled  Boolean  @default(false)
-  whatsappProvider String   @default("meta") // meta | (future BSP)
+  whatsappEnabled                    Boolean   @default(false)
+  whatsappProvider                   String    @default("meta") // meta | (future BSP)
   // When true (default, Meta-compliant), WhatsApp only sends to confirmed
   // opt-ins. When a merchant explicitly disables this, the worker will send to
   // any enrolled contact that has a phone number (opt-outs/suppression are
   // ALWAYS honored regardless of this flag).
-  whatsappRequireOptIn Boolean @default(true)
+  whatsappRequireOptIn               Boolean   @default(true)
   // Contacts feature — one-time backfill flag + Shopify customer sync state
-  contactsBackfilledAt              DateTime?
-  lastShopifyCustomerSyncAt         DateTime?
-  shopifyCustomerSyncCursor         String?
-  shopifyCustomerSyncStatus         String   @default("idle") // idle | running | failed
-  shopifyCustomerSyncTotal          Int?
-  shopifyCustomerSyncDone           Int?
-  shopifyCustomerSyncIncludeNonOptIn Boolean @default(false)
-  shopifyCustomerSyncLastError      String   @default("")
+  contactsBackfilledAt               DateTime?
+  lastShopifyCustomerSyncAt          DateTime?
+  shopifyCustomerSyncCursor          String?
+  shopifyCustomerSyncStatus          String    @default("idle") // idle | running | failed
+  shopifyCustomerSyncTotal           Int?
+  shopifyCustomerSyncDone            Int?
+  shopifyCustomerSyncIncludeNonOptIn Boolean   @default(false)
+  shopifyCustomerSyncLastError       String    @default("")
   // Segments feature — daily snapshot worker. No-op unless ≥24h elapsed.
-  lastSegmentSnapshotAt             DateTime?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  lastSegmentSnapshotAt              DateTime?
+  createdAt                          DateTime  @default(now())
+  updatedAt                          DateTime  @updatedAt
+}
+
+// Per-shop billing entitlement. `planKey` is the source of truth for feature
+// gating; it mirrors the Shopify subscription and is refreshed from
+// billing.check() on app load (throttled — see app/lib/billing/sync.server.js).
+//
+// Shopify hosts the plan-selection page and owns charging, trials, proration and
+// dunning (Shopify App Pricing). This table is our local read-model of that —
+// never the authority on whether money changed hands.
+model ShopPlan {
+  id               String    @id @default(cuid())
+  shop             String    @unique
+  planKey          String    @default("free") // free | starter | growth | comped
+  // Shopify's subscription identity, kept for reconciliation and support debugging.
+  subscriptionGid  String    @default("")
+  subscriptionName String    @default("")
+  status           String    @default("active") // active | pending | cancelled | frozen | expired
+  // Grandfathering: comped shops get full access regardless of planKey limits.
+  // compedUntil is a real date (30-day window) — getEntitlement() treats an
+  // elapsed date as no longer comped, evaluated at READ time so there's no
+  // window where a stale row grants access it shouldn't.
+  isComped         Boolean   @default(false)
+  compedReason     String    @default("")
+  compedUntil      DateTime? // null = indefinite
+  trialEndsAt      DateTime?
+  currentPeriodEnd DateTime?
+  lastCheckedAt    DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@index([planKey])
+}
+
+// Monthly send counters per shop. One row per shop per period, so a rollover is
+// a new row rather than a destructive reset — keeps history for support and for
+// spotting abuse.
+model UsageCounter {
+  id           String   @id @default(cuid())
+  shop         String
+  periodStart  DateTime // UTC month start (see periodStartFor)
+  emailsSent   Int      @default(0)
+  pushSent     Int      @default(0)
+  whatsappSent Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([shop, periodStart])
+  @@index([shop, periodStart])
 }
 
 // Unified contact record per shop+email. Source of truth for browsing audience.
 // Other tables (AbandonedCart, PopupSignup, PushSubscription, EmailSuppression,
 // JourneyEnrollment) still key on `email` string — no FKs added.
 model Contact {
-  id                  String    @id @default(cuid())
-  shop                String
-  email               String    // always lowercased + trimmed on write
-  name                String    @default("")
-  firstSeenAt         DateTime  @default(now())
-  lastSeenAt          DateTime  @default(now())
-  source              String    @default("manual") // popup | cart_abandoned | shopify_customer | csv_import | push_only | manual
-  subscriptionStatus  String    @default("never_opted_in") // subscribed | unsubscribed | bounced | complained | never_opted_in
-  marketingConsentAt  DateTime?
-  shopifyCustomerId   String?
+  id                 String    @id @default(cuid())
+  shop               String
+  email              String // always lowercased + trimmed on write
+  name               String    @default("")
+  firstSeenAt        DateTime  @default(now())
+  lastSeenAt         DateTime  @default(now())
+  source             String    @default("manual") // popup | cart_abandoned | shopify_customer | csv_import | push_only | manual
+  subscriptionStatus String    @default("never_opted_in") // subscribed | unsubscribed | bounced | complained | never_opted_in
+  marketingConsentAt DateTime?
+  shopifyCustomerId  String?
   // WhatsApp facets — phone is E.164, whatsappStatus is a separate consent axis
   // from email subscriptionStatus (a contact can be email-subscribed but not
   // WhatsApp-opted-in, or vice versa). WhatsappSubscription holds the detail.
-  phone               String?
-  whatsappStatus      String    @default("never_opted_in") // subscribed | unsubscribed | invalid | never_opted_in
-  whatsappOptInAt     DateTime?
-  deletedAt           DateTime?
-  createdAt           DateTime  @default(now())
-  updatedAt           DateTime  @updatedAt
+  phone              String?
+  whatsappStatus     String    @default("never_opted_in") // subscribed | unsubscribed | invalid | never_opted_in
+  whatsappOptInAt    DateTime?
+  deletedAt          DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
-  tags                ContactTag[]
+  tags ContactTag[]
 
   @@unique([shop, email])
   @@index([shop, lastSeenAt])
@@ -121,7 +169,7 @@ model Tag {
   color     String   @default("forest") // forest | blue | amber | purple | tan | red
   createdAt DateTime @default(now())
 
-  contacts  ContactTag[]
+  contacts ContactTag[]
 
   @@unique([shop, nameKey])
 }
@@ -132,8 +180,8 @@ model ContactTag {
   tagId     String
   createdAt DateTime @default(now())
 
-  contact   Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
-  tag       Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([contactId, tagId])
   @@index([tagId])
@@ -142,19 +190,19 @@ model ContactTag {
 // Saved audience group — dynamic (rule tree) or static (explicit member list).
 // Used for browsing, and (in a follow-up phase) for flow triggers.
 model Segment {
-  id             String   @id @default(cuid())
+  id             String    @id @default(cuid())
   shop           String
   name           String
-  description    String   @default("")
-  kind           String   // "dynamic" | "static"
-  filterTree     Json?    // root group for dynamic; null for static
-  contactCount   Int      @default(0)
+  description    String    @default("")
+  kind           String // "dynamic" | "static"
+  filterTree     Json? // root group for dynamic; null for static
+  contactCount   Int       @default(0)
   lastComputedAt DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
   deletedAt      DateTime?
 
-  memberships    SegmentMembership[]
+  memberships SegmentMembership[]
 
   @@index([shop, deletedAt])
   @@index([shop, updatedAt])
@@ -197,10 +245,10 @@ model SegmentSnapshot {
 model SegmentMembership {
   id        String   @id @default(cuid())
   segmentId String
-  contactId String   // points at Contact.id; joined by app logic
+  contactId String // points at Contact.id; joined by app logic
   addedAt   DateTime @default(now())
 
-  segment   Segment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+  segment Segment @relation(fields: [segmentId], references: [id], onDelete: Cascade)
 
   @@unique([segmentId, contactId])
   @@index([segmentId])
@@ -209,22 +257,22 @@ model SegmentMembership {
 
 // Tracks an abandoned checkout session
 model AbandonedCart {
-  id              String   @id @default(cuid())
-  shop            String
-  checkoutToken   String
-  checkoutId      String
-  cartToken       String   @default("")
-  customerEmail   String
-  customerName    String   @default("")
-  totalPrice      Float
-  currency        String   @default("USD")
-  lineItemsJson   String   // JSON serialised line items
-  recoveryUrl     String
-  abandonedAt     DateTime @default(now())
-  recoveredAt     DateTime?
+  id               String    @id @default(cuid())
+  shop             String
+  checkoutToken    String
+  checkoutId       String
+  cartToken        String    @default("")
+  customerEmail    String
+  customerName     String    @default("")
+  totalPrice       Float
+  currency         String    @default("USD")
+  lineItemsJson    String // JSON serialised line items
+  recoveryUrl      String
+  abandonedAt      DateTime  @default(now())
+  recoveredAt      DateTime?
   recoveredRevenue Float?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
   @@unique([shop, checkoutToken])
   @@index([shop, customerEmail])
@@ -245,14 +293,14 @@ model EmailSuppression {
 
 // Popup signup capture
 model PopupSignup {
-  id            String    @id @default(cuid())
-  shop          String
-  email         String
-  source        String    @default("exit_intent_popup")
-  discountCode  String    @default("")
-  confirmToken  String    @default("")
-  confirmedAt   DateTime?
-  createdAt     DateTime  @default(now())
+  id           String    @id @default(cuid())
+  shop         String
+  email        String
+  source       String    @default("exit_intent_popup")
+  discountCode String    @default("")
+  confirmToken String    @default("")
+  confirmedAt  DateTime?
+  createdAt    DateTime  @default(now())
 
   @@index([shop, email])
 }
@@ -278,27 +326,27 @@ model PopupSettings {
 
 // Flexible journey engine — a playbook (welcome, win-back, post-purchase, etc.)
 model Journey {
-  id               String    @id @default(cuid())
-  shop             String
-  name             String
-  trigger          String    // cart_abandoned | customer_created | order_placed | win_back | segment_entered
-  isActive         Boolean   @default(false)
-  status           String    @default("draft")        // draft | published | paused
-  publishedAt      DateTime?
-  publishedVersion Int       @default(0)
-  draftVersion     Int       @default(0)
-  entryFrequency   String    @default("no_reentry")   // immediate | delayed_<hours> | no_reentry
-  exitCriteria     String    @default("[]")           // JSON array of event keys
-  source           String    @default("flows")        // flows | automations | cart_rescue_legacy
-  archivedAt       DateTime?
+  id                 String    @id @default(cuid())
+  shop               String
+  name               String
+  trigger            String // cart_abandoned | customer_created | order_placed | win_back | segment_entered
+  isActive           Boolean   @default(false)
+  status             String    @default("draft") // draft | published | paused
+  publishedAt        DateTime?
+  publishedVersion   Int       @default(0)
+  draftVersion       Int       @default(0)
+  entryFrequency     String    @default("no_reentry") // immediate | delayed_<hours> | no_reentry
+  exitCriteria       String    @default("[]") // JSON array of event keys
+  source             String    @default("flows") // flows | automations | cart_rescue_legacy
+  archivedAt         DateTime?
   // Segments trigger metadata. triggerSegmentKey holds Segment.id (cuid) or
   // a sys_* key for built-in system segments. lastEnrollmentAt/Hash drive
   // the staggered enrollment worker — never bypass via hand edits.
   triggerSegmentKey  String?
   lastEnrollmentAt   DateTime?
   lastEnrollmentHash String?
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   steps       JourneyStep[]
   enrollments JourneyEnrollment[]
@@ -310,48 +358,48 @@ model Journey {
 
 // One step within a journey (email send, time delay, push, or exit)
 model JourneyStep {
-  id            String   @id @default(cuid())
-  journeyId     String
-  stepNumber    Int
-  nodeType      String   @default("email") // email | delay | exit | push | whatsapp
-  positionY     Int      @default(0)
-  delayHours    Float    @default(1)
-  subject       String   @default("")
-  previewText   String   @default("")
-  emailName     String   @default("")
-  templateStyle String   @default("classic")
-  discountPct   Int      @default(0)
-  isEnabled     Boolean  @default(true)
+  id             String   @id @default(cuid())
+  journeyId      String
+  stepNumber     Int
+  nodeType       String   @default("email") // email | delay | exit | push | whatsapp
+  positionY      Int      @default(0)
+  delayHours     Float    @default(1)
+  subject        String   @default("")
+  previewText    String   @default("")
+  emailName      String   @default("")
+  templateStyle  String   @default("classic")
+  discountPct    Int      @default(0)
+  isEnabled      Boolean  @default(true)
   // Set when a draft edit replaced this step but in-flight jobs still
   // reference it. Archived steps are excluded from the builder canvas and
   // step counts, but kept so their JourneyJobs are not cascade-deleted.
-  isArchived    Boolean  @default(false)
-  emailBlocks   String   @default("[]")   // JSON array of block objects
-  emailBrand    String   @default("{}")   // JSON brand kit object
+  isArchived     Boolean  @default(false)
+  emailBlocks    String   @default("[]") // JSON array of block objects
+  emailBrand     String   @default("{}") // JSON brand kit object
   // Email authoring mode. "blocks" (default) renders emailBlocks/emailBrand via
   // the visual renderer; "html" sends the merchant's pasted emailHtml verbatim
   // (merge tags + unsubscribe still applied at send time).
-  emailMode     String   @default("blocks") // blocks | html
-  emailHtml     String   @default("")        // raw pasted HTML (used when emailMode = "html")
+  emailMode      String   @default("blocks") // blocks | html
+  emailHtml      String   @default("") // raw pasted HTML (used when emailMode = "html")
   // Push notification fields
-  pushTitle     String   @default("")
-  pushBody      String   @default("")
-  pushIconUrl   String   @default("")
-  pushClickUrl  String   @default("")
+  pushTitle      String   @default("")
+  pushBody       String   @default("")
+  pushIconUrl    String   @default("")
+  pushClickUrl   String   @default("")
   // WhatsApp fields — references a Meta-approved HSM template by name+language.
   // waVariables maps positional template params ({{1}},{{2}}...) to a merge-tag
   // or enrollment-payload key resolved at send time.
-  waTemplateName String  @default("")
-  waLanguage     String  @default("")
+  waTemplateName String   @default("")
+  waLanguage     String   @default("")
   waVariables    Json?
-  waMediaUrl     String  @default("")
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  waMediaUrl     String   @default("")
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
-  jobs          JourneyJob[]
-  pushJobs      PushJob[]
-  whatsappJobs  WhatsappJob[]
+  journey      Journey       @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  jobs         JourneyJob[]
+  pushJobs     PushJob[]
+  whatsappJobs WhatsappJob[]
 
   @@index([journeyId, stepNumber])
 }
@@ -372,20 +420,20 @@ model JourneyTemplate {
 
 // One contact enrolled in a journey
 model JourneyEnrollment {
-  id            String    @id @default(cuid())
-  shop          String
-  journeyId     String
-  contactEmail  String
-  contactName   String    @default("")
-  payload       String    @default("{}")
-  enrolledAt    DateTime  @default(now())
-  completedAt   DateTime?
-  exitReason    String    @default("")
+  id           String    @id @default(cuid())
+  shop         String
+  journeyId    String
+  contactEmail String
+  contactName  String    @default("")
+  payload      String    @default("{}")
+  enrolledAt   DateTime  @default(now())
+  completedAt  DateTime?
+  exitReason   String    @default("")
 
-  journey       Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
-  jobs          JourneyJob[]
-  pushJobs      PushJob[]
-  whatsappJobs  WhatsappJob[]
+  journey      Journey       @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  jobs         JourneyJob[]
+  pushJobs     PushJob[]
+  whatsappJobs WhatsappJob[]
 
   @@index([shop, contactEmail])
   @@index([journeyId])
@@ -393,24 +441,24 @@ model JourneyEnrollment {
 
 // Scheduled send per step per enrollment
 model JourneyJob {
-  id              String    @id @default(cuid())
-  shop            String
-  enrollmentId    String
-  stepId          String
-  scheduledFor    DateTime
-  status          String    @default("pending")
-  attempts        Int       @default(0)
-  lastError       String    @default("")
-  resendMessageId String    @default("")
-  providerMessageId String  @default("")
-  sentAt          DateTime?
-  openedAt        DateTime?
-  clickedAt       DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  id                String    @id @default(cuid())
+  shop              String
+  enrollmentId      String
+  stepId            String
+  scheduledFor      DateTime
+  status            String    @default("pending")
+  attempts          Int       @default(0)
+  lastError         String    @default("")
+  resendMessageId   String    @default("")
+  providerMessageId String    @default("")
+  sentAt            DateTime?
+  openedAt          DateTime?
+  clickedAt         DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
 
-  enrollment      JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  step            JourneyStep @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  enrollment JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step       JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
 
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
@@ -450,8 +498,8 @@ model PushJob {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
-  enrollment   JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  step         JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  enrollment JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step       JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
 
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
@@ -481,18 +529,18 @@ model WhatsappAccount {
 
 // Meta-approved message templates (HSM) synced from a shop's WABA.
 model WhatsappTemplate {
-  id            String   @id @default(cuid())
-  shop          String
-  name          String
-  language      String
-  category      String   @default("MARKETING") // MARKETING | UTILITY | AUTHENTICATION
-  metaTemplateId String  @default("")
-  status        String   @default("PENDING")   // PENDING | APPROVED | REJECTED | DISABLED
-  bodyText      String   @default("")
-  components    Json?    // raw Meta component spec, used to map variables
-  lastSyncedAt  DateTime?
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id             String    @id @default(cuid())
+  shop           String
+  name           String
+  language       String
+  category       String    @default("MARKETING") // MARKETING | UTILITY | AUTHENTICATION
+  metaTemplateId String    @default("")
+  status         String    @default("PENDING") // PENDING | APPROVED | REJECTED | DISABLED
+  bodyText       String    @default("")
+  components     Json? // raw Meta component spec, used to map variables
+  lastSyncedAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@unique([shop, name, language])
   @@index([shop, status])
@@ -503,10 +551,10 @@ model WhatsappTemplate {
 model WhatsappSubscription {
   id            String    @id @default(cuid())
   shop          String
-  phoneNumber   String    // E.164
+  phoneNumber   String // E.164
   contactEmail  String?
   status        String    @default("subscribed") // subscribed | unsubscribed | invalid
-  optInMethod   String?   // popup | checkout | click_to_wa | imported | api
+  optInMethod   String? // popup | checkout | click_to_wa | imported | api
   confirmedAt   DateTime? // double opt-in confirmation
   lastInboundAt DateTime? // last customer-initiated message — drives 24h session window
   optInAt       DateTime  @default(now())
@@ -537,8 +585,8 @@ model WhatsappJob {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  enrollment        JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
-  step              JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
+  enrollment JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+  step       JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
 
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
@@ -550,7 +598,7 @@ model WhatsappSuppression {
   id          String   @id @default(cuid())
   shop        String
   phoneNumber String
-  reason      String   // opt_out | blocked | invalid
+  reason      String // opt_out | blocked | invalid
   createdAt   DateTime @default(now())
 
   @@unique([shop, phoneNumber])

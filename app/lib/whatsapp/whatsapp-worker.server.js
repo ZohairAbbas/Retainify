@@ -12,6 +12,7 @@
  */
 import prisma from "../../db.server.js";
 import { isInQuietHours } from "../journey/quiet-hours.server.js";
+import { incrementUsage } from "../billing/entitlements.server.js";
 import { sendWhatsapp } from "./index.server.js";
 
 async function claimDueWhatsappJobs(limit = 20) {
@@ -143,6 +144,9 @@ async function processWhatsappJob(job) {
   );
 
   if (result.ok) {
+    // Counted for cost visibility (Meta bills per conversation). WhatsApp is
+    // gated at the connect step by plan, not per-message, so no quota check here.
+    await incrementUsage(job.shop, "whatsapp", 1);
     await markWhatsappJobDone(job.id, {
       sentAt: new Date(),
       providerMessageId: result.providerMessageId || "",

@@ -12,6 +12,7 @@ import {
   markJourneyJobDone,
   markJourneyJobFailed,
 } from "./journey-queue.server.js";
+import { checkQuota, incrementUsage } from "../billing/entitlements.server.js";
 
 function isInQuietHours(quietStart, quietEnd, timezone) {
   try {
@@ -122,6 +123,22 @@ async function processJourneyJob(job) {
   const provider = resolveProvider(settings);
   const { from, replyTo } = resolveFrom({ settings, provider });
 
+  // Email send quota. In shadow mode (BILLING_ENFORCE unset) this only logs what
+  // would have been blocked — nothing is stopped until we've sized the caps
+  // against real data. `shouldBlock` is already false for comped shops.
+  const quota = await checkQuota(shop, "emails", 1);
+  if (quota.exceeded) {
+    if (quota.shouldBlock) {
+      // Fail the job explicitly rather than dropping it silently, so the
+      // merchant can see why nothing sent.
+      await markJourneyJobFailed(job.id, "quota_exceeded");
+      return;
+    }
+    console.warn(
+      `[billing:shadow] email quota exceeded shop=${shop} used=${quota.used} limit=${quota.limit} plan=${quota.planKey} — allowed (enforcement off)`,
+    );
+  }
+
   const result = await sendEmail(
     {
       to: enrollment.contactEmail,
@@ -137,6 +154,9 @@ async function processJourneyJob(job) {
     await markJourneyJobFailed(job.id, result.error);
     return;
   }
+
+  // Count only successful sends — a failed send must never burn quota.
+  await incrementUsage(shop, "emails", 1);
 
   const sentAt = new Date();
   // Dual-write during the Resend→SES transition: resendMessageId keeps the

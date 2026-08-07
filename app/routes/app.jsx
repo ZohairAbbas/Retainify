@@ -28,6 +28,7 @@ const NAV_ACTIVE = [
   { id: "contacts", label: "Contacts",  href: "/app/contacts", icon: "Users" },
   { id: "segments", label: "Segments",  href: "/app/segments", icon: "Sliders" },
   { id: "popup",    label: "Popup",     href: "/app/popup",    icon: "Tab" },
+  { id: "plans",    label: "Plans",     href: "/app/plans",    icon: "Ticket" },
   { id: "settings", label: "Settings",  href: "/app/settings", icon: "Settings" },
 ];
 

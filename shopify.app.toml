@@ -2,6 +2,12 @@
 
 client_id = "772b207205dcd34f8f3eb724972869cc"
 name = "Retainify"
+# NOTE: `handle` is deliberately NOT set here. The app handle is already
+# "retainify" on Shopify's side (see https://apps.shopify.com/retainify).
+# Declaring it in this file makes the CLI treat it as a claim on a NEW handle,
+# which fails with "app_handle: App handle must be unique". Shopify also warns
+# that changing a handle breaks existing app admin links.
+# The plan-selection URL reads the handle from app/lib/billing/plan-url.server.js.
 application_url = "https://retainify.growzar.com"
 embedded = true
 

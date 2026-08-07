@@ -1,6 +1,7 @@
 import prisma from "../../db.server.js";
 import { sendPushNotification } from "./web-push.server.js";
 import { isInQuietHours } from "../journey/quiet-hours.server.js";
+import { incrementUsage } from "../billing/entitlements.server.js";
 
 async function claimDuePushJobs(limit = 20) {
   const now = new Date();
@@ -123,6 +124,9 @@ async function processPushJob(job) {
   );
 
   if (anySuccess) {
+    // Counted for visibility only — push is free on every tier (self-hosted
+    // VAPID costs us nothing), so there is no quota gate here.
+    await incrementUsage(job.shop, "push", 1);
     await markPushJobDone(job.id, { sentAt: new Date() });
   } else {
     await markPushJobFailed(job.id, lastError || "all subscriptions failed");
