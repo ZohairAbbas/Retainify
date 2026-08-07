@@ -16,6 +16,8 @@ import ContactsEmpty from "../components/contacts/ContactsEmpty.jsx";
 import BulkBar from "../components/contacts/BulkBar.jsx";
 import AddContactModal from "../components/contacts/AddContactModal.jsx";
 import ImportCsvModal from "../components/contacts/ImportCsvModal.jsx";
+import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
+import { quotaState } from "../lib/billing/gate.server.js";
 import {
   SOURCE,
   TAG_PALETTE,
@@ -84,12 +86,18 @@ export const loader = async ({ request }) => {
     }),
   );
 
+  // SOFT cap by design. We keep accepting contacts past the limit and only
+  // prompt — silently dropping a merchant's signups to enforce billing would
+  // cost them real revenue. Email sends are the hard gate instead.
+  const contactQuota = await quotaState(shop, "contacts");
+
   return {
     contacts: enriched,
     summary,
     tags,
     sync,
     backfill,
+    contactQuota,
     nextCursor: nextCursor || null,
     filteredTotal,
     filters: { status, source, tagId, search },
@@ -241,7 +249,7 @@ export const action = async ({ request }) => {
 
 export default function ContactsPage() {
   const loaderData = useLoaderData();
-  const { summary, tags, sync, backfill, filters } = loaderData;
+  const { summary, tags, sync, backfill, filters, contactQuota } = loaderData;
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const fetcher = useFetcher();
@@ -444,6 +452,17 @@ export default function ContactsPage() {
           </div>
         </div>
       </header>
+
+      {/* Soft cap: we keep accepting contacts past the limit — this only
+          prompts. Shown once enforcement is on and the shop is over. */}
+      {contactQuota?.atLimit && contactQuota?.enforced && (
+        <UpgradeNotice
+          title={`You're over your contact limit (${contactQuota.used.toLocaleString()} of ${contactQuota.limit.toLocaleString()}).`}
+          body="We're still collecting every new contact — nothing is being dropped. Upgrade to keep emailing your full list."
+          planName={contactQuota.upgradeToName}
+          compact
+        />
+      )}
 
       <section className="rt-stats">
         <StatCard

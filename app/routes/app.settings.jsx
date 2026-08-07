@@ -5,6 +5,8 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
+import { featureState, requireFeature } from "../lib/billing/gate.server.js";
+import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import { addDomain, verifyOrCheckDomain, removeDomain } from "../lib/email/domain-actions.server.js";
 
 export const loader = async ({ request }) => {
@@ -19,7 +21,12 @@ export const loader = async ({ request }) => {
   const { from } = resolveFrom({ settings, provider });
   const sendingFromAddress = from.match(/<([^>]+)>/)?.[1] || from;
 
-  // Whether a custom-domain slot is available to this shop (excludes itself).
+  // Two INDEPENDENT constraints on custom domains, with different fixes:
+  //   1. domainGate — is the feature on this shop's plan? (fix: upgrade)
+  //   2. slotAvailable — is one of the 10 account-wide Resend slots free?
+  //      (fix: nothing the merchant can do — we must raise the Resend plan)
+  // They need separate merchant-facing messages; never collapse them into one.
+  const domainGate = await featureState(shop, "custom_domain");
   const slotAvailable = await canUseDomainSlot(shop);
 
   let domainRecords = [];
@@ -29,7 +36,7 @@ export const loader = async ({ request }) => {
     domainRecords = [];
   }
 
-  return { settings: settings ?? {}, sendingFromAddress, slotAvailable, domainRecords };
+  return { settings: settings ?? {}, sendingFromAddress, slotAvailable, domainRecords, domainGate };
 };
 
 export const action = async ({ request }) => {
@@ -72,6 +79,10 @@ export const action = async ({ request }) => {
 
   // ── Custom sending-domain flow (shared handlers) ───────────────────────────
   if (intent === "add-domain") {
+    // Plan check first — a shop without the feature shouldn't consume one of the
+    // scarce Resend slots. addDomain() still enforces the slot cap after this.
+    const denied = await requireFeature(shop, "custom_domain");
+    if (denied) return denied;
     return addDomain(shop, formData.get("domain"));
   }
   if (intent === "verify-domain" || intent === "check-domain") {
@@ -90,7 +101,7 @@ const HOURS = Array.from({ length: 24 }, (_, i) => ({
 }));
 
 export default function Settings() {
-  const { settings, sendingFromAddress, slotAvailable, domainRecords } = useLoaderData();
+  const { settings, sendingFromAddress, slotAvailable, domainRecords, domainGate } = useLoaderData();
   const fetcher = useFetcher();
   const saving = fetcher.state !== "idle";
   const saved = fetcher.data?.saved;
@@ -270,6 +281,15 @@ export default function Settings() {
                 </button>
               </div>
             </div>
+          ) : domainGate?.locked ? (
+            /* State: feature not on plan. Distinct from "no slots" below —
+               the fix here is an upgrade, which the merchant controls. */
+            <UpgradeNotice
+              title={`Custom sending domains are available on the ${domainGate.upgradeToName || "Starter"} plan.`}
+              body="Send from your own domain instead of our shared address. Subject to availability."
+              planName={domainGate.upgradeToName}
+              compact
+            />
           ) : slotAvailable ? (
             /* State: no domain, slot free — offer to add */
             <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>

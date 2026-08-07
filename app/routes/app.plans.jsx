@@ -3,7 +3,6 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server.js";
 import { PUBLIC_PLANS, formatLimit, isUnlimited } from "../lib/billing/plans.js";
 import { getUsageSummary } from "../lib/billing/entitlements.server.js";
-import { syncSubscription } from "../lib/billing/sync.server.js";
 import {
   planSelectionUrl,
   planHandleFromRequest,
@@ -27,21 +26,13 @@ const FEATURE_ROWS = [
 ];
 
 export const loader = async ({ request }) => {
-  const { session, billing } = await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const shop = session.shop;
 
-  // A merchant landing here from the hosted plan page carries ?plan_handle=...
-  // Force a fresh sync so entitlement reflects the new plan immediately rather
-  // than up to the 10-minute TTL later. The handle is only a hint — billing.check()
-  // inside syncSubscription is what actually confirms the subscription.
-  const planHandle = planHandleFromRequest(request);
-  const justUpgraded = !!planHandle;
-  await syncSubscription(billing, shop, {
-    planHandle,
-    force: justUpgraded,
-  }).catch((err) => {
-    console.error("[billing] sync failed on plans page", err);
-  });
+  // Subscription sync happens in the parent /app loader (app.jsx), which runs
+  // for every /app/* route and therefore also catches Shopify's post-approval
+  // redirect wherever it lands. No need to sync again here.
+  const justUpgraded = !!planHandleFromRequest(request);
 
   const { entitlement, emails, contacts } = await getUsageSummary(shop);
 

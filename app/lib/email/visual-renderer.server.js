@@ -270,6 +270,7 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
   const mergeTagsUsed = new Set();
 
   const productMap = await resolveProductBlocks(blocks, { shop });
+  const branding = await brandingFooterHtml(shop);
 
   const rowsArr = [];
   for (const b of blocks) {
@@ -344,6 +345,7 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:${safeBrand.bg};border-radius:8px;padding:32px;">
         ${inner}
       </table>
+      ${branding}
     </td>
   </tr>
 </table>
@@ -357,6 +359,32 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
   );
 
   return html;
+}
+
+/**
+ * "Powered by Retainify" line, appended for shops whose plan doesn't include
+ * the `no_branding` feature (i.e. Free).
+ *
+ * Fails OPEN: if the entitlement lookup throws for any reason we return an empty
+ * string rather than stamping branding on a paying merchant's email. A missing
+ * badge is a trivial revenue leak; a wrongly-branded email is a support ticket.
+ *
+ * @param {string} shop
+ * @returns {Promise<string>}
+ */
+export async function brandingFooterHtml(shop) {
+  if (!shop) return "";
+  try {
+    const { hasFeature } = await import("../billing/entitlements.server.js");
+    if (await hasFeature(shop, "no_branding")) return "";
+    return `
+    <div style="margin-top:16px;text-align:center;font-family:Arial,sans-serif;font-size:11px;color:#999;">
+      Powered by Retainify
+    </div>`;
+  } catch (err) {
+    console.error("[email-render] branding check failed — omitting badge", err);
+    return "";
+  }
 }
 
 // Minimal unsubscribe footer appended to custom HTML that doesn't provide its
@@ -374,13 +402,15 @@ function unsubscribeFooterHtml(unsubscribeUrl) {
  * as blocks where it matters — merge tags + unsubscribe — and injects the head/
  * wrapper without double-wrapping a full document.
  *
- * @param {{ html: string, ctx: object, stepId?: string }} args
+ * @param {{ html: string, ctx: object, stepId?: string, branding?: string }} args
  *   ctx carries merge-tag values plus `unsubscribeUrl` (same object the worker
  *   builds for the block path). `discount_code` is typically "" here since
  *   custom-HTML steps don't generate a code.
+ *   `branding` is pre-resolved HTML (see brandingFooterHtml) — passed in rather
+ *   than looked up here so this function stays synchronous and pure.
  * @returns {string} final HTML ready to send
  */
-export function renderCustomHtmlEmail({ html, ctx = {}, stepId }) {
+export function renderCustomHtmlEmail({ html, ctx = {}, stepId, branding = "" }) {
   const raw = String(html || "");
 
   // 1) Merge tags (incl. an explicit {unsubscribe_url} tag if the author used one).
@@ -391,7 +421,9 @@ export function renderCustomHtmlEmail({ html, ctx = {}, stepId }) {
   // 2) Unsubscribe guarantee — only append a footer if the author didn't wire
   //    their own {unsubscribe_url} and there's no existing unsubscribe link.
   const hasUnsubLink = hadUnsubTag || /unsubscribe/i.test(out);
-  const footer = hasUnsubLink ? "" : unsubscribeFooterHtml(ctx.unsubscribeUrl);
+  // Branding rides along with the unsubscribe footer so both land in the same
+  // place regardless of whether the merchant supplied a full document.
+  const footer = (hasUnsubLink ? "" : unsubscribeFooterHtml(ctx.unsubscribeUrl)) + (branding || "");
 
   const isFullDoc = /<html[\s>]/i.test(out);
   const fontsLink = `<link rel="preconnect" href="https://fonts.googleapis.com" />\n<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />\n<link href="${GOOGLE_FONTS_HREF}" rel="stylesheet" />`;

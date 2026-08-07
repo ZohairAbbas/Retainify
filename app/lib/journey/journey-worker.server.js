@@ -4,7 +4,7 @@
  */
 import prisma from "../../db.server.js";
 import { sendEmail, resolveFrom, resolveProvider } from "../email/index.server.js";
-import { renderVisualEmail, renderCustomHtmlEmail } from "../email/visual-renderer.server.js";
+import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml } from "../email/visual-renderer.server.js";
 import { buildUnsubscribeUrl } from "../tracking/links.server.js";
 import { createDiscountCode } from "../shopify/discounts.server.js";
 import {
@@ -116,7 +116,14 @@ async function processJourneyJob(job) {
   };
 
   const html = emailMode === "html"
-    ? renderCustomHtmlEmail({ html: step.emailHtml || "", ctx, stepId: step.id })
+    ? renderCustomHtmlEmail({
+        html: step.emailHtml || "",
+        ctx,
+        stepId: step.id,
+        // Block path resolves this internally; the custom-HTML path is sync, so
+        // the branding line is resolved here and passed in.
+        branding: await brandingFooterHtml(shop),
+      })
     : await renderVisualEmail({ blocks: parsedBlocks, brand, ctx, stepId: step.id, shop });
 
   const subject = step.subject || defaultSubject(journey.trigger, step.stepNumber, settings.senderName);

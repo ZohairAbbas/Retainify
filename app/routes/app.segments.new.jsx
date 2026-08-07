@@ -9,6 +9,7 @@ import { listTagsForShop } from "../lib/contacts/tags.server.js";
 import { summarizeContacts } from "../lib/contacts/contacts.server.js";
 import { createSegment } from "../lib/segments/segments.server.js";
 import { FIELDS, OPERATORS, TEMPLATES } from "../lib/segments/fields.server.js";
+import { requireQuota } from "../lib/billing/gate.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -59,6 +60,10 @@ export const action = async ({ request }) => {
   const { session } = await authenticate.admin(request);
   const shop = session.shop;
   const fd = await request.formData();
+
+  // Segment count is capped per plan (Free 1, Starter 5, Growth unlimited).
+  const denied = await requireQuota(shop, "segments", 1);
+  if (denied) return denied;
 
   const name = String(fd.get("name") || "").trim();
   const description = String(fd.get("description") || "").trim();

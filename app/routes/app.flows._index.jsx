@@ -11,6 +11,7 @@ import {
 } from "../lib/journey/journey-templates.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL, timeAgo } from "../lib/triggerConfig.js";
+import { requireQuota } from "../lib/billing/gate.server.js";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -57,6 +58,14 @@ export const action = async ({ request }) => {
   const shop = session.shop;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
+
+  // Flow count is capped per plan. All three creation paths go through the same
+  // check; archive/pause are never gated so a shop at its limit can still
+  // reduce its own count.
+  if (["create-from-template", "create-blank", "duplicate"].includes(intent)) {
+    const denied = await requireQuota(shop, "flows", 1);
+    if (denied) return denied;
+  }
 
   if (intent === "create-from-template") {
     const key = String(fd.get("templateKey") || "");

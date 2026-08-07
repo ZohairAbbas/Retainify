@@ -9,6 +9,8 @@ import { sendWhatsapp, sendWhatsappText, registerWhatsappNumber } from "../lib/w
 import { normalizePhone } from "../lib/contacts/contacts.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
+import { featureState, requireFeature } from "../lib/billing/gate.server.js";
+import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 
 export const loader = async ({ request }) => {
   const { session } = await authenticate.admin(request);
@@ -25,7 +27,12 @@ export const loader = async ({ request }) => {
     }),
   ]);
 
+  // WhatsApp is a Growth-tier feature (Meta bills per conversation). In shadow
+  // mode `locked` is false, so the page stays fully usable until enforcement is on.
+  const gate = await featureState(shop, "whatsapp");
+
   return {
+    gate,
     account: account
       ? {
           status: account.status,
@@ -51,6 +58,20 @@ export const action = async ({ request }) => {
   const shop = session.shop;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
+
+  // Anything that connects or sends on WhatsApp is plan-gated. Read-only intents
+  // (template sync/list) stay open so a downgraded shop can still see its state.
+  const GATED_INTENTS = [
+    "connect",
+    "register-number",
+    "toggle-enabled",
+    "send-test",
+    "create-template",
+  ];
+  if (GATED_INTENTS.includes(intent)) {
+    const denied = await requireFeature(shop, "whatsapp");
+    if (denied) return denied;
+  }
 
   if (intent === "toggle-enabled") {
     const current = await prisma.shopSettings.findUnique({ where: { shop } });
@@ -171,7 +192,7 @@ export const action = async ({ request }) => {
 };
 
 export default function WhatsappPage() {
-  const { account, whatsappEnabled, whatsappRequireOptIn, subCount, templates, metaAppId, esConfigId } = useLoaderData();
+  const { gate, account, whatsappEnabled, whatsappRequireOptIn, subCount, templates, metaAppId, esConfigId } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -274,6 +295,17 @@ export default function WhatsappPage() {
           <h1 className="t-display-2" style={{ margin: 0 }}>WhatsApp</h1>
         </div>
       </header>
+
+      {/* Plan gate. `locked` is only true once enforcement is on, so this stays
+          hidden during shadow mode. An already-connected shop keeps its panels
+          visible below — we never hide a live integration behind a paywall. */}
+      {gate?.locked && (
+        <UpgradeNotice
+          title={`WhatsApp is available on the ${gate.upgradeToName || "Growth"} plan.`}
+          body="Reach customers on WhatsApp with approved templates in your flows."
+          planName={gate.upgradeToName}
+        />
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 400px", gap: 24, alignItems: "start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>

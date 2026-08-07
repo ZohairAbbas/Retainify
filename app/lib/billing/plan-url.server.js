@@ -12,8 +12,23 @@
  * every merchant.
  */
 
-/** Must match `handle` in shopify.app.toml and the Partner Dashboard. */
-export const APP_HANDLE = "retainify";
+/**
+ * The App Home handle — NOT the App Store listing slug.
+ *
+ * These are two different identifiers and they do not match for this app:
+ *   - listing slug: "retainify"     (apps.shopify.com/retainify)
+ *   - App Home handle: "retainify-1" (admin.shopify.com/store/x/apps/retainify-1)
+ *
+ * The charges/pricing_plans URL uses the App Home handle. Verified by loading
+ * /store/<shop>/charges/retainify-1/pricing_plans successfully, where the
+ * "retainify" variant 404s.
+ *
+ * To confirm this value: open the app in the Shopify admin and read the slug
+ * after /apps/ in the URL, or run `shopify app info`.
+ */
+export const APP_HANDLE =
+  // eslint-disable-next-line no-undef
+  process.env.SHOPIFY_APP_HANDLE || "retainify-1";
 
 /**
  * Build the hosted plan-selection URL for a shop.

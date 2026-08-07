@@ -6,9 +6,30 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import { authenticate } from "../shopify.server";
 import Icons, { IconChevron } from "../components/ui/Icons.jsx";
 import { getOnboardingState } from "../lib/onboarding/onboarding.server.js";
+import { syncSubscription } from "../lib/billing/sync.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
+
+  // Billing reconciliation. This lives in the PARENT /app loader (not the plans
+  // page) because Shopify's post-approval redirect lands on whatever welcome
+  // link the plan defines — in practice /app?charge_id=…&plan_handle=… — so a
+  // plans-page-only sync would miss it and leave entitlement stale for the
+  // 10-minute TTL right after the merchant has paid.
+  //
+  // Normal loads are throttled inside syncSubscription; only a redirect
+  // carrying charge_id/plan_handle forces a fresh check.
+  const url = new URL(request.url);
+  const planHandle = url.searchParams.get("plan_handle");
+  const justCharged = !!url.searchParams.get("charge_id") || !!planHandle;
+  await syncSubscription(billing, session.shop, {
+    planHandle,
+    force: justCharged,
+  }).catch((err) => {
+    // Never block app load on a billing sync failure.
+    console.error("[billing] sync failed in /app loader", err);
+  });
+
   // Setup-guide nav item + dashboard banner are shown only until every setup
   // task is resolved (done or skipped). Cheap enough to compute per app load.
   const state = await getOnboardingState(session.shop).catch(() => null);
