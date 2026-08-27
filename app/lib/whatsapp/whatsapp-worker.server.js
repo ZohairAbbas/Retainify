@@ -1,6 +1,6 @@
 /**
  * WhatsApp send worker — drains due WhatsappJob rows. Mirrors push-worker:
- * atomic claim, quiet-hours reschedule, 3-attempt exponential backoff.
+ * atomic claim, jittered quiet-hours reschedule, 3-attempt exponential backoff.
  *
  * Per-job gating specific to WhatsApp:
  *   - shop must have a connected WhatsappAccount;
@@ -11,8 +11,11 @@
  *     session messages, which this path never produces).
  */
 import prisma from "../../db.server.js";
-import { isInQuietHours } from "../journey/quiet-hours.server.js";
+import { isInQuietHours, quietHoursRetryDelay } from "../journey/quiet-hours.server.js";
 import { incrementUsage } from "../billing/entitlements.server.js";
+import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.server.js";
+import { stopShopSending, releaseClaimedJob } from "../journey/shop-work.server.js";
+import { settleEnrollmentIfFinished } from "../journey/journey-queue.server.js";
 import { sendWhatsapp } from "./index.server.js";
 
 async function claimDueWhatsappJobs(limit = 20) {
@@ -36,8 +39,23 @@ async function claimDueWhatsappJobs(limit = 20) {
 }
 
 export async function runWhatsappWorker() {
-  const jobs = await claimDueWhatsappJobs(20);
-  if (!jobs.length) return;
+  const claimed = await claimDueWhatsappJobs(20);
+  if (!claimed.length) return;
+
+  // Never send on behalf of a shop that has uninstalled or closed.
+  const { live: jobs, dead, holding } = await partitionByShopHealth(claimed);
+
+  const condemned = new Map();
+  for (const { job, status } of dead) condemned.set(job.shop, status);
+  for (const [shop, status] of condemned) {
+    const reason = cancelReasonFor(status);
+    const { jobs: cancelled } = await stopShopSending(shop, reason);
+    console.warn(`[whatsapp-worker] ${shop} — ${reason}; cancelled ${cancelled.total} queued jobs`);
+  }
+
+  for (const job of holding) {
+    await releaseClaimedJob("whatsappJob", job.id);
+  }
 
   for (const job of jobs) {
     try {
@@ -75,11 +93,12 @@ async function processWhatsappJob(job) {
     return;
   }
 
-  // Quiet hours — reschedule 1h forward.
+  // Inside quiet hours — defer, with jitter so the overnight backlog doesn't
+  // all become due in the same tick.
   if (isInQuietHours(settings.quietHoursStart, settings.quietHoursEnd, settings.storeTimezone)) {
     await prisma.whatsappJob.update({
       where: { id: job.id },
-      data: { status: "pending", scheduledFor: new Date(Date.now() + 60 * 60 * 1000) },
+      data: { status: "pending", scheduledFor: new Date(Date.now() + quietHoursRetryDelay()) },
     });
     return;
   }
@@ -227,10 +246,11 @@ function resolveVar(ref, payload, enrollment) {
 }
 
 async function markWhatsappJobDone(jobId, extras = {}) {
-  await prisma.whatsappJob.update({
+  const job = await prisma.whatsappJob.update({
     where: { id: jobId },
     data: { status: "done", ...extras },
   });
+  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
 }
 
 async function markWhatsappJobFailed(jobId, error) {
@@ -243,4 +263,7 @@ async function markWhatsappJobFailed(jobId, error) {
     where: { id: jobId },
     data: { status: newStatus, lastError: String(error).slice(0, 500), scheduledFor },
   });
+  if (newStatus === "failed") {
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+  }
 }

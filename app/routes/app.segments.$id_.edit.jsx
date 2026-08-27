@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { redirect, useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import SegmentBuilder from "../components/segments/SegmentBuilder.jsx";
 import LivePreviewCard from "../components/segments/LivePreviewCard.jsx";
@@ -9,12 +9,12 @@ import { listTagsForShop } from "../lib/contacts/tags.server.js";
 import { summarizeContacts } from "../lib/contacts/contacts.server.js";
 import { getSegmentById, updateSegment, listStaticMemberIds } from "../lib/segments/segments.server.js";
 import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
-import { FIELDS, OPERATORS } from "../lib/segments/fields.server.js";
+import { fieldsFor, OPERATORS } from "../lib/segments/fields.server.js";
 import prisma from "../db.server.js";
 
 export const loader = async ({ params, request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const id = params.id;
 
   if (isSystemSegmentId(id)) {
@@ -42,7 +42,9 @@ export const loader = async ({ params, request }) => {
 
   return Response.json({
     segment,
-    fields: FIELDS,
+    // Commerce fields are hidden without a store — a rule on them would
+    // match nobody, permanently.
+    fields: fieldsFor(ctx.isShopify),
     operators: OPERATORS,
     tags,
     totalAudience: summary.total,
@@ -51,8 +53,8 @@ export const loader = async ({ params, request }) => {
 };
 
 export const action = async ({ params, request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const id = params.id;
 

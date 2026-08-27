@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import Icons from "../components/ui/Icons.jsx";
+import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import TagChip from "../components/contacts/TagChip.jsx";
 import { TAG_PALETTE, relativeTime } from "../components/contacts/constants.js";
 import {
@@ -16,8 +17,8 @@ import prisma from "../db.server.js";
 const COLORS = ["forest", "blue", "amber", "purple", "tan", "red"];
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const tags = await listTagsForShop(shop);
   // Pull createdAt for the table — listTagsForShop drops it.
   const meta = await prisma.tag.findMany({
@@ -31,8 +32,8 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
   const id = String(fd.get("id") || "");
@@ -68,6 +69,7 @@ export default function ManageTagsPage() {
   const [editingId, setEditingId] = useState(null);
   const [draft, setDraft] = useState("");
   const [openColorFor, setOpenColorFor] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
 
   const submitRename = (id) => {
     const value = draft.trim();
@@ -88,10 +90,6 @@ export default function ManageTagsPage() {
     setOpenColorFor(null);
   };
   const submitDelete = (tag) => {
-    const msg = tag.contactCount
-      ? `Delete "${tag.name}"? It's applied to ${tag.contactCount} contact${tag.contactCount === 1 ? "" : "s"}; they'll lose this tag.`
-      : `Delete "${tag.name}"?`;
-    if (!window.confirm(msg)) return;
     const fd = new FormData();
     fd.set("intent", "delete");
     fd.set("id", tag.id);
@@ -235,7 +233,7 @@ export default function ManageTagsPage() {
                 <button
                   type="button"
                   className="btn btn-ghost btn-icon"
-                  onClick={() => submitDelete(t)}
+                  onClick={() => setConfirmDelete(t)}
                   aria-label="Delete tag"
                   title="Delete"
                 >
@@ -254,6 +252,22 @@ export default function ManageTagsPage() {
             {fetcher.data.error}
           </div>
         </div>
+      )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete "${confirmDelete.name}"?`}
+          body={
+            confirmDelete.contactCount
+              ? `This tag is applied to ${confirmDelete.contactCount.toLocaleString()} ${confirmDelete.contactCount === 1 ? "contact" : "contacts"}. They stay in your list but lose this tag, and any segment filtering on it will change.`
+              : "This tag isn't applied to any contacts yet."
+          }
+          confirmLabel="Delete tag"
+          destructive
+          loading={fetcher.state !== "idle"}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => { submitDelete(confirmDelete); setConfirmDelete(null); }}
+        />
       )}
     </div>
   );

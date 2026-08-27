@@ -3,8 +3,10 @@
 // Edits the email node's blocks/brand; on save the flow builder's inline preview updates.
 
 import { useState, useRef, useEffect, useMemo } from "react";
+import { useFetcher } from "react-router";
 import Icons from "./ui/Icons.jsx";
 import EmailTemplateGallery from "./email-templates/EmailTemplateGallery.jsx";
+import MediaPicker from "./email-templates/MediaPicker.jsx";
 import { TEMPLATES, TEMPLATE_ORDER, cloneBlocks } from "../lib/email-templates/email-templates.js";
 
 // ── Block factory ──────────────────────────────────────────────────────────
@@ -70,6 +72,10 @@ function defaultBlocks(node, trigger) {
 
 export const DEFAULT_BRAND = {
   logoText: "YOUR STORE",
+  // Uploaded brand mark. When set, logo blocks render the image instead of the
+  // wordmark. The "Upload logo" button in the Brand kit had no handler at all,
+  // so every email in the product shipped as a text wordmark.
+  logoUrl: "",
   accent: "#1F3D2F",
   bg: "#FFFFFF",
   // ink = headings/wordmark/strong text; subInk = body text; onAccent = text
@@ -161,6 +167,26 @@ export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
 
   if (block.type === "logo") {
     const sizes = { small: 14, medium: 18, large: 24 };
+    // Mirrors renderLogo() on the server: an uploaded brand mark replaces the
+    // wordmark, at a height tied to the same size control.
+    const logoUrl = block.src || brand.logoUrl;
+    if (logoUrl) {
+      const heights = { small: 24, medium: 36, large: 52 };
+      return (
+        <div style={{ textAlign: block.align || "center" }}>
+          <img
+            src={logoUrl}
+            alt={block.text || ""}
+            style={{
+              height: heights[block.size] || 36,
+              width: "auto",
+              maxWidth: "100%",
+              display: "inline-block",
+            }}
+          />
+        </div>
+      );
+    }
     return (
       <div className="rt-emb-logo" style={{
         textAlign: block.align,
@@ -423,12 +449,15 @@ function MergeTagsSection({ onInsert }) {
   );
 }
 
-// ── Image uploader (inside the image block inspector) ─────────────────────
-function ImageUploader({ block, onUpdate }) {
+/**
+ * Shared upload plumbing for the image block and the brand-kit logo. Both post
+ * to /app/api/upload, which stores the file in Shopify Files and returns a CDN
+ * URL — the logo button previously had no handler and did nothing at all.
+ */
+function useImageUpload({ alt = "", source = "library", onUploaded }) {
   const fileInputRef = useRef(null);
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState("");
-  const [dragOver, setDragOver] = useState(false);
 
   async function uploadFile(file) {
     if (!file) return;
@@ -442,17 +471,103 @@ function ImageUploader({ block, onUpdate }) {
     try {
       const fd = new FormData();
       fd.append("file", file);
-      fd.append("alt", block.alt || "");
+      fd.append("alt", alt);
+      fd.append("source", source);
       const resp = await fetch("/app/api/upload", { method: "POST", body: fd });
       const json = await resp.json();
       if (!resp.ok || !json.ok) throw new Error(json.message || json.error || "Upload failed");
-      onUpdate({ src: json.url, width: json.width, height: json.height, alt: block.alt || "" });
+      onUploaded(json);
     } catch (err) {
       setError(err.message || "Upload failed");
     } finally {
       setUploading(false);
     }
   }
+
+  return { fileInputRef, uploading, error, setError, uploadFile };
+}
+
+// ── Brand-kit logo uploader ───────────────────────────────────────────────
+function LogoUploader({ brand, onBrand }) {
+  const [logoLibraryOpen, setLogoLibraryOpen] = useState(false);
+  const { fileInputRef, uploading, error, uploadFile } = useImageUpload({
+    alt: brand.logoText || "",
+    source: "email_logo",
+    onUploaded: (json) => onBrand({ logoUrl: json.url }),
+  });
+
+  return (
+    <div className="rt-emb-upload-sm">
+      {brand.logoUrl ? (
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <img
+            src={brand.logoUrl}
+            alt=""
+            style={{ height: 32, width: "auto", maxWidth: 120, objectFit: "contain" }}
+          />
+          <button
+            className="btn btn-secondary btn-sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploading}
+          >
+            {uploading ? "Uploading…" : "Replace"}
+          </button>
+          <button className="btn btn-ghost btn-sm" onClick={() => onBrand({ logoUrl: "" })}>
+            Remove
+          </button>
+        </div>
+      ) : (
+        <button
+          className="btn btn-secondary btn-sm"
+          style={{ width: "100%" }}
+          onClick={() => fileInputRef.current?.click()}
+          disabled={uploading}
+        >
+          <Icons.Image size={13} /> {uploading ? "Uploading…" : "Upload logo (svg, png)"}
+        </button>
+      )}
+      {!brand.logoUrl && (
+        <button
+          className="rt-link t-micro"
+          style={{ marginTop: 6 }}
+          onClick={() => setLogoLibraryOpen(true)}
+        >
+          or pick one from your library
+        </button>
+      )}
+      <div className="field-help" style={{ marginTop: 6 }}>
+        {brand.logoUrl
+          ? "Logo blocks show this image instead of the wordmark."
+          : "Optional — logo blocks fall back to the wordmark text above."}
+      </div>
+      {error && <div className="rt-emb-uploader-error">{error}</div>}
+      {logoLibraryOpen && (
+        <MediaPicker
+          onClose={() => setLogoLibraryOpen(false)}
+          onSelect={(asset) => { onBrand({ logoUrl: asset.url }); setLogoLibraryOpen(false); }}
+        />
+      )}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/gif,image/webp,image/svg+xml"
+        style={{ display: "none" }}
+        onChange={(e) => uploadFile(e.target.files?.[0])}
+      />
+    </div>
+  );
+}
+
+// ── Image uploader (inside the image block inspector) ─────────────────────
+function ImageUploader({ block, onUpdate }) {
+  const [dragOver, setDragOver] = useState(false);
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const { fileInputRef, uploading, error, uploadFile } = useImageUpload({
+    alt: block.alt || "",
+    source: "email_block",
+    onUploaded: (json) =>
+      onUpdate({ src: json.url, width: json.width, height: json.height, alt: block.alt || "" }),
+  });
 
   function onDrop(e) {
     e.preventDefault();
@@ -469,6 +584,9 @@ function ImageUploader({ block, onUpdate }) {
           <div className="rt-emb-image-preview-actions">
             <button className="btn btn-secondary btn-sm" onClick={() => fileInputRef.current?.click()} disabled={uploading}>
               <Icons.Image size={13} /> Replace
+            </button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setLibraryOpen(true)}>
+              Library
             </button>
             <button className="btn btn-ghost btn-sm" onClick={() => onUpdate({ src: "", width: 0, height: 0 })}>
               <Icons.Trash size={13} /> Remove
@@ -489,14 +607,33 @@ function ImageUploader({ block, onUpdate }) {
             {uploading ? "Uploading…" : "Drop an image or"}
           </div>
           {!uploading && (
-            <button className="btn btn-secondary btn-sm" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
-              Browse files
-            </button>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}>
+                Browse files
+              </button>
+              <button className="btn btn-secondary btn-sm" onClick={(e) => { e.stopPropagation(); setLibraryOpen(true); }}>
+                From library
+              </button>
+            </div>
           )}
-          <div className="field-help" style={{ marginTop: 8 }}>JPG, PNG, GIF, WebP or SVG · up to 4MB</div>
+          <div className="field-help" style={{ marginTop: 8 }}>JPG, PNG, GIF, WebP or SVG · up to 10MB</div>
         </div>
       )}
       {error && <div className="rt-emb-uploader-error">{error}</div>}
+      {libraryOpen && (
+        <MediaPicker
+          onClose={() => setLibraryOpen(false)}
+          onSelect={(asset) => {
+            onUpdate({
+              src: asset.url,
+              width: asset.width,
+              height: asset.height,
+              alt: block.alt || asset.alt || "",
+            });
+            setLibraryOpen(false);
+          }}
+        />
+      )}
       <input
         ref={fileInputRef}
         type="file"
@@ -930,11 +1067,7 @@ function EmailSettings({ node, brand, onNode, onBrand }) {
         <div className="t-micro muted" style={{ marginBottom: 12 }}>Brand kit</div>
         <label className="field-label">Wordmark / Logo</label>
         <input className="input" value={brand.logoText} onChange={(e) => onBrand({ logoText: e.target.value })} />
-        <div className="rt-emb-upload-sm">
-          <button className="btn btn-secondary btn-sm" style={{ width: "100%" }}>
-            <Icons.Image size={13} /> Upload logo (svg, png)
-          </button>
-        </div>
+        <LogoUploader brand={brand} onBrand={onBrand} />
 
         <label className="field-label" style={{ marginTop: 16 }}>Accent color</label>
         <ColorField value={brand.accent} onChange={(v) => onBrand({ accent: v || DEFAULT_BRAND.accent })} presets={ACCENT_SWATCHES} />
@@ -977,12 +1110,25 @@ function EmailSettings({ node, brand, onNode, onBrand }) {
 }
 
 // ── Email canvas ───────────────────────────────────────────────────────────
-function EmailCanvas({ blocks, brand, selectedId, viewport, onSelect, onInsert, onUpdateBlock, onMove, onDuplicate, onDelete, openGapId, setOpenGapId }) {
-  const width = viewport === "mobile" ? 375 : 600;
+
+/**
+ * Logical viewport widths, in CSS pixels, that the preview emulates.
+ * Shared by both authoring modes so "Mobile" means the same device whether the
+ * merchant is editing blocks or pasted HTML.
+ */
+const VIEWPORT_WIDTH = { mobile: 390, desktop: 600 };
+
+function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingFrom, onSelect, onInsert, onUpdateBlock, onMove, onDuplicate, onDelete, openGapId, setOpenGapId }) {
+  const width = VIEWPORT_WIDTH[viewport] || VIEWPORT_WIDTH.desktop;
   return (
     <div className="rt-emb-stage" onClick={() => onSelect(null)}>
       <div className="rt-emb-inbox-hint" style={{ width }}>
-        <div className="rt-emb-inbox-from">Your Store <span className="muted">· yourstore.com</span></div>
+        {/* The inbox line the recipient will actually see. Was hardcoded to
+            "Your Store · yourstore.com" for every merchant. */}
+        <div className="rt-emb-inbox-from">
+          {senderName || "Your store"}
+          {sendingFrom && <span className="muted"> · {sendingFrom}</span>}
+        </div>
         <div className="rt-emb-inbox-time">11:42 AM</div>
       </div>
       <div className="rt-emb-frame" style={{ width, background: brand.bg }} onClick={(e) => e.stopPropagation()}>
@@ -1072,7 +1218,174 @@ export function RenderedBlockPreview({ node }) {
 }
 
 // ── Custom-HTML editor (source textarea + live iframe preview) ─────────────
-function HtmlEditorBody({ html, onChange }) {
+
+/**
+ * Make a pasted email render in the preview the way a phone renders it.
+ *
+ * Adds a viewport meta so a genuinely responsive template fires its media
+ * queries at the emulated width. Without this the iframe uses a desktop-ish
+ * default viewport and the mobile breakpoints never trigger, so a responsive
+ * email previews as its desktop layout.
+ *
+ * Only ever applied to the preview — the stored HTML, and therefore the HTML we
+ * send, is never modified.
+ */
+export function withPreviewViewport(rawHtml) {
+  const html = String(rawHtml || "");
+  if (!html.trim()) return html;
+
+  // Already declares one: respect the author's choice rather than fighting it.
+  if (/<meta[^>]+name=["']?viewport/i.test(html)) return html;
+
+  const meta = '<meta name="viewport" content="width=device-width, initial-scale=1">';
+
+  // Full document → put it in the head, where it belongs.
+  const headOpen = html.match(/<head[^>]*>/i);
+  if (headOpen) {
+    const at = headOpen.index + headOpen[0].length;
+    return html.slice(0, at) + meta + html.slice(at);
+  }
+  // Has <html> but no <head> → give it one.
+  const htmlOpen = html.match(/<html[^>]*>/i);
+  if (htmlOpen) {
+    const at = htmlOpen.index + htmlOpen[0].length;
+    return html.slice(0, at) + `<head>${meta}</head>` + html.slice(at);
+  }
+  // Bare snippet → prepend; browsers hoist it into an implicit head.
+  return meta + html;
+}
+
+/**
+ * Preview iframe that mirrors how an email client actually displays a message.
+ *
+ * The bug this exists to fix: clamping the frame to a phone width made every
+ * fixed-width email — which is very nearly all of them, since email means
+ * 600px tables — overflow horizontally and look broken, even though the same
+ * email is perfectly fine on a real phone. Real mobile clients (Gmail, Apple
+ * Mail) do not clip a 600px email into a 390px screen; they scale it down to
+ * fit. So does this.
+ *
+ * Two passes:
+ *   1. render at the emulated viewport width, so responsive emails reflow and
+ *      their media queries fire;
+ *   2. measure. If the content still cannot fit — a fixed-width table — widen
+ *      the frame to the content's natural width and scale the whole thing down
+ *      by exactly the ratio a phone would use.
+ *
+ * A responsive email therefore previews at scale 1, and a fixed-width one
+ * previews shrunk-to-fit. Both match the device.
+ *
+ * Height is measured too, so the frame is exactly as tall as the email instead
+ * of a fixed box that leaves dead space under short emails and a second,
+ * nested scrollbar under long ones.
+ */
+function EmailPreviewFrame({ html, viewport, title = "Email preview" }) {
+  const frameRef = useRef(null);
+  // Desktop gets extra room here: a pasted template may legitimately be wider
+  // than the 600px the block editor composes at, and clamping it to 600 would
+  // scale down an email that needs no scaling.
+  const deviceWidth = viewport === "mobile" ? VIEWPORT_WIDTH.mobile : 640;
+
+  // `natural` is the width we give the iframe; it only exceeds deviceWidth when
+  // the content genuinely cannot reflow any narrower.
+  const [box, setBox] = useState({ natural: deviceWidth, height: deviceWidth });
+
+  const srcDoc = useMemo(
+    () =>
+      withPreviewViewport(html) ||
+      "<!doctype html><body style=\"font-family:system-ui;color:#8a8a8a;padding:24px\">Your email preview appears here…</body>",
+    [html],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    // Images arrive after load and can change both dimensions, so measure a few
+    // times over a short window rather than trusting the first frame.
+    const timers = [];
+
+    const measure = () => {
+      if (cancelled) return;
+      const frame = frameRef.current;
+      let doc;
+      try {
+        doc = frame && frame.contentDocument;
+      } catch {
+        return; // Cross-origin; nothing to measure and nothing we can do.
+      }
+      if (!doc || !doc.body) return;
+
+      const contentWidth = Math.max(
+        doc.documentElement.scrollWidth || 0,
+        doc.body.scrollWidth || 0,
+      );
+      // 1px of slack: sub-pixel layout should not trigger a scale-down.
+      const natural = contentWidth > deviceWidth + 1 ? contentWidth : deviceWidth;
+      const height = Math.max(
+        doc.documentElement.scrollHeight || 0,
+        doc.body.scrollHeight || 0,
+        80,
+      );
+
+      setBox((prev) =>
+        prev.natural === natural && Math.abs(prev.height - height) < 2
+          ? prev // Unchanged: returning prev keeps React from re-rendering.
+          : { natural, height },
+      );
+    };
+
+    // Reset to the emulated width whenever the content or viewport changes, so
+    // a previously-widened frame re-tests whether it still needs to be wide.
+    setBox({ natural: deviceWidth, height: deviceWidth });
+
+    for (const delay of [0, 60, 250, 800]) timers.push(setTimeout(measure, delay));
+    return () => {
+      cancelled = true;
+      timers.forEach(clearTimeout);
+    };
+  }, [srcDoc, deviceWidth]);
+
+  const scale = box.natural > deviceWidth ? deviceWidth / box.natural : 1;
+  const scaled = scale < 1;
+
+  return (
+    <div className="rt-emb-preview-wrap">
+      <div
+        className="rt-emb-preview-shell"
+        style={{ width: deviceWidth, height: Math.round(box.height * scale) }}
+      >
+        <iframe
+          ref={frameRef}
+          title={title}
+          className="rt-emb-html-frame"
+          /* allow-same-origin WITHOUT allow-scripts. Scripts in pasted markup
+             still cannot run, so nothing can reach the admin page; what it does
+             buy us is the ability to read the document's own dimensions, which
+             is the only way to know what scale a phone would apply. The unsafe
+             combination is allow-scripts together with allow-same-origin, and
+             that is deliberately not what this is. */
+          sandbox="allow-same-origin"
+          srcDoc={srcDoc}
+          style={{
+            width: box.natural,
+            height: box.height,
+            transform: scaled ? `scale(${scale})` : undefined,
+            transformOrigin: "top left",
+          }}
+        />
+      </div>
+      {scaled && (
+        /* Say so explicitly. Otherwise small text reads as a rendering fault
+           rather than the honest zoom a phone applies to a 600px email. */
+        <div className="rt-emb-preview-note t-micro muted">
+          Scaled to {Math.round(scale * 100)}% — this email is {box.natural}px wide,
+          so a phone shrinks it to fit. That is what your recipients see.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HtmlEditorBody({ html, onChange, viewport }) {
   return (
     <div className="rt-emb-html">
       <div className="rt-emb-html-pane">
@@ -1086,16 +1399,11 @@ function HtmlEditorBody({ html, onChange }) {
         />
       </div>
       <div className="rt-emb-html-pane">
-        <div className="rt-emb-html-pane-head t-micro muted">Preview</div>
+        <div className="rt-emb-html-pane-head t-micro muted">
+          Preview · {viewport === "mobile" ? "Mobile" : "Desktop"}
+        </div>
         <div className="rt-emb-html-preview">
-          {/* Sandboxed so pasted markup can't touch the admin. Fills the pane
-              width (capped by CSS) so wide email tables aren't clipped. */}
-          <iframe
-            title="HTML preview"
-            className="rt-emb-html-frame"
-            sandbox=""
-            srcDoc={html || "<!doctype html><body style='font-family:system-ui;color:#8a8a8a;padding:24px'>Your email preview appears here…</body>"}
-          />
+          <EmailPreviewFrame html={html} viewport={viewport} title="HTML preview" />
         </div>
       </div>
     </div>
@@ -1104,6 +1412,7 @@ function HtmlEditorBody({ html, onChange }) {
 
 // Right-rail help shown in HTML mode: supported merge tags + unsubscribe note.
 function HtmlHelpInspector({ onInsertTag }) {
+  const [pickerOpen, setPickerOpen] = useState(false);
   const tags = [...MERGE_TAGS, "{unsubscribe_url}"];
   return (
     <div className="rt-ins">
@@ -1119,7 +1428,36 @@ function HtmlHelpInspector({ onInsertTag }) {
           Paste a complete email (a full <code style={{ fontFamily: "var(--font-mono)" }}>&lt;html&gt;</code> document
           or a body snippet). It's sent as-is, with merge tags filled in at send time.
         </div>
+        <div className="rt-emb-linked-note" style={{ marginTop: 12 }}>
+          <Icons.Bolt size={12} />
+          <span>
+            Custom HTML and the visual editor are separate designs — you can&apos;t
+            drag blocks onto pasted HTML. Whichever mode is selected here is what
+            sends. Switching between them keeps <b>both</b>, so you can flip back to
+            Visual and your blocks are exactly as you left them.
+          </span>
+        </div>
       </div>
+
+      <div className="rt-ins-section">
+        <div className="t-micro muted" style={{ marginBottom: 8 }}>Images</div>
+        <div className="t-small muted" style={{ lineHeight: 1.6, marginBottom: 10 }}>
+          Mail clients fetch images over the public internet, so an
+          <code style={{ fontFamily: "var(--font-mono)" }}>&lt;img src&gt;</code> needs a hosted URL.
+          Upload to your content library and paste the link.
+        </div>
+        <button
+          className="btn btn-secondary btn-sm"
+          style={{ width: "100%", justifyContent: "center" }}
+          onClick={() => setPickerOpen(true)}
+        >
+          <Icons.Image size={13} /> Copy an image link
+        </button>
+        {pickerOpen && (
+          <MediaPicker mode="copy" onClose={() => setPickerOpen(false)} onSelect={() => {}} />
+        )}
+      </div>
+
       <div className="rt-ins-section">
         <div className="t-micro muted" style={{ marginBottom: 10 }}>Merge tags</div>
         <div className="t-small muted" style={{ marginBottom: 12 }}>Click to copy, then paste into your HTML.</div>
@@ -1148,7 +1486,90 @@ function HtmlHelpInspector({ onInsertTag }) {
 }
 
 // ── Main editor ────────────────────────────────────────────────────────────
-export default function EmailEditor({ flow, node, onBack, onSave }) {
+/**
+ * Modal behind the "Send test" button. Posts the editor's live state to the
+ * flow route's send-test-email intent, which renders it through the real
+ * pipeline and sends it.
+ */
+function SendTestModal({ defaultTo, fetcher, onClose, onSend }) {
+  const [to, setTo] = useState(defaultTo || "");
+  const busy = fetcher.state !== "idle";
+  const result = fetcher.data?.intent === "send-test-email" ? fetcher.data : null;
+
+  return (
+    <div className="rt-modal-backdrop" onClick={onClose}>
+      <div
+        className="rt-publish-modal"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 460 }}
+      >
+        <h2 className="t-h1" style={{ margin: "0 0 8px" }}>Send a test</h2>
+        <p className="t-small muted" style={{ margin: "0 0 20px", lineHeight: 1.6 }}>
+          Sends this email exactly as a customer would receive it. Merge tags fill
+          in with sample values, and the subject is prefixed with <b>[Test]</b>.
+        </p>
+
+        <label className="field-label" htmlFor="rt-test-to">Send to</label>
+        <input
+          id="rt-test-to"
+          className="input"
+          type="email"
+          value={to}
+          onChange={(e) => setTo(e.target.value)}
+          placeholder="you@yourstore.com"
+          autoComplete="email"
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && to.trim() && !busy) onSend(to.trim());
+          }}
+        />
+
+        {result?.ok && (
+          <div
+            className="t-small"
+            style={{
+              marginTop: 14,
+              background: "var(--success-bg)",
+              color: "var(--success-ink)",
+              padding: "8px 12px",
+              borderRadius: "var(--r-2)",
+            }}
+          >
+            Test sent to {result.sentTo}. Give it a minute to arrive.
+          </div>
+        )}
+        {result && result.ok === false && (
+          <div
+            className="t-small"
+            style={{
+              marginTop: 14,
+              background: "var(--danger-bg)",
+              color: "var(--danger-ink)",
+              padding: "8px 12px",
+              borderRadius: "var(--r-2)",
+            }}
+          >
+            {result.error}
+          </div>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 24 }}>
+          <button className="btn btn-secondary" onClick={onClose} disabled={busy}>
+            Close
+          </button>
+          <button
+            className="btn btn-primary"
+            onClick={() => onSend(to.trim())}
+            disabled={busy || !to.trim()}
+          >
+            <Icons.Send size={13} /> {busy ? "Sending…" : "Send test"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefault, senderName, sendingFrom }) {
   const [blocks, setBlocks] = useState(() => node.emailBlocks?.length ? node.emailBlocks : defaultBlocks(node, flow?.trigger));
   const [brand, setBrand] = useState(() => node.emailBrand || DEFAULT_BRAND);
   const [nodeMeta, setNodeMeta] = useState({ subject: node.subject || "", previewText: node.previewText || "", emailName: node.emailName || "" });
@@ -1160,6 +1581,20 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
   // Authoring mode: "blocks" (visual editor) or "html" (paste your own template).
   const [emailMode, setEmailMode] = useState(node.emailMode === "html" ? "html" : "blocks");
   const [emailHtml, setEmailHtml] = useState(node.emailHtml || "");
+  const [testOpen, setTestOpen] = useState(false);
+  const testFetcher = useFetcher();
+
+  function sendTest(to) {
+    const fd = new FormData();
+    fd.set("intent", "send-test-email");
+    fd.set("to", to);
+    fd.set("subject", nodeMeta.subject || "");
+    fd.set("emailMode", emailMode);
+    fd.set("emailHtml", emailHtml);
+    fd.set("emailBlocks", JSON.stringify(blocks));
+    fd.set("emailBrand", JSON.stringify(brand));
+    testFetcher.submit(fd, { method: "post" });
+  }
 
   const selected = useMemo(() => blocks.find((b) => b.id === selectedId), [selectedId, blocks]);
 
@@ -1289,6 +1724,17 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
               <Icons.Code size={13} /> Custom HTML
             </button>
           </div>
+          {/* Viewport applies to both modes. It used to be nested inside the
+              blocks-only branch, so custom-HTML authors — the ones with no
+              responsive scaffolding at all — had no way to check mobile. */}
+          <div className="rt-view-toggle">
+            <button className={viewport === "desktop" ? "rt-vt-on" : ""} onClick={() => setViewport("desktop")}>
+              <Icons.Desktop size={13} /> Desktop
+            </button>
+            <button className={viewport === "mobile" ? "rt-vt-on" : ""} onClick={() => setViewport("mobile")}>
+              <Icons.Phone size={13} /> Mobile
+            </button>
+          </div>
           {emailMode === "blocks" && (
             <>
               <button
@@ -1304,21 +1750,15 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
                 <span>Browse templates</span>
                 <span className="rt-emb-browse-btn-pill">{TEMPLATE_ORDER.length}</span>
               </button>
-              <div className="rt-view-toggle">
-                <button className={viewport === "desktop" ? "rt-vt-on" : ""} onClick={() => setViewport("desktop")}>
-                  <Icons.Desktop size={13} /> Desktop
-                </button>
-                <button className={viewport === "mobile" ? "rt-vt-on" : ""} onClick={() => setViewport("mobile")}>
-                  <Icons.Phone size={13} /> Mobile
-                </button>
-              </div>
             </>
           )}
         </div>
 
         <div className="rt-bt-right">
           <span className="rt-emb-saved">{saved ? "Saved" : "Unsaved changes"}</span>
-          <button className="btn btn-ghost"><Icons.Send size={13} /> Send test</button>
+          <button className="btn btn-ghost" onClick={() => setTestOpen(true)}>
+            <Icons.Send size={13} /> Send test
+          </button>
           <span className="rt-bt-divider" />
           <button className="btn btn-secondary" onClick={save}>Save draft</button>
           <button className="btn btn-primary" onClick={closeAndSave}>Done</button>
@@ -1329,7 +1769,7 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
       {emailMode === "html" ? (
         <div className="rt-builder-body rt-emb-html-body">
           <div className="rt-emb-html-canvas">
-            <HtmlEditorBody html={emailHtml} onChange={setEmailHtml} />
+            <HtmlEditorBody html={emailHtml} onChange={setEmailHtml} viewport={viewport} />
           </div>
           <div className="rt-builder-inspector">
             <HtmlHelpInspector
@@ -1374,6 +1814,8 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
             brand={brand}
             selectedId={selectedId}
             viewport={viewport}
+            senderName={senderName}
+            sendingFrom={sendingFrom}
             onSelect={setSelectedId}
             onInsert={insertBlock}
             onUpdateBlock={updateBlock}
@@ -1409,6 +1851,15 @@ export default function EmailEditor({ flow, node, onBack, onSave }) {
         <EmailTemplateGallery
           onClose={() => setTemplatesOpen(false)}
           onUseTemplate={applyTemplate}
+        />
+      )}
+
+      {testOpen && (
+        <SendTestModal
+          defaultTo={testEmailDefault}
+          fetcher={testFetcher}
+          onClose={() => setTestOpen(false)}
+          onSend={sendTest}
         />
       )}
     </div>

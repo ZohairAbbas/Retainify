@@ -35,10 +35,18 @@ const PRISMA_SAFE_FIELDS = new Set([
   "hasTag",
   "firstSeenAt",
   "lastSeenAt",
+  // Purchase facts are denormalized onto Contact by lib/orders, so they compare
+  // as indexed columns. This is the whole reason for denormalizing them: as a
+  // per-contact aggregate they would force every Purchase rule down the JS path
+  // below, scanning the audience one contact at a time.
+  "totalSpent",
+  "orderCount",
+  "lastOrderAt",
 ]);
 // Fields that can only be evaluated in JS, from batched contact stats:
 //   cartAbandonCount, lastCartAt, lastCartValue, hasActiveCart,
-//   emailsSent, emailsOpened, emailsClicked, lifecycleStage
+//   emailsSent, emailsOpened, emailsClicked, lifecycleStage, aov
+//   (aov is derived from two columns, so it has no column of its own to filter)
 
 function isGroup(node) {
   return node && node.type === "group";
@@ -89,6 +97,20 @@ function ruleToPrisma(rule) {
       if (rule.op === "has_any") return { tags: { some: { tagId: { in: arr } } } };
       return null;
     }
+    case "totalSpent":
+    case "orderCount": {
+      const col = rule.field;
+      const n = Number(rule.value) || 0;
+      if (rule.op === "gt") return { [col]: { gt: n } };
+      if (rule.op === "lt") return { [col]: { lt: n } };
+      if (rule.op === "eq") return { [col]: n };
+      if (rule.op === "between") {
+        const [lo, hi] = Array.isArray(rule.value) ? rule.value : [rule.value, rule.value2];
+        return { [col]: { gte: Number(lo) || 0, lte: Number(hi) || 0 } };
+      }
+      return null;
+    }
+    case "lastOrderAt":
     case "firstSeenAt":
     case "lastSeenAt": {
       const col = rule.field;
@@ -138,6 +160,11 @@ function evalRuleJs(rule, ctx) {
 
   // Helpers
   const num = (v) => (v == null ? 0 : Number(v));
+  // "between" carries two values; every other numeric op carries one.
+  const betweenOrNum = (r) =>
+    r.op === "between"
+      ? (Array.isArray(r.value) ? r.value.map(Number) : [Number(r.value) || 0, Number(r.value2) || 0])
+      : Number(r.value) || 0;
   const cmp = (left, op, right) => {
     if (op === "gt") return left > right;
     if (op === "lt") return left < right;
@@ -167,6 +194,27 @@ function evalRuleJs(rule, ctx) {
       if (rule.op === "has") return tagIds.includes(rule.value);
       if (rule.op === "has_not") return !tagIds.includes(rule.value);
       if (rule.op === "has_any") return (Array.isArray(rule.value) ? rule.value : [rule.value]).some((t) => tagIds.includes(t));
+      return true;
+    }
+    // Purchase. These also translate to Prisma above; the JS versions are used
+    // when a rule tree mixes them with fields that can only run in memory.
+    case "totalSpent":  return cmp(num(contact.totalSpent), rule.op, betweenOrNum(rule));
+    case "orderCount":  return cmp(num(contact.orderCount), rule.op, betweenOrNum(rule));
+    case "aov": {
+      // Derived, so it has no column to filter on and only ever runs here.
+      const count = num(contact.orderCount);
+      const aov = count ? num(contact.totalSpent) / count : 0;
+      return cmp(aov, rule.op, betweenOrNum(rule));
+    }
+    case "lastOrderAt": {
+      const raw = contact.lastOrderAt;
+      if (rule.op === "empty") return !raw;
+      if (!raw) return false;
+      const ts = new Date(raw).getTime();
+      if (rule.op === "in_last")   return ts >= dateThreshold(rule.value, rule.unit).getTime();
+      if (rule.op === "more_than") return ts <  dateThreshold(rule.value, rule.unit).getTime();
+      if (rule.op === "before")    return ts <  new Date(rule.value).getTime();
+      if (rule.op === "after")     return ts >  new Date(rule.value).getTime();
       return true;
     }
     case "firstSeenAt":
@@ -420,7 +468,7 @@ async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
 // ── Lifecycle mix helpers ───────────────────────────────────────────────
 
 function emptyMix() {
-  return { new: 0, active: 0, at_risk: 0, churned: 0, never_purchased: 0 };
+  return { new: 0, active: 0, at_risk: 0, churned: 0 };
 }
 
 function mixFromLifecycles(stages) {

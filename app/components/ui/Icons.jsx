@@ -72,6 +72,7 @@ export const IconAlignRight = (p) => <I {...p}><path d="M3 6h18M9 12h12M3 18h18"
 export const IconCheck = (p) => <I {...p}><path d="M5 12l5 5L20 7"/></I>;
 export const IconMegaphone = (p) => <I {...p}><path d="M3 11v2a2 2 0 0 0 2 2h1l3 5h2v-4l9 3V5l-9 3H6a3 3 0 0 0-3 3z"/></I>;
 export const IconCode = (p) => <I {...p}><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></I>;
+export const IconUpload = (p) => <I {...p}><path d="M12 16V4m0 0L7 9m5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></I>;
 
 const Icons = {
   Home: IconHome,
@@ -122,6 +123,7 @@ const Icons = {
   Heading2: IconHeading2,
   Type: IconType,
   Image: IconImage,
+  Upload: IconUpload,
   Button: IconButton,
   Divider: IconDivider,
   Spacer: IconSpacer,

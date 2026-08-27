@@ -18,6 +18,40 @@ const DEFAULT_FROM_EMAIL = "noreply@retainify.app";
 // we must NOT fall back to the Resend address here.
 const DEFAULT_SES_FROM_EMAIL = "hello@mail.financifyapp.com";
 
+// Deliberately the same shape the providers accept for `reply_to`. Anything
+// this rejects, they reject too.
+const REPLY_TO_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+/**
+ * Validate a merchant-supplied Reply-To before it can reach the database.
+ *
+ * This is not cosmetic. A malformed `reply_to` does not degrade the send — the
+ * provider 422s the ENTIRE request, so `from` and `to` being perfectly valid
+ * changes nothing and every email for that shop stops. Worse, the message is
+ * never accepted, so it leaves no trace in the provider dashboard either.
+ * A bare mailbox ("hello" instead of "hello@shop.com") is the realistic way in.
+ *
+ * Empty is valid and means "no explicit Reply-To" — resolveFrom() then falls
+ * back to senderEmail.
+ *
+ * We reject rather than repair: auto-appending a domain guesses at an intent
+ * the merchant may not share, and hides that they typed something wrong.
+ *
+ * @param {unknown} raw
+ * @returns {{ ok: true, value: string } | { ok: false, error: string }}
+ */
+export function validateReplyTo(raw) {
+  const value = String(raw || "").trim();
+  if (!value) return { ok: true, value: "" };
+  if (REPLY_TO_RE.test(value)) return { ok: true, value };
+  return {
+    ok: false,
+    error: value.includes("@")
+      ? "Reply-to must be a valid email address, like support@yourstore.com."
+      : `"${value}" is not a complete email address — include the domain, like ${value}@yourstore.com.`,
+  };
+}
+
 /**
  * Resolve a shop's email provider. Defaults to "resend" for any
  * unset/empty/unknown value so nothing changes until a shop is explicitly
@@ -73,6 +107,49 @@ export function resolveFrom({ settings, provider }) {
     from: `${senderName} <${merchantEmail}>`,
     replyTo: merchantReplyTo,
   };
+}
+
+/**
+ * The workspace's public website — the {store_url} merge tag, and the fallback
+ * href for any email button left without a URL.
+ *
+ * Order matters: an explicit setting always wins, because a Shopify merchant
+ * with a custom domain wants their real storefront in the email, not the
+ * .myshopify.com address. Falling back to the shop key only works when that key
+ * IS a domain, which is true for a Shopify install and false for a direct
+ * workspace — where returning "" is correct, since a wrong host is worse than
+ * an absent one (the renderer degrades an empty store_url to "#").
+ *
+ * @param {{ shop?: string, settings?: object }} args
+ * @returns {string} absolute URL, or "" when the workspace has no website
+ */
+export function resolveStoreUrl({ shop, settings }) {
+  const explicit = String(settings?.websiteUrl || "").trim();
+  if (explicit) return normalizeUrl(explicit);
+  if (isShopifyShop(shop)) return `https://${shop}`;
+  return "";
+}
+
+/**
+ * The cart URL for {cart_url} when no real recovery link is available.
+ * Only a storefront has a cart, so this is empty for a direct workspace.
+ */
+export function resolveCartUrl({ shop, settings }) {
+  const base = resolveStoreUrl({ shop, settings });
+  if (!base || !isShopifyShop(shop)) return "";
+  return `${base.replace(/\/+$/, "")}/cart`;
+}
+
+/** A Shopify tenant key is the shop's own domain; a direct one is a slug. */
+export function isShopifyShop(shop) {
+  return /\.myshopify\.com$/i.test(String(shop || ""));
+}
+
+/** Accept "acme.com" as well as "https://acme.com" — merchants type both. */
+function normalizeUrl(raw) {
+  const v = String(raw).trim().replace(/\/+$/, "");
+  if (!v) return "";
+  return /^https?:\/\//i.test(v) ? v : `https://${v}`;
 }
 
 /**

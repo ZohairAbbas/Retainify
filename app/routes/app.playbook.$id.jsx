@@ -3,7 +3,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 
 export const loader = ({ request, params }) => {
   const url = new URL(request.url);
-  return redirect(`/app/automations/${params.id}${url.search}`);
+  return redirect(`/app/flows/${params.id}${url.search}`);
 };
 
 export default function LegacyPlaybookRedirect() {

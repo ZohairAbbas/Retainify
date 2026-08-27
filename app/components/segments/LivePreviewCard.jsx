@@ -7,14 +7,12 @@ const LIFECYCLE_COLORS = {
   active:          "#1F3D2F",
   at_risk:         "#6B5018",
   churned:         "#5A3F38",
-  never_purchased: "#5A2E5A",
 };
 const LIFECYCLE_LABELS = {
   new: "New",
   active: "Active",
   at_risk: "At-risk",
   churned: "Churned",
-  never_purchased: "Never purchased",
 };
 
 export default function LivePreviewCard({ filterTree, kind, staticMembers, totalAudience }) {

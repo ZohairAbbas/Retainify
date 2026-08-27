@@ -2,12 +2,12 @@
 // Body: filterTree (JSON string).
 // Returns: { count, sample, lifecycleMix, capped }.
 
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import { evaluateSegment, validateFilterTree } from "../lib/segments/evaluator.server.js";
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const raw = String(fd.get("filterTree") || "null");
 
@@ -33,8 +33,9 @@ export const action = async ({ request }) => {
   return Response.json({ count, sample, lifecycleMix, capped });
 };
 
-// Loader is a no-op — the route is action-only.
+// Loader is a no-op — the route is action-only. Still authenticated, so a
+// stray GET can't be used to probe whether the route exists.
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  await requireAccount(request);
   return Response.json({ ok: true });
 };

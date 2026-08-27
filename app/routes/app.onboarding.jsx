@@ -1,22 +1,22 @@
 import { useState, useEffect } from "react";
 import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
-import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
+import { resolveFrom, resolveProvider, validateReplyTo } from "../lib/email/index.server.js";
 import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
 import { addDomain, verifyOrCheckDomain, removeDomain } from "../lib/email/domain-actions.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import OnboardingChecklist from "../components/onboarding/OnboardingChecklist.jsx";
-import { TASKS, themeEditorEmbedUrl } from "../lib/onboarding/tasks.js";
+import { tasksFor, themeEditorEmbedUrl } from "../lib/onboarding/tasks.js";
 import {
   getOnboardingState,
   setTaskState,
 } from "../lib/onboarding/onboarding.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
 
   const state = await getOnboardingState(shop);
 
@@ -27,6 +27,10 @@ export const loader = async ({ request }) => {
   const sendingFromAddress = from.match(/<([^>]+)>/)?.[1] || from;
 
   const slotAvailable = await canUseDomainSlot(shop);
+  // Drives the direct-workspace "add your contacts" step, and nothing else.
+  const contactCount = state.kind === "direct"
+    ? await prisma.contact.count({ where: { shop } })
+    : 0;
   let domainRecords = [];
   try {
     domainRecords = state.settings?.domainRecords ? JSON.parse(state.settings.domainRecords) : [];
@@ -36,15 +40,19 @@ export const loader = async ({ request }) => {
 
   return {
     shop,
+    kind: state.kind,
+    contactCount,
     slotAvailable,
     domainRecords,
     apiKey: process.env.SHOPIFY_API_KEY || "",
     callUrl: process.env.ONBOARDING_CALL_URL || "#",
     sendingFromAddress,
-    owner: session.firstName || "",
+    owner: ctx.user?.name || ctx.session?.firstName || "",
     storeName: state.settings?.senderName && state.settings.senderName !== "Your Store"
       ? state.settings.senderName
-      : shop.replace(".myshopify.com", ""),
+      // A direct workspace has no shop domain to strip — fall back to the
+      // workspace name, which is what the person actually typed at signup.
+      : ctx.account?.name || shop.replace(".myshopify.com", ""),
     settings: state.settings ?? {},
     done: state.done,
     skipped: state.skipped,
@@ -54,8 +62,8 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
 
@@ -63,7 +71,13 @@ export const action = async ({ request }) => {
     // senderEmail is intentionally NOT written — it's not merchant-editable
     // (all sends use our shared from-address). Mirrors app.settings.jsx.
     const senderName = String(fd.get("senderName") || "").trim();
-    const replyTo = String(fd.get("replyTo") || "").trim();
+    // Same gate as app.settings.jsx — this is the FIRST place a merchant can
+    // type a Reply-To, so letting a bad one through here breaks sending before
+    // they have ever sent anything. Returning ok:false also holds the
+    // onboarding step open, since CompleteWatcher only advances on ok.
+    const reply = validateReplyTo(fd.get("replyTo"));
+    if (!reply.ok) return { ok: false, fieldError: reply.error };
+    const replyTo = reply.value;
     await prisma.shopSettings.upsert({
       where: { shop },
       create: { shop, senderName, replyTo },
@@ -112,15 +126,31 @@ export const action = async ({ request }) => {
 };
 
 // ── Welcome takeover ───────────────────────────────────────────────────
-function Welcome({ owner, storeName, onStart, onLater }) {
+function Welcome({ owner, storeName, tasks, kind, onStart, onLater }) {
+  // A direct workspace has no storefront and no carts, so the store-flavoured
+  // promise would be describing features it cannot use.
+  const isShopify = kind !== "direct";
   return (
     <div className="ob-welcome">
       <div className="ob-welcome-inner">
         <span className="ob-eyebrow"><span className="ob-dot" /> Setup · about 5 minutes</span>
-        <h1>Welcome{owner ? `, ${owner}` : ""}.<br />Let&apos;s turn visitors into <em>repeat customers.</em></h1>
-        <p className="ob-welcome-lede">A few quick steps and <b>{storeName}</b> will be recovering carts, capturing emails, and running automations on autopilot.</p>
+        <h1>
+          Welcome{owner ? `, ${owner}` : ""}.<br />
+          {isShopify ? (
+            <>Let&apos;s turn visitors into <em>repeat customers.</em></>
+          ) : (
+            <>Let&apos;s get your list <em>earning its keep.</em></>
+          )}
+        </h1>
+        <p className="ob-welcome-lede">
+          {isShopify ? (
+            <>A few quick steps and <b>{storeName}</b> will be recovering carts, capturing emails, and running automations on autopilot.</>
+          ) : (
+            <>A few quick steps and <b>{storeName}</b> will be sending broadcasts, running automated flows, and tracking every open and click.</>
+          )}
+        </p>
         <div className="ob-preview-tasks">
-          {TASKS.map((t, i) => (
+          {tasks.map((t, i) => (
             <div className="ob-preview-task" key={t.id}>
               <span className="ob-ptn">{i + 1}</span>
               <span>{t.title}</span>
@@ -190,7 +220,7 @@ function TopBar({ storeName }) {
 
 export default function Onboarding() {
   const data = useLoaderData();
-  const { shop, apiKey, callUrl, owner, storeName, done, skipped } = data;
+  const { shop, apiKey, callUrl, owner, storeName, done, skipped, kind } = data;
   const navigate = useNavigate();
   const location = useLocation();
   const activateFetcher = useFetcher();
@@ -223,9 +253,11 @@ export default function Onboarding() {
     domainStatus: data.settings.domainStatus || "",
     domainRecords: data.domainRecords || [],
     slotAvailable: data.slotAvailable,
+    contactCount: data.contactCount,
   };
 
-  const hasOptionalLeft = TASKS.some((t) => t.optional && !done[t.id] && !skipped[t.id]);
+  const tasks = tasksFor(kind);
+  const hasOptionalLeft = tasks.some((t) => t.optional && !done[t.id] && !skipped[t.id]);
 
   return (
     <div className="ob-root">
@@ -236,6 +268,8 @@ export default function Onboarding() {
         <Welcome
           owner={owner}
           storeName={storeName}
+          tasks={tasks}
+          kind={kind}
           onStart={() => setPhase("checklist")}
           onLater={() => setPhase("checklist")}
         />
@@ -246,6 +280,7 @@ export default function Onboarding() {
           state={{ done, skipped }}
           ctx={ctx}
           variant="onboarding"
+          kind={kind}
           owner={owner}
           onActivate={() => activateFetcher.submit({ intent: "activate" }, { method: "post" })}
         />

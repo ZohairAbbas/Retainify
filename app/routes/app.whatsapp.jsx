@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
 import { connectWhatsappAccount } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
@@ -11,12 +11,15 @@ import Icons from "../components/ui/Icons.jsx";
 import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
+import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  // Gate below: this whole page depends on a storefront.
+  if (!ctx.isShopify) return { storefrontOnly: true };
+  const { shop } = ctx;
 
-  const [account, settings, subCount, templates] = await Promise.all([
+  const [account, settings, subCount, templates, popup] = await Promise.all([
     prisma.whatsappAccount.findUnique({ where: { shop } }),
     prisma.shopSettings.findUnique({ where: { shop } }),
     prisma.whatsappSubscription.count({ where: { shop, status: "subscribed" } }),
@@ -25,6 +28,7 @@ export const loader = async ({ request }) => {
       orderBy: [{ status: "asc" }, { name: "asc" }],
       select: { id: true, name: true, language: true, category: true, status: true },
     }),
+    prisma.popupSettings.findUnique({ where: { shop }, select: { config: true } }),
   ]);
 
   // WhatsApp is a Growth-tier feature (Meta bills per conversation). In shadow
@@ -43,6 +47,7 @@ export const loader = async ({ request }) => {
         }
       : null,
     whatsappEnabled: settings?.whatsappEnabled ?? false,
+    popupOptIn: popup?.config?.whatsappOptIn === true,
     whatsappRequireOptIn: settings?.whatsappRequireOptIn ?? true,
     subCount,
     templates,
@@ -54,8 +59,8 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
 
@@ -81,6 +86,20 @@ export const action = async ({ request }) => {
       update: { whatsappEnabled: !current?.whatsappEnabled },
     });
     return { ok: true, toggled: true };
+  }
+
+  // Turns the popup's phone + consent fields on. Stored on PopupSettings.config
+  // because it is a property of the popup, not of the WhatsApp account.
+  if (intent === "toggle-popup-optin") {
+    const enabled = fd.get("enabled") === "1";
+    const row = await prisma.popupSettings.findUnique({ where: { shop } });
+    const config = { ...(row?.config || {}), whatsappOptIn: enabled };
+    await prisma.popupSettings.upsert({
+      where: { shop },
+      create: { shop, config, enabled: true },
+      update: { config },
+    });
+    return { ok: true, popupOptIn: enabled };
   }
 
   if (intent === "toggle-require-optin") {
@@ -180,8 +199,25 @@ export const action = async ({ request }) => {
     const tpl = await prisma.whatsappTemplate.findFirst({
       where: { shop, name: templateName, status: "APPROVED" },
     });
+
+    // Fill every {{n}} the template declares with a visible placeholder.
+    // Sending components: [] meant any template WITH variables was rejected by
+    // Meta with an opaque parameter-count error — which is most real templates.
+    const paramCount = new Set(
+      [...String(tpl?.bodyText || "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => m[1]),
+    ).size;
+    const components = paramCount
+      ? [{
+          type: "body",
+          parameters: Array.from({ length: paramCount }, (_, i) => ({
+            type: "text",
+            text: `sample ${i + 1}`,
+          })),
+        }]
+      : [];
+
     const result = await sendWhatsapp(
-      { to, templateName, language: tpl?.language || "en_US", components: [] },
+      { to, templateName, language: tpl?.language || "en_US", components },
       { shop },
     );
     if (!result.ok) return { ok: false, error: result.error || "Send failed." };
@@ -191,8 +227,8 @@ export const action = async ({ request }) => {
   return { ok: false };
 };
 
-export default function WhatsappPage() {
-  const { gate, account, whatsappEnabled, whatsappRequireOptIn, subCount, templates, metaAppId, esConfigId } = useLoaderData();
+function WhatsappPageInner() {
+  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, templates, metaAppId, esConfigId } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -643,8 +679,41 @@ export default function WhatsappPage() {
             <div className="t-micro muted" style={{ marginBottom: 16 }}>Subscribers</div>
             <div className="t-display-2 t-mono" style={{ lineHeight: 1, margin: 0 }}>{subCount}</div>
             <div className="t-small muted" style={{ marginTop: 6 }}>
-              Opted-in WhatsApp contacts. Opt-in capture on the storefront is coming soon.
+              Contacts who explicitly opted in to WhatsApp.
             </div>
+            {/* Storefront capture used to say "coming soon" — recordOptIn had no
+                caller anywhere, so this count could never leave zero and no
+                WhatsApp step in any flow could send. */}
+            <label
+              className="t-small"
+              style={{
+                display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer",
+                marginTop: 16, padding: 12, borderRadius: 8,
+                border: "1px solid var(--hair-1)", background: "var(--paper-2)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={popupOptIn}
+                disabled={!isConnected || optInFetcher.state !== "idle"}
+                onChange={(e) =>
+                  optInFetcher.submit(
+                    { intent: "toggle-popup-optin", enabled: e.target.checked ? "1" : "0" },
+                    { method: "post" },
+                  )
+                }
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                Collect WhatsApp opt-ins in my popup
+                <span className="muted" style={{ display: "block", marginTop: 4, lineHeight: 1.5 }}>
+                  Adds a phone field and a consent checkbox to your popup. The
+                  ticked box is the opt-in record Meta requires before you may
+                  message someone.
+                  {!isConnected && " Connect a WhatsApp account first."}
+                </span>
+              </span>
+            </label>
           </section>
 
           {/* Test */}
@@ -750,3 +819,17 @@ export default function WhatsappPage() {
 }
 
 export const headers = (headersArgs) => boundary.headers(headersArgs);
+
+export default function WhatsappPage() {
+  // A direct workspace can still reach this URL by bookmark or shared link.
+  const data = useLoaderData();
+  if (data?.storefrontOnly) {
+    return (
+      <StorefrontOnly
+        feature="WhatsApp"
+        what="WhatsApp opt-in is captured by a block in your storefront theme."
+      />
+    );
+  }
+  return <WhatsappPageInner />;
+}

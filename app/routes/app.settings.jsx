@@ -1,17 +1,17 @@
 import { useState } from "react";
-import { useLoaderData, useFetcher } from "react-router";
+import { Link, useLoaderData, useFetcher, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
-import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
+import { resolveFrom, resolveProvider, validateReplyTo } from "../lib/email/index.server.js";
 import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import { addDomain, verifyOrCheckDomain, removeDomain } from "../lib/email/domain-actions.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const settings = await prisma.shopSettings.findUnique({ where: { shop } });
 
   // The real from-address this shop sends from, computed by the same seam the
@@ -36,29 +36,49 @@ export const loader = async ({ request }) => {
     domainRecords = [];
   }
 
-  return { settings: settings ?? {}, sendingFromAddress, slotAvailable, domainRecords, domainGate };
+  return { settings: settings ?? {}, sendingFromAddress, slotAvailable, domainRecords, domainGate, isShopify: ctx.isShopify };
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const formData = await request.formData();
   const intent = formData.get("intent");
 
   if (intent === "save-settings") {
     const senderName = String(formData.get("senderName") || "").trim();
-    const replyTo = String(formData.get("replyTo") || "").trim();
+    // Rejecting at save time is the only place the merchant can see this — a
+    // bad value silently 422s every send afterwards. See validateReplyTo().
+    const reply = validateReplyTo(formData.get("replyTo"));
+    if (!reply.ok) return { ok: false, fieldError: reply.error };
+    const replyTo = reply.value;
+    // Accept "acme.com" as readily as "https://acme.com" — merchants type both,
+    // and a bare host stored raw would end up as a relative href in an email.
+    const rawWebsite = String(formData.get("websiteUrl") || "").trim().replace(/\/+$/, "");
+    const websiteUrl = rawWebsite && !/^https?:\/\//i.test(rawWebsite)
+      ? `https://${rawWebsite}`
+      : rawWebsite;
     const brandColor = String(formData.get("brandColor") || "#000000").trim();
     const logoUrl = String(formData.get("logoUrl") || "").trim();
     const quietHoursStart = parseInt(formData.get("quietHoursStart") || "22", 10);
     const quietHoursEnd = parseInt(formData.get("quietHoursEnd") || "8", 10);
-    const storeTimezone = String(formData.get("storeTimezone") || "UTC").trim();
+    // Validated server-side too: the select can be bypassed, and an invalid
+    // zone makes isInQuietHours() throw-and-return-false, silently disabling
+    // quiet hours for every send.
+    const rawTimezone = String(formData.get("storeTimezone") || "UTC").trim();
+    let storeTimezone = "UTC";
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: rawTimezone });
+      storeTimezone = rawTimezone;
+    } catch {
+      console.warn(`[settings] rejected invalid timezone "${rawTimezone}" for ${shop}`);
+    }
 
     // senderEmail (the from mailbox) is editable ONLY for a verified-domain shop,
     // and only as `[mailbox]@verifiedDomain`. We validate server-side so a stale
     // or forged value can't flip an unverified shop to an arbitrary from-address.
     const mailbox = String(formData.get("senderMailbox") || "").trim().toLowerCase();
-    const update = { senderName, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone };
+    const update = { senderName, replyTo, websiteUrl, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone };
 
     const current = await prisma.shopSettings.findUnique({ where: { shop } });
     if (current?.domainVerified && current?.verifiedDomain && mailbox) {
@@ -71,7 +91,7 @@ export const action = async ({ request }) => {
 
     await prisma.shopSettings.upsert({
       where: { shop },
-      create: { shop, senderName, replyTo, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
+      create: { shop, senderName, replyTo, websiteUrl, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone },
       update,
     });
     return { ok: true, saved: true };
@@ -95,14 +115,34 @@ export const action = async ({ request }) => {
   return { ok: false };
 };
 
+/**
+ * Every IANA zone the runtime knows, so the merchant picks rather than types.
+ * Falls back to a short list on the rare engine without supportedValuesOf.
+ */
+const TIMEZONES = (() => {
+  try {
+    const all = Intl.supportedValuesOf("timeZone");
+    if (Array.isArray(all) && all.length) return ["UTC", ...all.filter((z) => z !== "UTC")];
+  } catch {
+    // Older runtimes: fall through.
+  }
+  return [
+    "UTC", "America/New_York", "America/Chicago", "America/Denver",
+    "America/Los_Angeles", "America/Sao_Paulo", "Europe/London", "Europe/Paris",
+    "Europe/Berlin", "Africa/Lagos", "Asia/Dubai", "Asia/Karachi",
+    "Asia/Kolkata", "Asia/Singapore", "Asia/Tokyo", "Australia/Sydney",
+  ];
+})();
+
 const HOURS = Array.from({ length: 24 }, (_, i) => ({
   label: `${i.toString().padStart(2, "0")}:00`,
   value: String(i),
 }));
 
 export default function Settings() {
-  const { settings, sendingFromAddress, slotAvailable, domainRecords, domainGate } = useLoaderData();
+  const { settings, sendingFromAddress, slotAvailable, domainRecords, domainGate, isShopify = true } = useLoaderData();
   const fetcher = useFetcher();
+  const location = useLocation();
   const saving = fetcher.state !== "idle";
   const saved = fetcher.data?.saved;
 
@@ -110,9 +150,11 @@ export default function Settings() {
   const verifiedDomain = settings.verifiedDomain || "";
   const domainStatus = settings.domainStatus || "";
   const domainError = fetcher.data?.domainError;
+  const fieldError = fetcher.data?.fieldError;
 
   const [senderName, setSenderName] = useState(settings.senderName || "");
   const [replyTo, setReplyTo] = useState(settings.replyTo || "");
+  const [websiteUrl, setWebsiteUrl] = useState(settings.websiteUrl || "");
   // Mailbox local-part for a verified domain (Mode A). Prefill from senderEmail.
   const [senderMailbox, setSenderMailbox] = useState(
     (settings.senderEmail || "").split("@")[0] || "hello",
@@ -134,6 +176,7 @@ export default function Settings() {
         intent: "save-settings",
         senderName,
         replyTo,
+        websiteUrl,
         senderMailbox: domainVerified ? senderMailbox : "",
         brandColor,
         logoUrl,
@@ -206,6 +249,24 @@ export default function Settings() {
               )}
             </div>
             <div>
+              <label className="field-label">
+                Website{isShopify ? " (optional)" : ""}
+              </label>
+              <input
+                className="input"
+                type="url"
+                inputMode="url"
+                value={websiteUrl}
+                onChange={(e) => setWebsiteUrl(e.target.value)}
+                placeholder={isShopify ? "https://yourstore.com" : "https://yourcompany.com"}
+              />
+              <div className="field-help">
+                {isShopify
+                  ? "Where {store_url} points, and where an email button with no link of its own goes. Leave blank to use your Shopify domain."
+                  : "Where {store_url} points, and where an email button with no link of its own goes. Without this, those buttons do nothing."}
+              </div>
+            </div>
+            <div>
               <label className="field-label">Reply-to email</label>
               <input
                 className="input"
@@ -214,10 +275,16 @@ export default function Settings() {
                 onChange={(e) => setReplyTo(e.target.value)}
                 placeholder="support@yourstore.com"
               />
-              <div className="field-help">
-                When a customer replies to your emails, their reply goes here.
-                Use any inbox you can receive mail at.
-              </div>
+              {fieldError ? (
+                <div className="t-small" style={{ color: "var(--danger, #c0392b)", marginTop: 4 }}>
+                  {fieldError}
+                </div>
+              ) : (
+                <div className="field-help">
+                  When a customer replies to your emails, their reply goes here.
+                  Use any inbox you can receive mail at.
+                </div>
+              )}
             </div>
           </div>
         </section>
@@ -386,18 +453,36 @@ export default function Settings() {
               </select>
             </div>
             <div>
-              <label className="field-label">Store timezone</label>
-              <input
-                className="input"
+              <label className="field-label" htmlFor="rt-timezone">Store timezone</label>
+              {/* Was a free-text field with an "Asia/Karachi" placeholder. A
+                  typo there silently disabled quiet hours entirely — the worker
+                  catches the invalid zone and returns false, so every send went
+                  out regardless of the window. */}
+              <select
+                id="rt-timezone"
+                className="select"
                 value={storeTimezone}
                 onChange={(e) => setStoreTimezone(e.target.value)}
-                placeholder="Asia/Karachi"
-              />
+              >
+                {TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz}>{tz}</option>
+                ))}
+              </select>
               <div className="field-help">
-                IANA timezone e.g. Asia/Dubai, Asia/Kolkata, America/New_York
+                Quiet hours are applied in this timezone.
               </div>
             </div>
           </div>
+        </section>
+
+        <section className="rt-form-section">
+          <div className="t-micro muted" style={{ marginBottom: 4 }}>Setup</div>
+          <div className="t-small muted" style={{ marginBottom: 12 }}>
+            Revisit the guided setup steps at any time.
+          </div>
+          <Link className="btn btn-secondary" to={`/app/setup${location.search}`}>
+            Open setup guide
+          </Link>
         </section>
 
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
@@ -406,7 +491,7 @@ export default function Settings() {
             onClick={saveSettings}
             disabled={saving}
           >
-            {saved && !saving ? "Saved!" : "Save settings"}
+            {saved && !saving ? "Saved" : "Save settings"}
           </button>
         </div>
       </div>
@@ -414,7 +499,26 @@ export default function Settings() {
   );
 }
 
+/**
+ * DNS records with per-value copy buttons.
+ *
+ * DKIM values are 200+ characters of base64. Hand-transcribing them is the
+ * single most error-prone step in domain verification, and a one-character slip
+ * fails silently — verification just never completes.
+ */
 function DnsRecordsTable({ records }) {
+  const [copied, setCopied] = useState(null);
+
+  const copy = async (value, key) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(key);
+      setTimeout(() => setCopied(null), 1800);
+    } catch {
+      setCopied(null);
+    }
+  };
+
   if (!records || !records.length) {
     return <div className="t-small muted">No DNS records available yet.</div>;
   }
@@ -427,6 +531,7 @@ function DnsRecordsTable({ records }) {
             <th style={{ padding: "6px 8px" }}>Name</th>
             <th style={{ padding: "6px 8px" }}>Value</th>
             <th style={{ padding: "6px 8px" }}>Priority</th>
+            <th style={{ padding: "6px 8px" }} />
           </tr>
         </thead>
         <tbody>
@@ -436,6 +541,15 @@ function DnsRecordsTable({ records }) {
               <td style={{ padding: "6px 8px", wordBreak: "break-all", fontFamily: "monospace" }}>{r.name}</td>
               <td style={{ padding: "6px 8px", wordBreak: "break-all", fontFamily: "monospace" }}>{r.value}</td>
               <td style={{ padding: "6px 8px" }}>{r.priority ?? "—"}</td>
+              <td style={{ padding: "6px 8px", whiteSpace: "nowrap" }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => copy(r.value, i)}
+                >
+                  {copied === i ? "Copied" : "Copy"}
+                </button>
+              </td>
             </tr>
           ))}
         </tbody>

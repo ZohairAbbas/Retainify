@@ -5,15 +5,20 @@ import { createReadableStreamFromReadable } from "@react-router/node";
 import { isbot } from "isbot";
 import { addDocumentResponseHeaders } from "./shopify.server";
 import { runJourneyWorker } from "./lib/journey/journey-worker.server.js";
+import { runBroadcastWorker } from "./lib/journey/broadcast.server.js";
 import { runPushWorker } from "./lib/push/push-worker.server.js";
 import { runWhatsappWorker } from "./lib/whatsapp/whatsapp-worker.server.js";
 import { runSegmentEnrollmentWorker } from "./lib/segments/segmentEnrollmentWorker.server.js";
 import { runSegmentSnapshotWorker } from "./lib/segments/segmentSnapshotWorker.server.js";
+import { pruneExpiredSessions } from "./lib/auth/session.server.js";
 
 // Poll all job queues every 60 seconds.
 if (typeof setInterval !== "undefined") {
   setInterval(() => {
     runJourneyWorker().catch((err) => console.error("[journey-worker] poll error:", err));
+    // Dispatches scheduled broadcasts. Enrolment only — the journey worker
+    // above does the actual sending on the next tick.
+    runBroadcastWorker().catch((err) => console.error("[broadcast] poll error:", err));
     runPushWorker().catch((err) => console.error("[push-worker] poll error:", err));
     runWhatsappWorker().catch((err) => console.error("[whatsapp-worker] poll error:", err));
     // Bounded per-tick budget keeps these next to journey/push without
@@ -21,6 +26,13 @@ if (typeof setInterval !== "undefined") {
     runSegmentEnrollmentWorker().catch((err) => console.error("[segment-enrollment] poll error:", err));
     runSegmentSnapshotWorker().catch((err) => console.error("[segment-snapshot] poll error:", err));
   }, 60_000);
+
+  // Housekeeping for the standalone auth tables. Hourly, not per-minute: an
+  // expired session is already rejected on read, so deleting the row is purely
+  // about not growing the table forever.
+  setInterval(() => {
+    pruneExpiredSessions().catch((err) => console.error("[auth] session prune error:", err));
+  }, 60 * 60_000);
 }
 
 export const streamTimeout = 5000;

@@ -1,11 +1,12 @@
 import { useLoaderData, useFetcher, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
 import { getDefaults, mergeOnTemplateSwitch, TEMPLATES } from "../lib/popup-templates/index.js";
 import { findMissingHooks } from "../lib/popup-templates/html-sanitize.js";
 import PopupsPage from "../components/popups/PopupsPage.jsx";
 import PopupEditor from "../components/popups/PopupEditor.jsx";
+import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
 
 // Derive legacy scalar columns from the new template config. Kept in sync on every
 // write so other code paths still reading from PopupSettings.discountPct etc. (e.g.
@@ -41,14 +42,36 @@ function legacyToConfig(row) {
 }
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  // Gate below: this whole page depends on a storefront.
+  if (!ctx.isShopify) return { storefrontOnly: true };
+  const { shop } = ctx;
 
   const row = await prisma.popupSettings.findUnique({ where: { shop } });
-  const signupCount = await prisma.popupSignup.count({ where: { shop } });
+
+  // "Subscribers" used to be a raw count of every popup signup row, including
+  // the ones that never confirmed — which, under double opt-in, are not
+  // subscribers. Splitting the numbers says what each one actually is.
+  const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [total, confirmed, last30] = await Promise.all([
+    prisma.popupSignup.count({ where: { shop } }),
+    prisma.popupSignup.count({ where: { shop, confirmedAt: { not: null } } }),
+    prisma.popupSignup.count({ where: { shop, createdAt: { gte: since30 } } }),
+  ]);
+  const signupCount = { total, confirmed, last30 };
+  const storeDomain = shop.replace(".myshopify.com", "");
+  // The merchant's own name for their store, for the preview chrome.
+  const shopSettings = await prisma.shopSettings.findUnique({
+    where: { shop },
+    select: { senderName: true },
+  });
+  const storeName =
+    shopSettings?.senderName && shopSettings.senderName !== "Your Store"
+      ? shopSettings.senderName
+      : storeDomain;
 
   if (!row) {
-    return { popup: null, signupCount };
+    return { popup: null, signupCount, storeDomain, storeName };
   }
 
   const config = row.config ?? legacyToConfig(row);
@@ -60,12 +83,14 @@ export const loader = async ({ request }) => {
       config,
     },
     signupCount,
+    storeDomain,
+    storeName,
   };
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const formData = await request.formData();
   const intent = formData.get("intent");
 
@@ -141,8 +166,8 @@ export const action = async ({ request }) => {
   return { ok: false };
 };
 
-export default function PopupRoute() {
-  const { popup, signupCount } = useLoaderData();
+function PopupRouteInner() {
+  const { popup, signupCount, storeDomain, storeName } = useLoaderData();
   const [searchParams, setSearchParams] = useSearchParams();
   const fetcher = useFetcher();
   const toggleFetcher = useFetcher();
@@ -197,6 +222,8 @@ export default function PopupRoute() {
 
     return (
       <PopupEditor
+        storeDomain={storeDomain}
+        storeName={storeName}
         initialDraft={initialDraft}
         saving={saving}
         onSave={(draft) => {
@@ -213,6 +240,8 @@ export default function PopupRoute() {
     <PopupsPage
       popup={popup}
       signupCount={signupCount}
+      storeDomain={storeDomain}
+      storeName={storeName}
       onEnterEditor={enterEditor}
       onToggle={handleToggle}
       onUseTemplate={handleUseTemplate}
@@ -221,3 +250,17 @@ export default function PopupRoute() {
 }
 
 export const headers = (headersArgs) => boundary.headers(headersArgs);
+
+export default function PopupRoute() {
+  // A direct workspace can still reach this URL by bookmark or shared link.
+  const data = useLoaderData();
+  if (data?.storefrontOnly) {
+    return (
+      <StorefrontOnly
+        feature="Popup"
+        what="The signup popup is injected into your storefront by the Retainify theme embed."
+      />
+    );
+  }
+  return <PopupRouteInner />;
+}

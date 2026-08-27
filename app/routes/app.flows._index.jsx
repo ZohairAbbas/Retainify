@@ -1,7 +1,7 @@
 import { useState, useRef, Fragment } from "react";
 import { useLoaderData, useNavigate, useLocation, useFetcher, redirect } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
 import {
   seedJourneyTemplates,
@@ -14,14 +14,14 @@ import { TRIGGER_CONFIG, STATUS_PILL, timeAgo } from "../lib/triggerConfig.js";
 import { requireQuota } from "../lib/billing/gate.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
 
   await seedJourneyTemplates().catch(() => {});
 
   const [journeys, templates] = await Promise.all([
     prisma.journey.findMany({
-      where: { shop, archivedAt: null },
+      where: { shop, archivedAt: null, trigger: { not: "broadcast" } },
       include: {
         steps: { where: { isArchived: false }, orderBy: { stepNumber: "asc" } },
       },
@@ -31,17 +31,33 @@ export const loader = async ({ request }) => {
   ]);
 
   const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-  const stats = await Promise.all(
-    journeys.map(async (j) => {
-      const [delivered, opened, clicked] = await Promise.all([
-        prisma.journeyJob.count({ where: { step: { journeyId: j.id }, sentAt: { gte: since, not: null } } }),
-        prisma.journeyJob.count({ where: { step: { journeyId: j.id }, openedAt: { gte: since, not: null } } }),
-        prisma.journeyJob.count({ where: { step: { journeyId: j.id }, clickedAt: { gte: since, not: null } } }),
-      ]);
-      return { id: j.id, delivered, opened, clicked };
-    }),
+
+  // One grouped query for the whole table. This was three counts per journey,
+  // so a shop with a dozen flows issued three dozen round trips to render a
+  // list that shows three numbers per row.
+  const statRows = journeys.length
+    ? await prisma.$queryRaw`
+        SELECT s."journeyId" AS "journeyId",
+               COUNT(*) FILTER (WHERE j."sentAt"    IS NOT NULL) AS delivered,
+               COUNT(*) FILTER (WHERE j."openedAt"  IS NOT NULL) AS opened,
+               COUNT(*) FILTER (WHERE j."clickedAt" IS NOT NULL) AS clicked
+          FROM "JourneyJob" j
+          JOIN "JourneyStep" s ON s.id = j."stepId"
+         WHERE s."journeyId" = ANY(${journeys.map((j) => j.id)})
+           AND j."sentAt" >= ${since}
+         GROUP BY s."journeyId"`
+    : [];
+  const statsById = Object.fromEntries(
+    statRows.map((r) => [
+      r.journeyId,
+      {
+        id: r.journeyId,
+        delivered: Number(r.delivered) || 0,
+        opened: Number(r.opened) || 0,
+        clicked: Number(r.clicked) || 0,
+      },
+    ]),
   );
-  const statsById = Object.fromEntries(stats.map((s) => [s.id, s]));
 
   return {
     journeys: journeys.map((j) => ({
@@ -49,13 +65,16 @@ export const loader = async ({ request }) => {
       emailStepCount: j.steps.filter((s) => s.nodeType === "email").length,
       stats: statsById[j.id] || { delivered: 0, opened: 0, clicked: 0 },
     })),
-    templates,
+    // A direct workspace has no carts and no orders, so a template built on
+    // those triggers would enrol nobody. Filtered here rather than in the UI so
+    // the create-from-template action can't be posted for one either.
+    templates: templates.filter((t) => ctx.isShopify || !TRIGGER_CONFIG[t.trigger]?.commerce),
   };
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
 
@@ -70,6 +89,16 @@ export const action = async ({ request }) => {
   if (intent === "create-from-template") {
     const key = String(fd.get("templateKey") || "");
     if (!key) return { ok: false, error: "Missing template key" };
+
+    // The loader already hides commerce templates from a direct workspace; this
+    // is the backstop for a posted key from a stale page or a crafted request.
+    if (!ctx.isShopify) {
+      const tpl = (await getJourneyTemplates()).find((t) => t.key === key);
+      if (tpl && TRIGGER_CONFIG[tpl.trigger]?.commerce) {
+        return { ok: false, error: "That template needs a connected Shopify store." };
+      }
+    }
+
     const journey = await createJourneyFromTemplate(shop, key);
     const url = new URL(request.url);
     return redirect(`/app/flows/${journey.id}${url.search}`);
@@ -115,26 +144,37 @@ export const action = async ({ request }) => {
         source: "flows",
         entryFrequency: src.entryFrequency,
         exitCriteria: src.exitCriteria,
+        // A segment-triggered flow is unusable without its segment — the
+        // enrollment worker skips any flow whose triggerSegmentKey is null.
+        triggerSegmentKey: src.triggerSegmentKey,
+        // Enrollment bookkeeping is per-flow state, not content. The copy must
+        // start with a clean slate so publishing it pins its own baseline
+        // rather than inheriting the original's.
+        lastEnrollmentAt: null,
+        lastEnrollmentHash: null,
       },
     });
     if (src.steps.length) {
       await prisma.journeyStep.createMany({
-        data: src.steps.map((s) => ({
-          journeyId: copy.id,
-          stepNumber: s.stepNumber,
-          positionY: s.positionY,
-          nodeType: s.nodeType,
-          delayHours: s.delayHours,
-          subject: s.subject,
-          previewText: s.previewText,
-          emailName: s.emailName,
-          templateStyle: s.templateStyle,
-          discountPct: s.discountPct,
-          isEnabled: s.isEnabled,
-        })),
+        // Copy every authored field. Listing them individually is what caused
+        // duplicates to come back with empty emails: emailBlocks, emailHtml and
+        // the whole push/WhatsApp group were simply absent from the old list.
+        // Spread-and-omit means a new column is carried by default instead of
+        // being silently dropped until someone notices.
+        data: src.steps.map((s) => {
+          const {
+            id: _id,
+            journeyId: _journeyId,
+            createdAt: _createdAt,
+            updatedAt: _updatedAt,
+            isArchived: _isArchived,
+            ...fields
+          } = s;
+          return { ...fields, journeyId: copy.id, isArchived: false };
+        }),
       });
     }
-    return { ok: true };
+    return { ok: true, duplicated: true, journeyId: copy.id };
   }
 
   return { ok: false };
@@ -168,6 +208,7 @@ export default function Flows() {
         journeys={journeys}
         onCreate={() => setShowModal(true)}
         onOpen={(id) => navigate(`/app/flows/${id}${location.search}`)}
+        onAnalytics={(id) => navigate(`/app/flows/${id}/analytics${location.search}`)}
         onDuplicate={(id) => fetcher.submit({ intent: "duplicate", journeyId: id }, { method: "post" })}
         onArchive={(id) => fetcher.submit({ intent: "archive", journeyId: id }, { method: "post" })}
       />
@@ -235,7 +276,7 @@ function FlowsListEmpty({ onCreate }) {
   );
 }
 
-function FlowsList({ journeys, onCreate, onOpen, onDuplicate, onArchive }) {
+function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArchive }) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [openMenu, setOpenMenu] = useState(null);
@@ -369,6 +410,7 @@ function FlowsList({ journeys, onCreate, onOpen, onDuplicate, onArchive }) {
                   onToggle={() => setOpenMenu(openMenu === j.id ? null : j.id)}
                   onClose={() => setOpenMenu(null)}
                   onView={() => { setOpenMenu(null); onOpen(j.id); }}
+                  onAnalytics={() => { setOpenMenu(null); onAnalytics(j.id); }}
                   onDuplicate={() => { setOpenMenu(null); onDuplicate(j.id); }}
                   onArchive={() => { setOpenMenu(null); onArchive(j.id); }}
                 />
@@ -390,7 +432,7 @@ function FlowsList({ journeys, onCreate, onOpen, onDuplicate, onArchive }) {
   );
 }
 
-function RowMenu({ open, onToggle, onClose, onView, onDuplicate, onArchive }) {
+function RowMenu({ open, onToggle, onClose, onView, onAnalytics, onDuplicate, onArchive }) {
   const btnRef = useRef(null);
   const [pos, setPos] = useState(null);
 
@@ -429,6 +471,9 @@ function RowMenu({ open, onToggle, onClose, onView, onDuplicate, onArchive }) {
           >
             <button onClick={onView}>
               <Icons.Eye size={14} /> View
+            </button>
+            <button onClick={onAnalytics}>
+              <Icons.Chart size={14} /> Analytics
             </button>
             <button onClick={onDuplicate}>
               <Icons.Copy size={14} /> Duplicate

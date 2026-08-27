@@ -15,7 +15,20 @@ embedded = true
 automatically_update_urls_on_dev = false
 
 [webhooks]
-api_version = "2025-01"
+# Must track the ApiVersion used in app/shopify.server.js — a drift here means
+# webhook payloads are shaped for a different version than the code expects.
+api_version = "2025-10"
+
+  # Without this declaration Shopify never subscribes the topic, so the handler
+  # in webhooks.app.uninstalled.jsx never runs: sessions are never cleaned up and
+  # the job workers keep sending to a store that removed the app.
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "/webhooks/app/uninstalled"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/scopes_update" ]
+  uri = "/webhooks/app/scopes_update"
 
   [[webhooks.subscriptions]]
   topics = [ "orders/create", "orders/paid" ]

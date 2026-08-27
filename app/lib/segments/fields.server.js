@@ -10,11 +10,14 @@
 // UI shows the exact same field set the server is willing to validate.
 
 export const FIELDS = [
-  // Purchase — gated (no order ingestion yet)
-  { id: "totalSpent",        label: "Total spent",         group: "Purchase",         type: "money",   supported: false },
-  { id: "orderCount",        label: "Order count",         group: "Purchase",         type: "number",  supported: false },
-  { id: "lastOrderAt",       label: "Last order date",     group: "Purchase",         type: "date",    supported: false },
-  { id: "aov",               label: "Average order value", group: "Purchase",         type: "money",   supported: false },
+  // Purchase — backed by the Order table and the aggregates denormalized onto
+  // Contact (see lib/orders/orders.server.js). totalSpent, orderCount and
+  // lastOrderAt are real columns, so they evaluate in SQL; AOV is derived from
+  // two of them and is computed in JS.
+  { id: "totalSpent",        label: "Total spent",         group: "Purchase",         type: "money",   supported: true },
+  { id: "orderCount",        label: "Order count",         group: "Purchase",         type: "number",  supported: true },
+  { id: "lastOrderAt",       label: "Last order date",     group: "Purchase",         type: "date",    supported: true },
+  { id: "aov",               label: "Average order value", group: "Purchase",         type: "money",   supported: true },
 
   // Cart — supported via AbandonedCart aggregate
   { id: "cartAbandonCount",  label: "Abandoned cart count", group: "Cart",            type: "number",  supported: true },
@@ -46,7 +49,6 @@ export const FIELDS = [
       { id: "active",          label: "Active" },
       { id: "at_risk",         label: "At-risk" },
       { id: "churned",         label: "Churned" },
-      { id: "never_purchased", label: "Never purchased" },
     ] },
   { id: "source",             label: "Source",              group: "Profile", type: "enum", supported: true,
     options: [
@@ -64,6 +66,38 @@ export const FIELDS = [
 ];
 
 export const FIELD_BY_ID = Object.fromEntries(FIELDS.map((f) => [f.id, f]));
+
+/**
+ * Field groups that only ever hold data on a workspace with a connected store.
+ * Purchase and Cart columns are written by order ingestion and checkout
+ * webhooks; without a storefront they are permanently zero, and a rule built on
+ * one silently matches nobody.
+ */
+const COMMERCE_GROUPS = new Set(["Purchase", "Cart"]);
+
+/**
+ * The fields a workspace can actually build rules on.
+ *
+ * FIELD_BY_ID stays complete on purpose — an existing segment written before a
+ * store was disconnected must still render its own rule labels.
+ *
+ * @param {boolean} isShopify
+ */
+export function fieldsFor(isShopify) {
+  return isShopify ? FIELDS : FIELDS.filter((f) => !COMMERCE_GROUPS.has(f.group));
+}
+
+/** Segment starter templates a workspace can actually use. */
+export function templatesFor(isShopify) {
+  if (isShopify) return TEMPLATES;
+  const allowed = new Set(fieldsFor(false).map((f) => f.id));
+  const usesOnly = (node) => {
+    if (!node) return true;
+    if (node.type === "group") return (node.children || []).every(usesOnly);
+    return allowed.has(node.field);
+  };
+  return TEMPLATES.filter((t) => usesOnly(t.rules));
+}
 
 export const OPERATORS = {
   money:   [{ id: "gt", label: "is more than" }, { id: "lt", label: "is less than" }, { id: "eq", label: "is exactly" }, { id: "between", label: "is between" }],

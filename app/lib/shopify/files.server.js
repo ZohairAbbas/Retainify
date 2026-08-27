@@ -5,7 +5,13 @@
  *   3. fileCreate → registers the staged upload as a Shopify File
  *   4. Poll fileQuery until status === READY → return the CDN url
  *
- * Used by app/routes/app.api.upload.jsx for the visual editor image block.
+ * Used by app/routes/app.api.upload.jsx for the email editor's image block, the
+ * brand-kit logo, and the content library.
+ *
+ * Handles images and generic files (PDFs). The two differ throughout: they take
+ * a different contentType on fileCreate and resolve to a different GraphQL type
+ * on read, so a PDF pushed through the image-only path would poll for an
+ * `image { url }` that never arrives and time out after 20 seconds.
  */
 
 const STAGED_UPLOADS_CREATE = `#graphql
@@ -30,6 +36,9 @@ const FILE_CREATE = `#graphql
         ... on MediaImage {
           image { url width height }
         }
+        ... on GenericFile {
+          url
+        }
       }
       userErrors { field message }
     }
@@ -43,6 +52,11 @@ const FILE_QUERY = `#graphql
         id
         fileStatus
         image { url width height altText }
+      }
+      ... on GenericFile {
+        id
+        fileStatus
+        url
       }
     }
   }
@@ -62,6 +76,11 @@ function userErrorMessage(errors) {
  */
 export async function uploadImageToShopifyFiles({ admin }, file) {
   if (!file?.bytes?.length) throw new Error("uploadImageToShopifyFiles: empty file");
+
+  // Shopify types uploads as IMAGE or FILE, and each resolves to a different
+  // GraphQL node type when we poll for the CDN url below.
+  const isImage = String(file.mimeType || "").startsWith("image/");
+  const contentType = isImage ? "IMAGE" : "FILE";
 
   // 1. Stage the upload
   const stagedResp = await admin.graphql(STAGED_UPLOADS_CREATE, {
@@ -103,7 +122,7 @@ export async function uploadImageToShopifyFiles({ admin }, file) {
       files: [
         {
           alt: file.alt || "",
-          contentType: "IMAGE",
+          contentType,
           originalSource: target.resourceUrl,
         },
       ],
@@ -122,11 +141,14 @@ export async function uploadImageToShopifyFiles({ admin }, file) {
     const queryResp = await admin.graphql(FILE_QUERY, { variables: { id: created.id } });
     const queryJson = await queryResp.json();
     const node = queryJson.data?.node;
-    if (node?.fileStatus === "READY" && node.image?.url) {
+    // MediaImage exposes the CDN url under image{}; GenericFile exposes it
+    // directly. Either satisfies "ready".
+    const readyUrl = node?.image?.url || node?.url;
+    if (node?.fileStatus === "READY" && readyUrl) {
       return {
-        url: node.image.url,
-        width: node.image.width || 0,
-        height: node.image.height || 0,
+        url: readyUrl,
+        width: node.image?.width || 0,
+        height: node.image?.height || 0,
         fileId: node.id,
       };
     }

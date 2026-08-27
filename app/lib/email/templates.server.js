@@ -26,7 +26,9 @@ function baseLayout({ content, storeName, logoUrl, brandColor, unsubscribeUrl, m
             ${
               logoUrl
                 ? `<img src="${logoUrl}" height="48" alt="${storeName}" style="display:block;max-width:200px;" />`
-                : `<p style="margin:0;font-size:22px;font-weight:700;color:#1a1a1a;">${storeName}</p>`
+                  // Wordmark fallback when no logo is set. Uses the merchant's
+                  // brand colour, which baseLayout received but never applied.
+                : `<p style="margin:0;font-size:22px;font-weight:700;color:${brandColor || "#1a1a1a"};">${storeName}</p>`
             }
           </td>
         </tr>

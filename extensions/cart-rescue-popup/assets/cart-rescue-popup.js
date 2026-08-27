@@ -397,6 +397,42 @@
     return { overlay: overlay, modal: modal, close: close };
   }
 
+  /**
+   * Optional WhatsApp opt-in fields.
+   *
+   * Rendered only when the merchant has switched the channel on for their
+   * popup (config.whatsappOptIn). The consent checkbox is the record Meta
+   * requires before a business may message someone, so its wording states
+   * plainly what the shopper is agreeing to — a pre-ticked box or vague copy
+   * would not be consent at all.
+   *
+   * Returns "" when disabled, so every template can interpolate it
+   * unconditionally.
+   */
+  function whatsappFieldsHtml(d) {
+    if (!config.whatsappOptIn) return "";
+    var label =
+      (d && d.whatsappLabel) ||
+      "Also send me WhatsApp updates about my order and offers";
+    return (
+      '<div class="rt-wa-optin">' +
+        '<input class="rt-wa-phone" type="tel" data-rt-phone autocomplete="tel" ' +
+          'placeholder="' + escapeHtml((d && d.phonePlaceholder) || "WhatsApp number (with country code)") + '">' +
+        '<label class="rt-wa-consent">' +
+          '<input type="checkbox" data-rt-wa-consent>' +
+          "<span>" + escapeHtml(label) + "</span>" +
+        "</label>" +
+      "</div>"
+    );
+  }
+
+  /** Styles for the opt-in block, neutral enough to sit in any template. */
+  var WA_OPTIN_CSS =
+    ".rt-wa-optin{margin:0 0 12px;display:flex;flex-direction:column;gap:8px}" +
+    ".rt-wa-phone{width:100%;height:38px;padding:0 12px;border:1px solid rgba(0,0,0,.25);border-radius:4px;font-family:inherit;font-size:13px;color:inherit;background:transparent;outline:none}" +
+    ".rt-wa-consent{display:flex;gap:8px;align-items:flex-start;font-size:11px;line-height:1.45;cursor:pointer;opacity:.85}" +
+    ".rt-wa-consent input{margin-top:2px;flex-shrink:0}";
+
   // Wire up the email-submit form inside any template. Each template's renderer
   // must expose an input with [data-rt-email], a submit button [data-rt-submit],
   // and a status node [data-rt-status].
@@ -404,6 +440,11 @@
     var input = modal.querySelector("[data-rt-email]");
     var btn = modal.querySelector("[data-rt-submit]");
     var status = modal.querySelector("[data-rt-status]");
+    // Optional WhatsApp opt-in fields, rendered only when the merchant has
+    // enabled the channel. Both are required together: a phone number is not
+    // consent, and a ticked box with no number is nothing to send to.
+    var phoneInput = modal.querySelector("[data-rt-phone]");
+    var waConsentInput = modal.querySelector("[data-rt-wa-consent]");
     if (!input || !btn) return;
 
     function submit() {
@@ -411,6 +452,14 @@
       if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
         input.style.outline = "2px solid #e00";
         input.focus();
+        return;
+      }
+
+      var phone = phoneInput ? (phoneInput.value || "").trim() : "";
+      var waConsent = !!(waConsentInput && waConsentInput.checked);
+      if (waConsent && phone.replace(/[^0-9]/g, "").length < 8) {
+        phoneInput.style.outline = "2px solid #e00";
+        phoneInput.focus();
         return;
       }
       var originalLabel = btn.textContent;
@@ -422,7 +471,13 @@
       fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: email, shop: config.shop, anonId: getAnonId() }),
+        body: JSON.stringify({
+          email: email,
+          shop: config.shop,
+          anonId: getAnonId(),
+          phone: phone,
+          whatsappConsent: waConsent,
+        }),
       })
         .then(function (r) { return r.json(); })
         .then(function () {
@@ -482,7 +537,7 @@
       ".rt-tpl-editorial-btn{background:#1F2A1E;color:#F4EDDE;padding:11px 16px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;border:none;cursor:pointer;font-family:inherit;font-weight:500;display:inline-flex;align-items:center;gap:8px}" +
       ".rt-tpl-editorial-fine{font-size:9px;color:#6B5C42;letter-spacing:.06em;margin-top:14px;line-height:1.5}" +
       ".rt-tpl-editorial-close{position:absolute;top:14px;right:14px;background:none;border:none;color:#1F2A1E;cursor:pointer;padding:4px;opacity:.7}" +
-      ".rt-tpl-editorial [data-rt-status]{display:none;background:#1F2A1E;color:#F4EDDE;padding:12px;font-size:12px;margin-top:12px;text-align:center}"
+      ".rt-tpl-editorial [data-rt-status]{display:none;background:#1F2A1E;color:#F4EDDE;padding:12px;font-size:12px;margin-top:12px;text-align:center}" + WA_OPTIN_CSS
     );
 
     return '<div class="rt-tpl-editorial" style="--ed-img:' + img + ';--ed-accent:' + accent + '">' +
@@ -495,6 +550,7 @@
         '<h2 class="rt-tpl-editorial-h">' + sanitizeRichHtml(d.headline) + '</h2>' +
         '<p class="rt-tpl-editorial-p">' + escapeHtml(d.body) + '</p>' +
         '<input class="rt-tpl-editorial-input" type="email" data-rt-email placeholder="' + escapeHtml(d.placeholder || "your address") + '" autocomplete="email">' +
+        whatsappFieldsHtml(d) +
         '<button class="rt-tpl-editorial-btn" data-rt-submit type="button">' + escapeHtml(d.cta || "Send my code") + ' →</button>' +
         '<div class="rt-tpl-editorial-fine">' + escapeHtml(d.fine) + '</div>' +
         '<div data-rt-status></div>' +
@@ -536,7 +592,7 @@
       ".rt-tpl-brutal-btn{background:var(--br-ink);color:var(--br-bg);border:2px solid var(--br-ink);font-family:'Archivo Black',sans-serif;font-size:13px;letter-spacing:.1em;padding:0 22px;cursor:pointer;text-transform:uppercase}" +
       ".rt-tpl-brutal-fine{font-size:10px;margin-top:12px;letter-spacing:.06em;opacity:.6;font-weight:500}" +
       ".rt-tpl-brutal-close{position:absolute;top:14px;right:14px;background:var(--br-bg);border:2px solid var(--br-ink);color:var(--br-ink);width:30px;height:30px;cursor:pointer;font-family:'Archivo Black',sans-serif;font-size:14px;display:flex;align-items:center;justify-content:center}" +
-      ".rt-tpl-brutal [data-rt-status]{display:none;color:var(--br-ink);font-size:13px;margin-top:12px;text-align:center;font-weight:700}"
+      ".rt-tpl-brutal [data-rt-status]{display:none;color:var(--br-ink);font-size:13px;margin-top:12px;text-align:center;font-weight:700}" + WA_OPTIN_CSS
     );
 
     return '<div class="rt-tpl-brutal" style="--br-bg:' + p.bg + ';--br-ink:' + p.ink + ';--br-shadow:' + p.shadow + '">' +
@@ -548,6 +604,7 @@
         '<div class="rt-tpl-brutal-sub">' + escapeHtml(d.sub) + '</div>' +
         '<div class="rt-tpl-brutal-form">' +
           '<input class="rt-tpl-brutal-input" type="email" data-rt-email placeholder="EMAIL@HERE.COM" autocomplete="email">' +
+          whatsappFieldsHtml(d) +
           '<button class="rt-tpl-brutal-btn" data-rt-submit type="button">' + escapeHtml(d.cta || "GET IT") + '</button>' +
         '</div>' +
         '<div class="rt-tpl-brutal-fine">' + escapeHtml(d.fine) + '</div>' +
@@ -602,7 +659,7 @@
       ".rt-tpl-wheel-btn{width:100%;background:linear-gradient(180deg,#FFE6A1 0%,#FFB347 100%);color:#3A1A4B;font-family:'DM Serif Display',serif;font-size:18px;border:none;height:46px;border-radius:999px;cursor:pointer;box-shadow:0 4px 0 #C58D2C,0 8px 24px rgba(0,0,0,.3);font-style:italic}" +
       ".rt-tpl-wheel-fine{font-size:10px;opacity:.5;margin-top:14px;letter-spacing:.04em}" +
       ".rt-tpl-wheel-close{position:absolute;top:12px;right:14px;background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.18);color:#FFF1D2;width:26px;height:26px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center}" +
-      ".rt-tpl-wheel [data-rt-status]{display:none;color:#FFF1D2;font-size:13px;margin-top:12px;text-align:center}"
+      ".rt-tpl-wheel [data-rt-status]{display:none;color:#FFF1D2;font-size:13px;margin-top:12px;text-align:center}" + WA_OPTIN_CSS
     );
 
     var sliceLabels = slices.map(function (s) { return String(s.label || ""); });
@@ -623,6 +680,7 @@
         '<h2 class="rt-tpl-wheel-h">' + escapeHtml(d.headline || "Take a chance.") + '</h2>' +
         '<p class="rt-tpl-wheel-p">' + escapeHtml(d.body) + '</p>' +
         '<input class="rt-tpl-wheel-input" type="email" data-rt-email placeholder="' + escapeHtml(d.placeholder || "Your email address") + '" autocomplete="email">' +
+        whatsappFieldsHtml(d) +
         '<button class="rt-tpl-wheel-btn" data-rt-submit type="button">' + escapeHtml(d.cta || "Spin the wheel") + '</button>' +
         '<div class="rt-tpl-wheel-fine">' + escapeHtml(d.fine) + '</div>' +
         '<div data-rt-status></div>' +
@@ -647,7 +705,7 @@
       ".rt-tpl-sticker-btn{width:100%;background:#FF6B6B;color:#FFF6E5;font-family:'Geist',sans-serif;font-weight:700;font-size:15px;border:1.5px solid #2A1F12;height:46px;border-radius:12px;cursor:pointer;box-shadow:3px 3px 0 #2A1F12;letter-spacing:.02em}" +
       ".rt-tpl-sticker-fine{font-size:10px;color:#8E7B5C;margin-top:10px;text-align:center;line-height:1.5}" +
       ".rt-tpl-sticker-close{position:absolute;top:12px;left:12px;background:#FFF6E5;border:1.5px solid #2A1F12;color:#2A1F12;width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;box-shadow:2px 2px 0 #2A1F12;z-index:4}" +
-      ".rt-tpl-sticker [data-rt-status]{display:none;font-size:13px;margin-top:12px;text-align:center;font-weight:700;color:#2A1F12}"
+      ".rt-tpl-sticker [data-rt-status]{display:none;font-size:13px;margin-top:12px;text-align:center;font-weight:700;color:#2A1F12}" + WA_OPTIN_CSS
     );
 
     return '<div class="rt-tpl-sticker">' +
@@ -662,6 +720,7 @@
       '<h2 class="rt-tpl-sticker-h">' + sanitizeRichHtml(d.headline) + '</h2>' +
       '<p class="rt-tpl-sticker-p">' + escapeHtml(d.body) + '</p>' +
       '<input class="rt-tpl-sticker-input" type="email" data-rt-email placeholder="' + escapeHtml(d.placeholder || "Drop your email here") + '" autocomplete="email">' +
+      whatsappFieldsHtml(d) +
       '<button class="rt-tpl-sticker-btn" data-rt-submit type="button">' + escapeHtml(d.cta || "Yes please!") + '</button>' +
       '<div class="rt-tpl-sticker-fine">' + escapeHtml(d.fine) + '</div>' +
       '<div data-rt-status></div>' +
@@ -716,7 +775,7 @@
       ".rt-tpl-holiday-btn{height:44px;background:var(--hd-accent);color:var(--hd-bg-solid);border:none;font-family:'DM Serif Display',serif;font-size:15px;letter-spacing:.08em;text-transform:uppercase;cursor:pointer;border-radius:2px}" +
       ".rt-tpl-holiday-fine{font-size:10px;opacity:.5;text-align:center;margin-top:14px;letter-spacing:.04em}" +
       ".rt-tpl-holiday-close{position:absolute;top:16px;right:16px;background:transparent;border:none;color:var(--hd-ink);cursor:pointer;opacity:.6;padding:4px;z-index:2}" +
-      ".rt-tpl-holiday [data-rt-status]{display:none;color:var(--hd-ink);font-size:13px;margin-top:12px;text-align:center}"
+      ".rt-tpl-holiday [data-rt-status]{display:none;color:var(--hd-ink);font-size:13px;margin-top:12px;text-align:center}" + WA_OPTIN_CSS
     );
 
     var html = '<div class="rt-tpl-holiday" style="--hd-bg:' + p.bg + ';--hd-bg-solid:' + p.bgSolid + ';--hd-ink:' + p.ink + ';--hd-accent:' + p.accent + ';--hd-line:' + p.line + '">' +
@@ -734,6 +793,7 @@
         '</div>' +
         '<div class="rt-tpl-holiday-form">' +
           '<input class="rt-tpl-holiday-input" type="email" data-rt-email placeholder="' + escapeHtml(d.placeholder || "your@email.com") + '" autocomplete="email">' +
+          whatsappFieldsHtml(d) +
           '<button class="rt-tpl-holiday-btn" data-rt-submit type="button">' + escapeHtml(d.cta || "Claim discount") + '</button>' +
         '</div>' +
         '<div class="rt-tpl-holiday-fine">' + escapeHtml(d.fine) + '</div>' +

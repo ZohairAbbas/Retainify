@@ -1,7 +1,10 @@
 import prisma from "../../db.server.js";
 import { sendPushNotification } from "./web-push.server.js";
-import { isInQuietHours } from "../journey/quiet-hours.server.js";
+import { isInQuietHours, quietHoursRetryDelay } from "../journey/quiet-hours.server.js";
 import { incrementUsage } from "../billing/entitlements.server.js";
+import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.server.js";
+import { settleEnrollmentIfFinished } from "../journey/journey-queue.server.js";
+import { stopShopSending, releaseClaimedJob } from "../journey/shop-work.server.js";
 
 async function claimDuePushJobs(limit = 20) {
   const now = new Date();
@@ -24,8 +27,23 @@ async function claimDuePushJobs(limit = 20) {
 }
 
 export async function runPushWorker() {
-  const jobs = await claimDuePushJobs(20);
-  if (!jobs.length) return;
+  const claimed = await claimDuePushJobs(20);
+  if (!claimed.length) return;
+
+  // Never send on behalf of a shop that has uninstalled or closed.
+  const { live: jobs, dead, holding } = await partitionByShopHealth(claimed);
+
+  const condemned = new Map();
+  for (const { job, status } of dead) condemned.set(job.shop, status);
+  for (const [shop, status] of condemned) {
+    const reason = cancelReasonFor(status);
+    const { jobs: cancelled } = await stopShopSending(shop, reason);
+    console.warn(`[push-worker] ${shop} — ${reason}; cancelled ${cancelled.total} queued jobs`);
+  }
+
+  for (const job of holding) {
+    await releaseClaimedJob("pushJob", job.id);
+  }
 
   for (const job of jobs) {
     try {
@@ -49,17 +67,43 @@ async function processPushJob(job) {
     return;
   }
 
+  // Channel switched off. The Push page renders its status straight from this
+  // flag, so without this check it displayed "Disabled" while notifications
+  // carried on going out — the toggle only ever governed the storefront
+  // permission prompt. Mirrors the WhatsApp worker's whatsappEnabled gate.
+  if (!settings.pushEnabled) {
+    console.warn(`[push-worker] job=${job.id} shop=${job.shop} push channel disabled — skipping`);
+    await markPushJobDone(job.id);
+    return;
+  }
+
   // Skip if enrollment exited
   if (enrollment.exitReason) {
     await markPushJobDone(job.id);
     return;
   }
 
-  // Quiet hours — reschedule 1h forward
+  // Honour the email suppression list. Push has no opt-out channel of its own
+  // beyond the browser permission, so an unsubscribe — the only "stop
+  // contacting me" signal a shopper can give us — has to bind every channel we
+  // send on, not just the one they happened to click it in.
+  const suppressed = await prisma.emailSuppression.findFirst({
+    where: { shop: job.shop, email: enrollment.contactEmail },
+  });
+  if (suppressed) {
+    console.warn(
+      `[push-worker] job=${job.id} recipient suppressed (${suppressed.reason}) — skipping`,
+    );
+    await markPushJobDone(job.id);
+    return;
+  }
+
+  // Inside quiet hours — defer, with jitter so the overnight backlog doesn't
+  // all become due in the same tick.
   if (isInQuietHours(settings.quietHoursStart, settings.quietHoursEnd, settings.storeTimezone)) {
     await prisma.pushJob.update({
       where: { id: job.id },
-      data: { status: "pending", scheduledFor: new Date(Date.now() + 60 * 60 * 1000) },
+      data: { status: "pending", scheduledFor: new Date(Date.now() + quietHoursRetryDelay()) },
     });
     return;
   }
@@ -82,11 +126,19 @@ async function processPushJob(job) {
   try { payload = JSON.parse(enrollment.payload); } catch { /* empty */ }
   const clickUrl = step.pushClickUrl || payload.recoveryUrl || "/";
 
+  // eslint-disable-next-line no-undef
+  const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/+$/, "");
+
   const pushPayload = {
     title: step.pushTitle || "New message",
     body: step.pushBody || "",
-    icon: step.pushIconUrl || undefined,
+    // The inspector's help text promises "defaults to store favicon if empty".
+    // It previously sent undefined, so that was simply untrue.
+    icon: step.pushIconUrl || `https://${job.shop}/favicon.ico`,
     url: clickUrl,
+    // Lets the service worker attribute a click back to this exact send.
+    jobId: job.id,
+    trackUrl: appUrl ? `${appUrl}/track/push-click` : "",
   };
 
   let anySuccess = false;
@@ -134,10 +186,11 @@ async function processPushJob(job) {
 }
 
 async function markPushJobDone(jobId, extras = {}) {
-  await prisma.pushJob.update({
+  const job = await prisma.pushJob.update({
     where: { id: jobId },
     data: { status: "done", ...extras },
   });
+  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
 }
 
 async function markPushJobFailed(jobId, error) {
@@ -150,4 +203,7 @@ async function markPushJobFailed(jobId, error) {
     where: { id: jobId },
     data: { status: newStatus, lastError: String(error).slice(0, 500), scheduledFor },
   });
+  if (newStatus === "failed") {
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+  }
 }

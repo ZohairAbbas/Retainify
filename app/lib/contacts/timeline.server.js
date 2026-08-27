@@ -272,7 +272,9 @@ export async function getContactPushes(shop, emailRaw) {
     title: j.step?.pushTitle || "",
     body: j.step?.pushBody || "",
     delivered: j.status === "done",
-    clicked: false,
+    // Was hardcoded false, which contradicted the "Push clicks" stat card
+    // directly above this table on the same page.
+    clicked: !!j.clickedAt,
   }));
 }
 

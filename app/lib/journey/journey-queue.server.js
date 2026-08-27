@@ -134,6 +134,14 @@ export async function exitEnrollment(enrollmentId, reason) {
       where: { enrollmentId, status: "pending" },
       data: { status: "cancelled" },
     }),
+    // PushJob was missing here. The push worker does re-check exitReason before
+    // sending, so nothing was delivered after an exit — but the rows stayed
+    // "pending", so every worker tick kept claiming them and the exit accounting
+    // never matched the other two queues.
+    prisma.pushJob.updateMany({
+      where: { enrollmentId, status: "pending" },
+      data: { status: "cancelled" },
+    }),
     prisma.whatsappJob.updateMany({
       where: { enrollmentId, status: "pending" },
       data: { status: "cancelled" },
@@ -175,11 +183,58 @@ export async function claimDueJourneyJobs(limit = 20) {
   return claimed;
 }
 
+/** A job that still owes the enrollment an outcome. */
+const LIVE_JOB = { status: { in: ["pending", "processing"] } };
+
+/**
+ * Close an enrollment once nothing is left to do for it.
+ *
+ * This used to live inline on the successful-send path in journey-worker, which
+ * meant an enrollment whose LAST job ended any other way was never closed at
+ * all: a permanently failed send, a suppressed recipient, a missing settings
+ * row. Those enrollments sat with completedAt null and exitReason "" forever,
+ * counting as in-flight in every report. 129 of them had accumulated.
+ *
+ * Living inside the mark*() helpers instead means every terminal transition
+ * settles the enrollment, including ones added later.
+ *
+ * Counts across all three queues, not just email. A journey mixing email and
+ * push is not finished while a push step is still queued, and closing it early
+ * would make the push worker skip the remaining sends outright — its first
+ * check is `if (enrollment.exitReason)`.
+ *
+ * @param {string} enrollmentId
+ * @param {{ at?: Date, failed?: boolean }} [options] failed marks the closing
+ *        job as a permanent failure, so the enrollment reads "ended_failed"
+ *        rather than claiming it completed.
+ * @returns {Promise<boolean>} whether this call closed the enrollment
+ */
+export async function settleEnrollmentIfFinished(enrollmentId, { at = new Date(), failed = false } = {}) {
+  if (!enrollmentId) return false;
+
+  const [emails, pushes, whatsapps] = await Promise.all([
+    prisma.journeyJob.count({ where: { enrollmentId, ...LIVE_JOB } }),
+    prisma.pushJob.count({ where: { enrollmentId, ...LIVE_JOB } }),
+    prisma.whatsappJob.count({ where: { enrollmentId, ...LIVE_JOB } }),
+  ]);
+  if (emails + pushes + whatsapps > 0) return false;
+
+  // Guarded on exitReason "" so an enrollment already closed for a real reason
+  // — exit criteria, an unsubscribe, a shop shutting down — keeps that reason
+  // rather than being overwritten with "completed" by a straggler job.
+  const { count } = await prisma.journeyEnrollment.updateMany({
+    where: { id: enrollmentId, exitReason: "" },
+    data: { completedAt: at, exitReason: failed ? "ended_failed" : "completed" },
+  });
+  return count > 0;
+}
+
 export async function markJourneyJobDone(jobId, extras = {}) {
-  await prisma.journeyJob.update({
+  const job = await prisma.journeyJob.update({
     where: { id: jobId },
     data: { status: "done", ...extras },
   });
+  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
 }
 
 export async function markJourneyJobFailed(jobId, error) {
@@ -192,4 +247,8 @@ export async function markJourneyJobFailed(jobId, error) {
     where: { id: jobId },
     data: { status: newStatus, lastError: String(error).slice(0, 500), scheduledFor },
   });
+  // Only a permanent failure ends anything; a retry still owes an outcome.
+  if (newStatus === "failed") {
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+  }
 }

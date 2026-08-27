@@ -1,19 +1,19 @@
 import { useCallback, useMemo, useState } from "react";
 import { redirect, useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import SegmentBuilder from "../components/segments/SegmentBuilder.jsx";
 import LivePreviewCard from "../components/segments/LivePreviewCard.jsx";
 import { listTagsForShop } from "../lib/contacts/tags.server.js";
 import { summarizeContacts } from "../lib/contacts/contacts.server.js";
 import { createSegment } from "../lib/segments/segments.server.js";
-import { FIELDS, OPERATORS, TEMPLATES } from "../lib/segments/fields.server.js";
+import { fieldsFor, OPERATORS, templatesFor } from "../lib/segments/fields.server.js";
 import { requireQuota } from "../lib/billing/gate.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const url = new URL(request.url);
 
   const templateId = url.searchParams.get("template");
@@ -21,7 +21,7 @@ export const loader = async ({ request }) => {
 
   let initial = null;
   if (templateId) {
-    const tpl = TEMPLATES.find((t) => t.id === templateId);
+    const tpl = templatesFor(ctx.isShopify).find((t) => t.id === templateId);
     if (tpl) {
       initial = { name: tpl.name, description: tpl.description, kind: "dynamic", filterTree: tpl.rules };
     }
@@ -48,7 +48,9 @@ export const loader = async ({ request }) => {
   ]);
 
   return Response.json({
-    fields: FIELDS,
+    // Commerce fields are hidden without a store — a rule on them would
+    // match nobody, permanently.
+    fields: fieldsFor(ctx.isShopify),
     operators: OPERATORS,
     tags,
     initial,
@@ -57,8 +59,8 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
 
   // Segment count is capped per plan (Free 1, Starter 5, Growth unlimited).

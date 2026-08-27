@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { redirect, useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import Icons from "../components/ui/Icons.jsx";
+import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import Avatar from "../components/contacts/Avatar.jsx";
 import StatusPill from "../components/contacts/StatusPill.jsx";
 import LifecyclePill from "../components/contacts/LifecyclePill.jsx";
@@ -44,17 +45,18 @@ import {
   removeTag,
 } from "../lib/contacts/tags.server.js";
 import { listSegmentsForContact } from "../lib/segments/segments.server.js";
+import { listProperties, setContactProperties } from "../lib/contacts/properties.server.js";
 
 export const loader = async ({ request, params }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
 
   const contact = await getContactById(shop, params.id);
   if (!contact) {
     throw new Response("Not found", { status: 404 });
   }
 
-  const [stats, timeline, carts, emails, pushes, journeys, allTags, pushSubs, lastSuppression, contactSegments] =
+  const [stats, timeline, carts, emails, pushes, journeys, allTags, pushSubs, lastSuppression, contactSegments, properties] =
     await Promise.all([
       getContactStats(shop, contact.email),
       buildTimeline(shop, contact.email),
@@ -71,11 +73,14 @@ export const loader = async ({ request, params }) => {
         orderBy: { createdAt: "desc" },
       }),
       listSegmentsForContact(shop, contact),
+      listProperties(shop),
     ]);
 
   return {
+    properties,
     contact: {
       id: contact.id,
+      customProps: contact.customProps || {},
       email: contact.email,
       name: contact.name,
       firstSeenAt: contact.firstSeenAt,
@@ -105,11 +110,17 @@ export const loader = async ({ request, params }) => {
 };
 
 export const action = async ({ request, params }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
   const contactId = String(fd.get("contactId") || params.id);
+
+  if (intent === "set_property") {
+    return setContactProperties(shop, params.id, {
+      [String(fd.get("key") || "")]: String(fd.get("value") ?? ""),
+    });
+  }
 
   if (intent === "apply_tag") {
     const tagId = String(fd.get("tagId") || "");
@@ -167,11 +178,13 @@ export default function ContactProfilePage() {
     allTags,
     lastSuppressedAt,
     contactSegments,
+    properties = [],
   } = useLoaderData();
   const navigate = useNavigate();
   const fetcher = useFetcher();
   const [tab, setTab] = useState("timeline");
   const [kebab, setKebab] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(contact.name || "");
 
@@ -248,10 +261,8 @@ export default function ContactProfilePage() {
                     type="button"
                     className="rt-menu-danger"
                     onClick={() => {
-                      if (window.confirm("Delete this contact?")) {
-                        setKebab(false);
-                        submitIntent("delete");
-                      }
+                      setKebab(false);
+                      setConfirmDelete(true);
                     }}
                   >
                     <Icons.Trash size={14} /> Delete contact
@@ -392,9 +403,21 @@ export default function ContactProfilePage() {
           <SubscriptionCard contact={contact} />
           <SegmentsCard segments={contactSegments} />
           <JourneysCard active={journeys.active} past={journeys.past} />
-          <CustomPropsCard />
+          <CustomPropsCard properties={properties} values={contact.customProps} />
         </aside>
       </div>
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title="Delete this contact?"
+          body={`${contact.email} will be removed from your list and from every segment. Their suppression history is kept, so a deleted contact who had unsubscribed stays unsubscribed.`}
+          confirmLabel="Delete"
+          destructive
+          loading={fetcher.state !== "idle"}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => { setConfirmDelete(false); submitIntent("delete"); }}
+        />
+      )}
     </div>
   );
 }

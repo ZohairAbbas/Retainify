@@ -6,7 +6,7 @@ import FitToParent from "./FitToParent.jsx";
 import StorefrontFrame from "./StorefrontFrame.jsx";
 import TemplateSwitcher from "./TemplateSwitcher.jsx";
 
-export default function PopupEditor({ initialDraft, onSave, onCancel, onSwitchTemplate, saving }) {
+export default function PopupEditor({ storeDomain = "", storeName = "", initialDraft, onSave, onCancel, onSwitchTemplate, saving }) {
   const [draft, setDraft] = useState(initialDraft);
   const [device, setDevice] = useState("desktop");
   const [showSwitcher, setShowSwitcher] = useState(false);
@@ -80,7 +80,7 @@ export default function PopupEditor({ initialDraft, onSave, onCancel, onSwitchTe
             <div className="rt-pop-preview-stage-big">
               <FitToParent naturalWidth={nw} naturalHeight={nh}>
                 <div style={{ width: nw, height: nh }}>
-                  <StorefrontFrame device={device} dim={draft.template !== "custom"}>
+                  <StorefrontFrame device={device} dim={draft.template !== "custom"} storeDomain={storeDomain} storeName={storeName}>
                     <template.Render data={draft} />
                   </StorefrontFrame>
                 </div>

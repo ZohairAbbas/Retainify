@@ -1,0 +1,111 @@
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><link rel="preconnect" href="https://cdn.shopify.com/"/><script src="https://cdn.shopify.com/shopifycloud/app-bridge.js" data-api-key="772b207205dcd34f8f3eb724972869cc"></script><link rel="preconnect" href="https://fonts.googleapis.com"/><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"/><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&amp;family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;family=Archivo+Black&amp;family=Caveat:wght@500;700&amp;family=DM+Serif+Display:ital@0;1&amp;display=swap"/><link rel="stylesheet" href="/assets/tokens-B0hmR3dI.css"/><link rel="stylesheet" href="/assets/retainify-Dy_lQZ8B.css"/><link rel="stylesheet" href="/assets/segments-Dco24ZCe.css"/><link rel="stylesheet" href="/assets/auth-CxCMG6cm.css"/></head><body><div>Handling response</div><script>((storageKey2, restoreKey) => {
+    if (!window.history.state || !window.history.state.key) {
+      let key = Math.random().toString(32).slice(2);
+      window.history.replaceState({ key }, "");
+    }
+    try {
+      let positions = JSON.parse(sessionStorage.getItem(storageKey2) || "{}");
+      let storedY = positions[restoreKey || window.history.state.key];
+      if (typeof storedY === "number") {
+        window.scrollTo(0, storedY);
+      }
+    } catch (error) {
+      console.error(error);
+      sessionStorage.removeItem(storageKey2);
+    }
+  })("react-router-scroll-positions", null)</script><link rel="modulepreload" href="/assets/entry.client-CqY-Ae9g.js"/><link rel="modulepreload" href="/assets/jsx-runtime-BMHKIdFM.js"/><link rel="modulepreload" href="/assets/chunk-EVOBXE3Y-DLlfRSDo.js"/><link rel="modulepreload" href="/assets/root-BCUp65ij.js"/><link rel="modulepreload" href="/assets/app-CWoAbRkn.js"/><link rel="modulepreload" href="/assets/index-D1m3EVlB.js"/><link rel="modulepreload" href="/assets/AppProxyProvider-BoeIZcX_.js"/><link rel="modulepreload" href="/assets/Icons-DmxOK4Vm.js"/><link rel="modulepreload" href="/assets/app._index-CFeEz3-A.js"/><script>window.__reactRouterContext = {"basename":"/","future":{"unstable_optimizeDeps":false,"unstable_passThroughRequests":false,"unstable_subResourceIntegrity":false,"unstable_trailingSlashAwareDataRequests":false,"unstable_previewServerPrerendering":false,"v8_middleware":false,"v8_splitRouteModules":false,"v8_viteEnvironmentApi":false},"routeDiscovery":{"mode":"lazy","manifestPath":"/__manifest"},"ssr":true,"isSpaMode":false};window.__reactRouterContext.stream = new ReadableStream({start(controller){window.__reactRouterContext.streamController = controller;}}).pipeThrough(new TextEncoderStream());</script><script type="module" async="">;
+import * as route0 from "/assets/root-BCUp65ij.js";
+import * as route1 from "/assets/app-CWoAbRkn.js";
+import * as route2 from "/assets/app._index-CFeEz3-A.js";
+  window.__reactRouterManifest = {
+  "entry": {
+    "module": "/assets/entry.client-CqY-Ae9g.js",
+    "imports": [
+      "/assets/jsx-runtime-BMHKIdFM.js",
+      "/assets/chunk-EVOBXE3Y-DLlfRSDo.js"
+    ],
+    "css": []
+  },
+  "routes": {
+    "root": {
+      "id": "root",
+      "path": "",
+      "hasAction": false,
+      "hasLoader": true,
+      "hasClientAction": false,
+      "hasClientLoader": false,
+      "hasClientMiddleware": false,
+      "hasDefaultExport": true,
+      "hasErrorBoundary": false,
+      "module": "/assets/root-BCUp65ij.js",
+      "imports": [
+        "/assets/jsx-runtime-BMHKIdFM.js",
+        "/assets/chunk-EVOBXE3Y-DLlfRSDo.js"
+      ],
+      "css": []
+    },
+    "routes/app": {
+      "id": "routes/app",
+      "parentId": "root",
+      "path": "app",
+      "hasAction": true,
+      "hasLoader": true,
+      "hasClientAction": false,
+      "hasClientLoader": false,
+      "hasClientMiddleware": false,
+      "hasDefaultExport": true,
+      "hasErrorBoundary": true,
+      "module": "/assets/app-CWoAbRkn.js",
+      "imports": [
+        "/assets/chunk-EVOBXE3Y-DLlfRSDo.js",
+        "/assets/jsx-runtime-BMHKIdFM.js",
+        "/assets/index-D1m3EVlB.js",
+        "/assets/AppProxyProvider-BoeIZcX_.js",
+        "/assets/Icons-DmxOK4Vm.js"
+      ],
+      "css": []
+    },
+    "routes/app._index": {
+      "id": "routes/app._index",
+      "parentId": "routes/app",
+      "index": true,
+      "hasAction": false,
+      "hasLoader": true,
+      "hasClientAction": false,
+      "hasClientLoader": false,
+      "hasClientMiddleware": false,
+      "hasDefaultExport": true,
+      "hasErrorBoundary": false,
+      "module": "/assets/app._index-CFeEz3-A.js",
+      "imports": [
+        "/assets/chunk-EVOBXE3Y-DLlfRSDo.js",
+        "/assets/jsx-runtime-BMHKIdFM.js",
+        "/assets/Icons-DmxOK4Vm.js"
+      ],
+      "css": []
+    },
+    "routes/_index": {
+      "id": "routes/_index",
+      "parentId": "root",
+      "index": true,
+      "hasAction": false,
+      "hasLoader": true,
+      "hasClientAction": false,
+      "hasClientLoader": false,
+      "hasClientMiddleware": false,
+      "hasDefaultExport": true,
+      "hasErrorBoundary": false,
+      "module": "/assets/route-BdziQoGu.js",
+      "imports": [
+        "/assets/chunk-EVOBXE3Y-DLlfRSDo.js",
+        "/assets/jsx-runtime-BMHKIdFM.js"
+      ],
+      "css": []
+    }
+  },
+  "url": "/assets/manifest-c0e53241.js",
+  "version": "c0e53241"
+};
+  window.__reactRouterRouteModules = {"root":route0,"routes/app":route1,"routes/app._index":route2};
+
+import("/assets/entry.client-CqY-Ae9g.js");</script></body></html><!--$--><script>window.__reactRouterContext.streamController.enqueue("[{\"_1\":2,\"_3\":-5,\"_4\":5},\"loaderData\",{\"_18\":19},\"actionData\",\"errors\",{\"_6\":7},\"routes/app\",{\"_8\":9,\"_10\":11,\"_12\":13,\"_14\":15,\"_16\":17},\"status\",410,\"statusText\",\"Gone\",\"internal\",false,\"data\",\"\",\"__type\",\"RouteErrorResponse\",\"root\",{\"_20\":21,\"_22\":23},\"embedded\",true,\"apiKey\",\"772b207205dcd34f8f3eb724972869cc\"]\n");</script><!--$--><script>window.__reactRouterContext.streamController.close();</script><!--/$--><!--/$-->

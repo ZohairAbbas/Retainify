@@ -24,6 +24,16 @@ module.exports = {
   // Base config
   extends: ["eslint:recommended"],
 
+  rules: {
+    // The leading underscore is the deliberate "I am destructuring this out and
+    // discarding it" convention — e.g. spread-and-omit when copying a database
+    // row. Reporting those buries the genuinely unused variables.
+    "no-unused-vars": [
+      "error",
+      { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+    ],
+  },
+
   overrides: [
     // React
     {
@@ -77,6 +87,11 @@ module.exports = {
     },
 
     // Node
+    //
+    // Route modules are server code too — their loaders and actions run in Node
+    // and legitimately read process.env. Without them listed here every such
+    // access was reported as `no-undef`, which buried the real findings under
+    // false ones and is why the lint script wasn't gating anything.
     {
       files: [
         ".eslintrc.cjs",
@@ -84,6 +99,9 @@ module.exports = {
         ".graphqlrc.{js,ts}",
         "shopify.server.{js,ts}",
         "**/*.server.{js,ts}",
+        "app/routes/**/*.{js,jsx,ts,tsx}",
+        "app/root.{js,jsx,ts,tsx}",
+        "app/entry.server.{js,jsx,ts,tsx}",
       ],
       env: {
         node: true,

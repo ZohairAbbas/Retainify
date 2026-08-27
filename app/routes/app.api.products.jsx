@@ -1,9 +1,8 @@
-import { authenticate } from "../shopify.server.js";
+import { requireShopifyAdmin } from "../lib/auth/require.server.js";
 import { searchProducts, getProductsByIds } from "../lib/shopify/products.server.js";
 
 export const loader = async ({ request }) => {
-  const { admin, session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const { admin, shop } = await requireShopifyAdmin(request);
   const url = new URL(request.url);
   const ids = url.searchParams.getAll("id");
 

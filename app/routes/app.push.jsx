@@ -1,26 +1,56 @@
 import { useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
 import { sendPushNotification } from "../lib/push/web-push.server.js";
 import Icons from "../components/ui/Icons.jsx";
+import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  // Gate below: this whole page depends on a storefront.
+  if (!ctx.isShopify) return { storefrontOnly: true };
+  const { shop } = ctx;
 
-  const [settings, subCount] = await Promise.all([
+  const [settings, subCount, recent] = await Promise.all([
     prisma.shopSettings.findUnique({ where: { shop } }),
     prisma.pushSubscription.count({ where: { shop, isActive: true } }),
+    // Candidates for a test send. Named subscribers first — a merchant testing
+    // on themselves will have subscribed with their own address.
+    prisma.pushSubscription.findMany({
+      where: { shop, isActive: true },
+      orderBy: [{ contactEmail: "asc" }, { subscribedAt: "desc" }],
+      take: 50,
+      select: { id: true, contactEmail: true, endpoint: true, subscribedAt: true },
+    }),
   ]);
 
-  return { settings: settings ?? {}, subCount };
+  return {
+    settings: settings ?? {},
+    subCount,
+    storeDomain: shop.replace(".myshopify.com", ""),
+    subscribers: recent.map((s) => ({
+      id: s.id,
+      label: s.contactEmail || `Anonymous device · ${hostOf(s.endpoint)}`,
+      isNamed: !!s.contactEmail,
+      subscribedAt: s.subscribedAt,
+    })),
+  };
 };
 
+/** Push endpoints are per-browser URLs; the host identifies the browser vendor. */
+function hostOf(endpoint) {
+  try {
+    return new URL(endpoint).host.replace(/^(fcm|updates|wns)\./, "");
+  } catch {
+    return "unknown";
+  }
+}
+
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
 
@@ -34,41 +64,54 @@ export const action = async ({ request }) => {
     return { ok: true, toggled: true };
   }
 
+  // Send a test to ONE chosen subscription.
+  //
+  // This used to take the first five active subscriptions and broadcast to all
+  // of them — so "Send test" put the merchant's draft copy in front of five real
+  // shoppers. Web push has no address to type into (a push can only reach a
+  // browser that granted permission), so the honest equivalent of "email it to
+  // myself" is choosing the target explicitly.
   if (intent === "send-test") {
     const title = String(fd.get("title") || "Test notification");
     const body = String(fd.get("body") || "This is a test push from Retainify.");
     const url = String(fd.get("url") || "/");
+    const subscriptionId = String(fd.get("subscriptionId") || "");
 
-    const subs = await prisma.pushSubscription.findMany({
-      where: { shop, isActive: true },
-      take: 5,
-    });
-
-    if (!subs.length) return { ok: false, error: "No active subscribers yet." };
-
-    let sent = 0;
-    for (const sub of subs) {
-      const result = await sendPushNotification(
-        { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
-        { title, body, url },
-      );
-      if (result.ok) sent++;
-      if (result.gone) {
-        await prisma.pushSubscription.update({
-          where: { id: sub.id },
-          data: { isActive: false, unsubscribedAt: new Date() },
-        });
-      }
+    if (!subscriptionId) {
+      return { ok: false, error: "Choose which device to send the test to." };
     }
 
-    return { ok: true, sent };
+    const sub = await prisma.pushSubscription.findFirst({
+      where: { id: subscriptionId, shop, isActive: true },
+    });
+    if (!sub) {
+      return { ok: false, error: "That device is no longer subscribed. Pick another." };
+    }
+
+    const result = await sendPushNotification(
+      { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
+      { title, body, url },
+    );
+
+    if (result.gone) {
+      await prisma.pushSubscription.update({
+        where: { id: sub.id },
+        data: { isActive: false, unsubscribedAt: new Date() },
+      });
+      return { ok: false, error: "That device has unsubscribed — it's been removed from your list." };
+    }
+    if (!result.ok) {
+      return { ok: false, error: result.error || "The push service rejected this send." };
+    }
+
+    return { ok: true, sent: 1, to: sub.contactEmail || "the selected device" };
   }
 
   return { ok: false };
 };
 
-export default function PushPage() {
-  const { settings, subCount } = useLoaderData();
+function PushPageInner() {
+  const { settings, subCount, subscribers = [], storeDomain } = useLoaderData();
   const toggleFetcher = useFetcher();
   const testFetcher = useFetcher();
 
@@ -80,6 +123,7 @@ export default function PushPage() {
   const [title, setTitle] = useState("Hello from Retainify");
   const [body, setBody] = useState("Your cart is waiting for you.");
   const [url, setUrl] = useState("/");
+  const [subscriptionId, setSubscriptionId] = useState("");
 
   function toggleEnabled() {
     toggleFetcher.submit({ intent: "toggle-push-enabled" }, { method: "post" });
@@ -87,7 +131,7 @@ export default function PushPage() {
 
   function sendTest() {
     testFetcher.submit(
-      { intent: "send-test", title, body, url },
+      { intent: "send-test", title, body, url, subscriptionId },
       { method: "post" },
     );
   }
@@ -194,6 +238,36 @@ export default function PushPage() {
                 <div className="field-help">Where the visitor lands when they tap the notification.</div>
               </div>
 
+              <div>
+                <label className="field-label" htmlFor="rt-push-target">Send this test to</label>
+                <select
+                  id="rt-push-target"
+                  className="select"
+                  value={subscriptionId}
+                  onChange={(e) => setSubscriptionId(e.target.value)}
+                >
+                  <option value="">Choose a device…</option>
+                  {subscribers.map((sub) => (
+                    <option key={sub.id} value={sub.id}>{sub.label}</option>
+                  ))}
+                </select>
+                {subscribers.length === 0 ? (
+                  <div className="field-help">
+                    Nobody has subscribed yet. To test on yourself, open{" "}
+                    <strong>{storeDomain}</strong> in another tab, submit the popup,
+                    and allow notifications when your browser asks — your browser
+                    then appears in this list.
+                  </div>
+                ) : (
+                  <div className="field-help">
+                    A push can only reach a browser that has already allowed
+                    notifications, so there&apos;s no address to type in.{" "}
+                    <strong>This goes to a real person</strong> — pick your own
+                    device unless you mean to reach that subscriber.
+                  </div>
+                )}
+              </div>
+
               {testResult?.ok === true && testResult.sent !== undefined && (
                 <div
                   className="t-small"
@@ -204,7 +278,7 @@ export default function PushPage() {
                     borderRadius: "var(--r-2)",
                   }}
                 >
-                  Sent to {testResult.sent} subscriber{testResult.sent !== 1 ? "s" : ""}.
+                  Test sent to {testResult.to}.
                 </div>
               )}
               {testResult?.ok === false && testResult.error && (
@@ -227,7 +301,7 @@ export default function PushPage() {
             <button
               className="btn btn-primary"
               onClick={sendTest}
-              disabled={sending || subCount === 0}
+              disabled={sending || !subscriptionId}
             >
               {Icons.Send && <Icons.Send size={14} />}
               {sending ? "Sending…" : "Send test"}
@@ -247,7 +321,7 @@ export default function PushPage() {
             alignItems: "flex-start",
             justifyContent: "center",
           }}>
-            <NotificationPreview title={title} body={body} url={url} />
+            <NotificationPreview title={title} body={body} url={url} storeDomain={storeDomain} />
           </div>
         </div>
       </div>
@@ -255,7 +329,16 @@ export default function PushPage() {
   );
 }
 
-function NotificationPreview({ title, body, url }) {
+/** A malformed URL must not throw inside a live preview. */
+function safeHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return url;
+  }
+}
+
+function NotificationPreview({ title, body, url, storeDomain }) {
   return (
     <div
       style={{
@@ -338,7 +421,8 @@ function NotificationPreview({ title, body, url }) {
             whiteSpace: "nowrap",
           }}
         >
-          {(url && url.startsWith("http") ? new URL(url).hostname : "yourstore.com")}
+          {/* Falls back to the merchant's own domain, not a placeholder one. */}
+          {(url && url.startsWith("http") ? safeHost(url) : storeDomain || "your-store.com")}
           {url && !url.startsWith("http") && url}
         </div>
       </div>
@@ -347,3 +431,17 @@ function NotificationPreview({ title, body, url }) {
 }
 
 export const headers = (headersArgs) => boundary.headers(headersArgs);
+
+export default function PushPage() {
+  // A direct workspace can still reach this URL by bookmark or shared link.
+  const data = useLoaderData();
+  if (data?.storefrontOnly) {
+    return (
+      <StorefrontOnly
+        feature="Web push notifications"
+        what="Push sends browser notifications through a service worker installed by the storefront theme."
+      />
+    );
+  }
+  return <PushPageInner />;
+}

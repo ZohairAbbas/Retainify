@@ -1,6 +1,13 @@
 import Icons from "../ui/Icons.jsx";
 
-export default function ContactsEmpty({ onSync, onAdd }) {
+/**
+ * `onSync` is null for a workspace with no connected store — the sync button and
+ * every "your storefront fills this in for you" promise come off with it, because
+ * for a direct workspace an import is the only way contacts get here.
+ */
+export default function ContactsEmpty({ onSync, onAdd, onImport }) {
+  const isShopify = !!onSync;
+
   return (
     <div className="rt-empty">
       <div className="rt-empty-art">
@@ -27,51 +34,53 @@ export default function ContactsEmpty({ onSync, onAdd }) {
         .
       </h2>
       <p className="rt-empty-lede">
-        Contacts appear here when someone subscribes through your popup, abandons a cart,
-        places an order, or opts in to push. Sync your Shopify customers to get started.
+        {isShopify
+          ? "Contacts appear here when someone subscribes through your popup, abandons a cart, places an order, or opts in to push. Sync your Shopify customers to get started."
+          : "Bring in the list you already have. Upload a CSV and map your own columns — names, tags and custom fields come across intact."}
       </p>
       <div className="rt-empty-actions">
-        <button type="button" className="btn btn-primary btn-lg" onClick={onSync}>
-          <Icons.Refresh size={14} /> Sync from Shopify
-        </button>
+        {isShopify ? (
+          <button type="button" className="btn btn-primary btn-lg" onClick={onSync}>
+            <Icons.Refresh size={14} /> Sync from Shopify
+          </button>
+        ) : (
+          <button type="button" className="btn btn-primary btn-lg" onClick={onImport}>
+            <Icons.Upload size={14} /> Import a CSV
+          </button>
+        )}
         <button type="button" className="btn btn-ghost btn-lg" onClick={onAdd}>
           <Icons.Plus size={14} /> Add a contact
         </button>
       </div>
       <div className="rt-empty-tips">
-        <div className="rt-empty-tip">
-          <Icons.Mail size={16} />
-          <div>
-            <strong>Popups</strong>
-            <br />
-            <span className="muted">New subscribers land here automatically.</span>
-          </div>
-        </div>
-        <div className="rt-empty-tip">
-          <Icons.Cart size={16} />
-          <div>
-            <strong>Carts</strong>
-            <br />
-            <span className="muted">Anyone who reaches checkout gets a record.</span>
-          </div>
-        </div>
-        <div className="rt-empty-tip">
-          <Icons.Bell size={16} />
-          <div>
-            <strong>Push</strong>
-            <br />
-            <span className="muted">Anonymous push subscribers, too.</span>
-          </div>
-        </div>
-        <div className="rt-empty-tip">
-          <Icons.Refresh size={16} />
-          <div>
-            <strong>Shopify sync</strong>
-            <br />
-            <span className="muted">Backfill all existing customers in one go.</span>
-          </div>
-        </div>
+        {(isShopify ? SHOPIFY_TIPS : DIRECT_TIPS).map((t) => {
+          const Ic = Icons[t.icon];
+          return (
+            <div className="rt-empty-tip" key={t.title}>
+              <Ic size={16} />
+              <div>
+                <strong>{t.title}</strong>
+                <br />
+                <span className="muted">{t.body}</span>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
+
+const SHOPIFY_TIPS = [
+  { icon: "Mail", title: "Popups", body: "New subscribers land here automatically." },
+  { icon: "Cart", title: "Carts", body: "Anyone who reaches checkout gets a record." },
+  { icon: "Bell", title: "Push", body: "Anonymous push subscribers, too." },
+  { icon: "Refresh", title: "Shopify sync", body: "Backfill all existing customers in one go." },
+];
+
+const DIRECT_TIPS = [
+  { icon: "Upload", title: "CSV import", body: "Map your columns once; we remember the mapping." },
+  { icon: "Sliders", title: "Custom fields", body: "Any column you import becomes filterable." },
+  { icon: "Users", title: "Segments", body: "Rules over those fields, re-evaluated continuously." },
+  { icon: "Mail", title: "Broadcasts", body: "Send to a segment and track every open and click." },
+];

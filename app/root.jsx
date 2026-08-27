@@ -2,9 +2,19 @@ import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from "
 import tokenStyles from "./styles/tokens.css?url";
 import retainifyStyles from "./styles/retainify.css?url";
 import segmentsStyles from "./styles/segments.css?url";
+import authStyles from "./styles/auth.css?url";
+import { looksLikeShopify } from "./lib/auth/require.server.js";
 
-export const loader = async () => {
-  return { apiKey: process.env.SHOPIFY_API_KEY || "" };
+export const loader = async ({ request }) => {
+  // App Bridge is loaded only for requests that actually came from the Shopify
+  // admin. On our own domain the script has no host to talk to: it warns in the
+  // console, and — worse — its frame-ancestors expectations are irrelevant to a
+  // standalone page, so shipping it there is pure cost and confusion.
+  const embedded = looksLikeShopify(request);
+  return {
+    embedded,
+    apiKey: embedded ? process.env.SHOPIFY_API_KEY || "" : "",
+  };
 };
 
 export const links = () => [
@@ -17,21 +27,26 @@ export const links = () => [
   { rel: "stylesheet", href: tokenStyles },
   { rel: "stylesheet", href: retainifyStyles },
   { rel: "stylesheet", href: segmentsStyles },
+  { rel: "stylesheet", href: authStyles },
 ];
 
 export default function App() {
-  const { apiKey } = useLoaderData();
+  const { apiKey, embedded } = useLoaderData();
 
   return (
     <html lang="en">
       <head>
         <meta charSet="utf-8" />
         <meta name="viewport" content="width=device-width,initial-scale=1" />
-        <link rel="preconnect" href="https://cdn.shopify.com/" />
-        <script
-          src="https://cdn.shopify.com/shopifycloud/app-bridge.js"
-          data-api-key={apiKey}
-        />
+        {embedded && (
+          <>
+            <link rel="preconnect" href="https://cdn.shopify.com/" />
+            <script
+              src="https://cdn.shopify.com/shopifycloud/app-bridge.js"
+              data-api-key={apiKey}
+            />
+          </>
+        )}
         <Meta />
         <Links />
       </head>

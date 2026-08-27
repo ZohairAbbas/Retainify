@@ -18,11 +18,43 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   font-family: var(--font-display); font-size: 13px; font-weight: 400;
   flex-shrink: 0;
 }
-.rt-retainify-subnav { display: flex; flex-direction: column; gap: 1px; }
-.rt-subnav-item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 5px; font-size: 12.5px; color: var(--ink-2); cursor: pointer; transition: background var(--t-fast) var(--ease); }
-.rt-subnav-item:hover { background: rgba(0,0,0,0.04); color: var(--ink-1); }
-.rt-subnav-item.rt-on { background: var(--paper-2); color: var(--brand-700); font-weight: 500; }
+.rt-retainify-subnav { display: flex; flex-direction: column; gap: 2px; }
+.rt-subnav-item {
+  position: relative;
+  display: flex; align-items: center; gap: 10px;
+  /* Extra left padding leaves room for the active rail, so the label doesn't
+     shift horizontally when an item becomes active. */
+  padding: 7px 10px 7px 12px;
+  border-radius: 6px;
+  font-size: 12.5px; color: var(--ink-2);
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease), color var(--t-fast) var(--ease);
+}
+.rt-subnav-item:hover { background: rgba(31, 61, 47, 0.06); color: var(--ink-1); }
+
+/* Active item.
+   The background used to be --paper-2, which is the sidebar's own colour — so
+   the "highlight" was invisible and only a faint colour shift marked the current
+   page. It now uses the brand tint plus a left rail, which reads at a glance. */
+.rt-subnav-item.rt-on {
+  background: var(--brand-100);
+  color: var(--brand-700);
+  font-weight: 600;
+}
+.rt-subnav-item.rt-on::before {
+  content: "";
+  position: absolute;
+  left: 3px; top: 50%; transform: translateY(-50%);
+  width: 3px; height: 16px; border-radius: 2px;
+  background: var(--brand-700);
+}
+.rt-subnav-item.rt-on:hover { background: var(--brand-100); }
 .rt-subnav-item.rt-on svg { color: var(--brand-700); }
+
+/* Collapsed rail: the ::before bar would collide with the centred icon. */
+.rt-subnav-item.rt-collapsed { padding: 8px 0; justify-content: center; }
+.rt-subnav-item.rt-collapsed::before { display: none; }
+.rt-subnav-item.rt-collapsed.rt-on { box-shadow: inset 0 0 0 1px var(--brand-700); }
 
 /* ── Flows list page ────────────────────────────────────────────────────── */
 .rt-page { max-width: 1320px; margin: 0 auto; padding: 40px 48px 80px; }
@@ -48,9 +80,11 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 
 .rt-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 16px; }
 .rt-chips { display: flex; gap: 6px; }
+/* 36px matches .btn — these sit on the same toolbar row and were 4px shorter,
+   which read as sloppy alignment wherever the two appear together. */
 .rt-chip {
   display: inline-flex; align-items: center; gap: 8px;
-  height: 32px; padding: 0 12px;
+  height: 36px; padding: 0 14px;
   background: var(--paper-3); border: 1px solid var(--hair-1);
   border-radius: var(--r-pill);
   font-size: 13px; color: var(--ink-2);
@@ -61,7 +95,14 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-chip-count { font-family: var(--font-mono); font-size: 11px; background: rgba(0,0,0,0.06); padding: 0 6px; border-radius: 10px; }
 .rt-chip-on .rt-chip-count { background: rgba(255,255,255,0.12); color: var(--on-brand); }
 
-.rt-search { display: flex; align-items: center; gap: 8px; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-2); padding: 0 12px; height: 32px; width: 280px; color: var(--ink-3); }
+.rt-search {
+  display: flex; align-items: center; gap: 8px;
+  background: var(--paper-3); border: 1px solid var(--hair-1);
+  border-radius: var(--r-3);
+  padding: 0 12px; height: 36px; width: 280px;
+  color: var(--ink-3);
+}
+.rt-search:focus-within { border-color: var(--ink-3); }
 .rt-search input { background: transparent; border: 0; outline: none; flex: 1; font-size: 13px; color: var(--ink-1); }
 
 /* Table */
@@ -84,8 +125,23 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-tnum { font-size: 13px; color: var(--ink-1); }
 .rt-tactions { display: flex; justify-content: flex-end; position: relative; }
 .rt-menu { position: absolute; top: 36px; right: 0; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-3); box-shadow: var(--sh-3); padding: 4px; min-width: 160px; z-index: 5; }
-.rt-menu button { display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 10px; background: transparent; border: 0; border-radius: var(--r-2); font-size: 13px; color: var(--ink-1); text-align: left; }
-.rt-menu button:hover { background: var(--paper-2); }
+/* Menu rows. Anchors are styled alongside buttons because a file download has
+   to be a real <a download> — a fetcher can't hand the browser a file — and an
+   unstyled anchor sat misaligned next to its sibling buttons. */
+.rt-menu button,
+.rt-menu a {
+  display: flex; align-items: center; gap: 10px;
+  width: 100%; padding: 8px 10px;
+  background: transparent; border: 0; border-radius: var(--r-2);
+  font-size: 13px; color: var(--ink-1);
+  text-align: left; text-decoration: none;
+  font-family: inherit; cursor: pointer;
+  box-sizing: border-box;
+}
+.rt-menu button:hover,
+.rt-menu a:hover { background: var(--paper-2); color: var(--ink-1); }
+.rt-menu button svg,
+.rt-menu a svg { flex-shrink: 0; }
 .rt-menu-danger { color: var(--danger-ink) !important; }
 .rt-empty-row { padding: 40px; text-align: center; color: var(--ink-3); font-size: 13px; }
 .rt-link { background: transparent; border: 0; color: var(--brand-700); font-weight: 500; cursor: pointer; text-decoration: underline; }
@@ -601,11 +657,42 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   display: flex; justify-content: center; align-items: flex-start;
   padding: 24px;
 }
+/* The preview iframe is sized in JS to the email's own dimensions, then scaled
+   to the emulated device width — so no width/height/min-height here, or it
+   would fight the measurement. The shell below is what has a visible size. */
 .rt-emb-html-frame {
-  border: 1px solid var(--hair-1); border-radius: 8px;
+  border: 0;
   background: #FFFFFF;
-  width: 100%; max-width: 640px; height: 100%; min-height: 640px;
+  display: block;
+}
+
+.rt-emb-preview-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Clips the scaled iframe to exactly the emulated device viewport. `overflow:
+   hidden` is the point: the iframe inside is laid out at the email's real
+   width and transformed down, and without clipping its untransformed box would
+   still claim the extra space. */
+.rt-emb-preview-shell {
+  overflow: hidden;
+  background: #FFFFFF;
+  border: 1px solid var(--hair-1);
+  border-radius: 8px;
   box-shadow: var(--sh-2);
+  flex-shrink: 0;
+  max-width: 100%;
+  transition: width 200ms var(--ease);
+}
+
+.rt-emb-preview-note {
+  max-width: 380px;
+  text-align: center;
+  line-height: 1.5;
 }
 .rt-emb-soon-card { display: flex; gap: 10px; padding: 12px; background: var(--accent); border: 1px solid var(--accent-deep); border-radius: var(--r-3); color: var(--accent-ink); }
 .rt-emb-soon-card svg { flex-shrink: 0; margin-top: 2px; }
@@ -1631,8 +1718,10 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 }
 .rt-cthead, .rt-ctrow {
   display: grid;
-  /* checkbox | contact | status | lifecycle | tags | total | last seen | actions */
-  grid-template-columns: 40px 2.2fr 1.05fr 1.05fr 1.4fr 0.95fr 0.95fr 44px;
+  /* Columns are merchant-configurable, so the track list is supplied inline by
+     the component as --rt-ct-cols. This value is the fallback for any table
+     that hasn't set one. */
+  grid-template-columns: var(--rt-ct-cols, 40px 2.2fr 1.05fr 1.05fr 1.4fr 0.95fr 0.95fr 44px);
   gap: 14px; align-items: center;
   padding: var(--row-pad-y) 20px;
 }
@@ -1721,14 +1810,20 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   font-family: var(--font-mono); font-weight: 600; font-size: 11px;
 }
 .rt-bulkbar-sep { width: 1px; height: 20px; background: rgba(255,255,255,0.16); margin: 0 4px; }
+/* Bulk-bar actions. The Export row is an <a download> (a file response can't go
+   through a fetcher), so anchors share the button styling — otherwise it sat at
+   a different height and colour to everything beside it. */
 .rt-bulk-btn {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 6px 12px; height: 28px;
   background: transparent; color: var(--on-brand);
   border: 0; border-radius: var(--r-pill);
   font-size: 12.5px; cursor: pointer;
+  font-family: inherit; line-height: 1;
+  text-decoration: none; white-space: nowrap;
   transition: background var(--t-fast) var(--ease);
 }
+a.rt-bulk-btn:hover { color: var(--on-brand); }
 .rt-bulk-btn:hover { background: rgba(255,255,255,0.1); }
 .rt-bulk-btn:disabled, .rt-bulk-soon { color: var(--ink-4) !important; cursor: not-allowed; }
 .rt-bulk-btn:disabled:hover { background: transparent; }
@@ -2885,3 +2980,78 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   .ob-live-stat:last-child { border-bottom: none; }
   .ob-banner { flex-wrap: wrap; }
 }
+
+/* ── Contacts: column picker ────────────────────────────────────────────── */
+/* A two-panel modal rather than a dropdown: the first version squeezed two
+   lists and per-row arrow controls into a 280px menu. */
+.rt-cols-modal { width: 720px; max-width: calc(100vw - 48px); }
+.rt-cols-body {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 20px;
+  padding-top: 4px;
+}
+.rt-cols-pane {
+  border: 1px solid var(--hair-1); border-radius: var(--r-3);
+  background: var(--paper-2); overflow: hidden;
+  display: flex; flex-direction: column; min-height: 0;
+}
+.rt-cols-pane-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 12px; border-bottom: 1px solid var(--hair-1);
+  background: var(--paper-3);
+}
+.rt-cols-scroll { overflow-y: auto; max-height: 46vh; padding: 8px; }
+
+.rt-cols-group + .rt-cols-group { margin-top: 12px; }
+.rt-cols-group-h {
+  font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink-4);
+  padding: 4px 6px 6px;
+}
+.rt-cols-opt {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 8px; border-radius: var(--r-2);
+  font-size: 13px; color: var(--ink-1); cursor: pointer;
+}
+.rt-cols-opt:hover { background: var(--paper-3); }
+.rt-cols-opt.is-locked { cursor: default; color: var(--ink-3); }
+.rt-cols-opt.is-locked:hover { background: transparent; }
+.rt-cols-lock {
+  margin-left: auto; font-family: var(--font-mono); font-size: 9px;
+  letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-4);
+}
+
+.rt-cols-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 8px; border-radius: var(--r-2);
+  font-size: 13px; color: var(--ink-1);
+}
+.rt-cols-row:hover { background: var(--paper-3); }
+.rt-cols-num {
+  font-family: var(--font-mono); font-size: 10px; color: var(--ink-4);
+  width: 16px; text-align: right; flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.rt-cols-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-cols-actions { display: flex; gap: 2px; flex-shrink: 0; }
+.rt-cols-actions button:disabled { opacity: 0.3; cursor: not-allowed; }
+
+@media (max-width: 720px) {
+  .rt-cols-body { grid-template-columns: 1fr; }
+  .rt-cols-scroll { max-height: 30vh; }
+}
+
+/* ── Contacts: saved views bar ──────────────────────────────────────────── */
+.rt-views-bar {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  margin-bottom: 14px; padding-bottom: 14px;
+  border-bottom: 1px solid var(--hair-1);
+}
+.rt-view-chip-wrap { display: inline-flex; align-items: center; }
+.rt-view-chip-x {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; margin-left: -2px;
+  background: transparent; border: 0; border-radius: 50%;
+  color: var(--ink-4); cursor: pointer;
+}
+.rt-view-chip-x:hover { background: var(--hair-1); color: var(--danger-ink); }
+.rt-views-add { margin-left: 4px; }

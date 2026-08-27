@@ -10,45 +10,43 @@ export const TAG_PALETTE = {
   red:    { bg: "#EED9D2", ink: "#7A2E1F" },
 };
 
+// Lifecycle stages describe ENGAGEMENT RECENCY, not purchase history — see
+// computeLifecycle() in lib/contacts/contacts.server.js. The rule text used to
+// promise order-based stages ("Ordered in the last 30 days") that no code could
+// produce, because order data is not ingested. "Never purchased" is gone for the
+// same reason: we have never been in a position to know that.
 export const LIFECYCLE = {
   new: {
     id: "new",
     label: "New",
     bg: "var(--info-bg)",
     ink: "var(--info-ink)",
-    rule: "First seen ≤ 14 days ago, no orders yet.",
-  },
-  never_purchased: {
-    id: "never_purchased",
-    label: "Never purchased",
-    bg: "#E4DAD7",
-    ink: "#5A3F38",
-    rule: "Around 14+ days, hasn't placed an order.",
+    rule: "First seen in the last 14 days.",
   },
   active: {
     id: "active",
     label: "Active",
     bg: "var(--brand-100)",
     ink: "var(--brand-700)",
-    rule: "Ordered in the last 30 days.",
+    rule: "Seen or active in the last 30 days.",
   },
   at_risk: {
     id: "at_risk",
     label: "At-risk",
     bg: "var(--warn-bg)",
     ink: "var(--warn-ink)",
-    rule: "Last order 31–90 days ago.",
+    rule: "Last activity 31–90 days ago.",
   },
   churned: {
     id: "churned",
     label: "Churned",
     bg: "var(--status-draft-bg)",
     ink: "var(--status-draft-ink)",
-    rule: "Last order more than 90 days ago.",
+    rule: "No activity in more than 90 days.",
   },
 };
 
-export const LIFECYCLE_ORDER = ["new", "never_purchased", "active", "at_risk", "churned"];
+export const LIFECYCLE_ORDER = ["new", "active", "at_risk", "churned"];
 
 export const STATUS = {
   subscribed:     { label: "Subscribed",     bg: "var(--success-bg)",      ink: "var(--success-ink)" },

@@ -1,23 +1,41 @@
-import { useLoaderData, useLocation } from "react-router";
+import { useLoaderData, useLocation, useSearchParams } from "react-router";
 import { Link } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
-import { getCartRescueStats, getEmailBreakdown } from "../lib/analytics/stats.server.js";
+import {
+  getCartRescueStats,
+  getEmailBreakdown,
+  listCampaignChoices,
+} from "../lib/analytics/stats.server.js";
+import { RANGE_OPTIONS, resolveRange } from "../lib/analytics/campaign.server.js";
 import { seedJourneyTemplates } from "../lib/journey/journey-templates.server.js";
 import { getOnboardingState } from "../lib/onboarding/onboarding.server.js";
 import { OtherAppsCarousel } from "../components/OtherAppsCarousel.jsx";
 import Icons from "../components/ui/Icons.jsx";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
 
-  const [settings, stats, breakdown, onboarding] = await Promise.all([
+  // Campaign + range selectors. `flow=<id>` scopes every figure on the page to
+  // one campaign; the default is every live flow.
+  const url = new URL(request.url);
+  const days = resolveRange(url.searchParams.get("range"));
+  const requestedFlow = url.searchParams.get("flow") || "";
+  const campaigns = await listCampaignChoices(shop);
+  // Ignore a stale or foreign id rather than rendering an empty dashboard.
+  const journeyId = campaigns.some((c) => c.id === requestedFlow) ? requestedFlow : null;
+
+  const [settings, stats, breakdown, onboarding, publishedFlows] = await Promise.all([
     prisma.shopSettings.findUnique({ where: { shop } }),
-    getCartRescueStats(shop, 30),
-    getEmailBreakdown(shop, 30),
+    getCartRescueStats(shop, days, { journeyId }),
+    getEmailBreakdown(shop, days, { journeyId }),
     getOnboardingState(shop),
+    // Replaces the ShopSettings.isActive check the "flow is paused" banner used
+    // to read. isActive is a leftover from the single-journey Cart Rescue era —
+    // it says nothing about whether any flow is actually live now.
+    prisma.journey.count({ where: { shop, archivedAt: null, status: "published" } }),
   ]);
 
   if (!settings || settings.onboardingStep < 2) {
@@ -42,6 +60,11 @@ export const loader = async ({ request }) => {
     settings,
     stats,
     breakdown,
+    publishedFlows,
+    campaigns,
+    selectedFlow: journeyId || "",
+    days,
+    ranges: RANGE_OPTIONS,
     setupComplete: onboarding.setupComplete,
     setupRemaining,
   };
@@ -80,8 +103,28 @@ function FunnelCell({ count, label, color }) {
 }
 
 export default function Dashboard() {
-  const { settings, stats, breakdown, setupComplete, setupRemaining } = useLoaderData();
+  const {
+    stats,
+    breakdown,
+    publishedFlows,
+    campaigns = [],
+    selectedFlow,
+    days,
+    ranges,
+    setupComplete,
+    setupRemaining,
+  } = useLoaderData();
   const location = useLocation();
+  const [params, setParams] = useSearchParams();
+
+  const setParam = (key, value) => {
+    const next = new URLSearchParams(params);
+    if (!value) next.delete(key);
+    else next.set(key, String(value));
+    setParams(next, { replace: true });
+  };
+
+  const selectedCampaign = campaigns.find((c) => c.id === selectedFlow) || null;
 
   const hasEmailData = breakdown.some((row) => row.sent > 0);
 
@@ -91,6 +134,41 @@ export default function Dashboard() {
         <div>
           <div className="t-micro muted" style={{ marginBottom: 8 }}>Retainify</div>
           <h1 className="t-display-2" style={{ margin: 0 }}>Dashboard</h1>
+        </div>
+        {/* Campaign + range scope. Everything below reflects this selection. */}
+        <div className="rt-page-actions">
+          <select
+            className="select"
+            value={selectedFlow || ""}
+            onChange={(e) => setParam("flow", e.target.value)}
+            aria-label="Campaign"
+          >
+            <option value="">All campaigns</option>
+            {campaigns.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+                {c.status !== "published" ? ` (${c.status})` : ""}
+              </option>
+            ))}
+          </select>
+          <select
+            className="select"
+            value={days}
+            onChange={(e) => setParam("range", e.target.value)}
+            aria-label="Date range"
+          >
+            {ranges.map((r) => (
+              <option key={r.value} value={r.value}>{r.label}</option>
+            ))}
+          </select>
+          {selectedCampaign && (
+            <Link
+              className="btn btn-secondary"
+              to={`/app/flows/${selectedCampaign.id}/analytics${location.search}`}
+            >
+              Full report <Icons.Arrow size={13} />
+            </Link>
+          )}
         </div>
       </header>
 
@@ -112,7 +190,7 @@ export default function Dashboard() {
         </Link>
       )}
 
-      {!settings?.isActive && (
+      {publishedFlows === 0 && (
         <div style={{
           background: "var(--warn-bg, #fff8e1)",
           color: "var(--warn-ink, #7a4f00)",
@@ -126,7 +204,7 @@ export default function Dashboard() {
         }}>
           <span>⚠</span>
           <span>
-            Your flow is currently paused.{" "}
+            No flows are live yet, so nothing is being sent.{" "}
             <Link to={`/app/flows${location.search}`} style={{ color: "inherit", textDecoration: "underline" }}>
               Go to Flows →
             </Link>
@@ -138,13 +216,17 @@ export default function Dashboard() {
       <section className="rt-stats" style={{ marginBottom: 24 }}>
         <HeroStat
           label="Recovery rate"
-          value={fmtPct(stats.recoveryRate)}
-          sub={`${fmt(stats.recoveredCount)} recovered`}
+          value={stats.hasCartJourneys ? fmtPct(stats.recoveryRate) : "—"}
+          sub={
+            stats.hasCartJourneys
+              ? `${fmt(stats.recoveredCount)} recovered`
+              : "No cart recovery flow yet"
+          }
         />
         <HeroStat
           label="Revenue recovered"
-          value={fmtRevenue(stats.recoveredRevenue)}
-          sub={`${fmt(stats.recoveredCount)} carts`}
+          value={stats.hasCartJourneys ? fmtRevenue(stats.recoveredRevenue) : "—"}
+          sub={stats.hasCartJourneys ? `${fmt(stats.recoveredCount)} carts` : "No cart recovery flow yet"}
         />
         <HeroStat
           label="Emails sent"
@@ -153,21 +235,41 @@ export default function Dashboard() {
         />
         <HeroStat
           label="Subscribers"
-          value={fmt(stats.signups)}
+          value={fmt(stats.subscribers)}
           sub={`${fmt(stats.suppressions)} unsubscribed`}
         />
       </section>
 
-      {/* Funnel */}
-      <section style={{ marginBottom: 24 }}>
-        <div className="t-micro muted" style={{ marginBottom: 12 }}>Last 30 days · Funnel</div>
-        <div style={{ display: "flex", gap: 12 }}>
-          <FunnelCell count={fmt(stats.abandoned)} label="Abandoned" color="var(--ink-2)" />
-          <FunnelCell count={fmt(stats.pendingJobs)} label="In journey" color="var(--ink-2)" />
-          <FunnelCell count={fmt(stats.recoveredCount)} label="Recovered" color="var(--brand-700)" />
-          <FunnelCell count={fmt(stats.suppressions)} label="Unsubscribed" color="var(--ink-3)" />
-        </div>
-      </section>
+      {/* Other channels — previously had no analytics surface anywhere in the app */}
+      {(stats.pushSent > 0 || stats.whatsappSent > 0) && (
+        <section className="rt-stats" style={{ marginBottom: 24 }}>
+          <HeroStat
+            label="Push sent"
+            value={fmt(stats.pushSent)}
+            sub={`Click ${fmtPct(stats.pushClickRate)}`}
+          />
+          <HeroStat
+            label="WhatsApp sent"
+            value={fmt(stats.whatsappSent)}
+            sub={`Last ${days} days`}
+          />
+        </section>
+      )}
+
+      {/* Cart recovery funnel — only meaningful for shops running one */}
+      {stats.hasCartJourneys && (
+        <section style={{ marginBottom: 24 }}>
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>
+            Cart recovery funnel · last {days} days
+          </div>
+          <div style={{ display: "flex", gap: 12 }}>
+            <FunnelCell count={fmt(stats.abandoned)} label="Rescue attempted" color="var(--ink-2)" />
+            <FunnelCell count={fmt(stats.pendingJobs)} label="In journey" color="var(--ink-2)" />
+            <FunnelCell count={fmt(stats.recoveredCount)} label="Recovered" color="var(--brand-700)" />
+            <FunnelCell count={fmt(stats.suppressions)} label="Unsubscribed" color="var(--ink-3)" />
+          </div>
+        </section>
+      )}
 
       {/* Email breakdown table */}
       <section>
@@ -183,7 +285,14 @@ export default function Dashboard() {
             </div>
             {breakdown.map((row) => (
               <div key={row.stepId} className="rt-trow">
-                <div>{row.label}</div>
+                <div>
+                  {row.label}
+                  {/* The table now spans every flow, so the step label alone is
+                      ambiguous once a shop runs more than one. */}
+                  {row.journeyName && (
+                    <div className="t-micro muted" style={{ marginTop: 2 }}>{row.journeyName}</div>
+                  )}
+                </div>
                 <div className="rt-tnum t-mono">{fmt(row.sent)}</div>
                 <div className="rt-tnum t-mono">{fmt(row.opened)}</div>
                 <div className="rt-tnum t-mono">{fmt(row.clicked)}</div>
@@ -197,7 +306,7 @@ export default function Dashboard() {
           <div className="card card-pad" style={{ textAlign: "center", padding: "40px 16px" }}>
             <div className="t-h3" style={{ marginBottom: 6 }}>No data yet</div>
             <div className="t-small muted">
-              Once your first abandoned cart triggers the journey, performance will appear here.
+              Once a live flow sends its first email, performance will appear here.
             </div>
           </div>
         )}

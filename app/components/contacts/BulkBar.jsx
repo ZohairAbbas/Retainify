@@ -1,7 +1,6 @@
 import Icons from "../ui/Icons.jsx";
-import SoonPill from "./SoonPill.jsx";
 
-export default function BulkBar({ selectedCount, onAddTag, onSaveAsSegment, onUnsubscribe, onDelete, onClear }) {
+export default function BulkBar({ selectedCount, onAddTag, onSaveAsSegment, onUnsubscribe, onDelete, onClear, onExport }) {
   if (!selectedCount) return null;
   return (
     <div className="rt-bulkbar">
@@ -21,9 +20,13 @@ export default function BulkBar({ selectedCount, onAddTag, onSaveAsSegment, onUn
       <button type="button" className="rt-bulk-btn" onClick={onUnsubscribe}>
         <Icons.Mail size={13} /> Unsubscribe
       </button>
-      <button type="button" className="rt-bulk-btn rt-bulk-soon" disabled>
-        <Icons.ArrowUp size={13} /> Export <SoonPill />
-      </button>
+      {/* A real link: the response is a streamed file download the browser
+          must handle itself, so this cannot go through a fetcher. */}
+      {onExport && (
+        <a className="rt-bulk-btn" href={onExport} download>
+          <Icons.ArrowUp size={13} /> Export
+        </a>
+      )}
       <button type="button" className="rt-bulk-btn rt-bulk-danger" onClick={onDelete}>
         <Icons.Trash size={13} /> Delete
       </button>

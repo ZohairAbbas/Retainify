@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useFetcher, useLoaderData, useNavigate, useNavigation, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import Icons from "../components/ui/Icons.jsx";
+import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import StatCard from "../components/contacts/StatCard.jsx";
-import SoonPill from "../components/contacts/SoonPill.jsx";
 import SegmentKindPill from "../components/segments/SegmentKindPill.jsx";
 import Sparkline from "../components/segments/Sparkline.jsx";
 import SegmentsEmpty from "../components/segments/SegmentsEmpty.jsx";
@@ -15,12 +15,12 @@ import {
   softDeleteSegment,
 } from "../lib/segments/segments.server.js";
 import { listSystemSegmentsWithCounts } from "../lib/segments/systemSegments.server.js";
-import { TEMPLATES } from "../lib/segments/fields.server.js";
+import { templatesFor } from "../lib/segments/fields.server.js";
 import prisma from "../db.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const [segments, systemSegments, publishedSegmentFlows] = await Promise.all([
     listSegments(shop),
     listSystemSegmentsWithCounts(shop),
@@ -35,6 +35,26 @@ export const loader = async ({ request }) => {
       select: { id: true, name: true, triggerSegmentKey: true },
     }),
   ]);
+  // Real size history for the row sparklines. SegmentSnapshot is written daily
+  // by segmentSnapshotWorker and pruned to 30 days, so this is a bounded read.
+  // The list previously rendered fakeSpark() — a synthetic curve derived from
+  // the current count that always sloped upward, so every segment looked like it
+  // was growing, including the shrinking ones. The detail page already used the
+  // real series; only this page was left on the placeholder.
+  const snapshotRows = await prisma.segmentSnapshot.findMany({
+    where: {
+      shop,
+      segmentKey: { in: segments.map((s) => s.id) },
+      takenAt: { gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+    },
+    orderBy: { takenAt: "asc" },
+    select: { segmentKey: true, count: true },
+  });
+  const snapshotsBySegment = {};
+  for (const row of snapshotRows) {
+    (snapshotsBySegment[row.segmentKey] ||= []).push(row.count);
+  }
+
   const dynamicCount = segments.filter((s) => s.kind === "dynamic").length;
   const segmentsInFlows = new Set(publishedSegmentFlows.map((f) => f.triggerSegmentKey));
   // Per-segment list of published flows that reference it as trigger.
@@ -47,8 +67,9 @@ export const loader = async ({ request }) => {
   return Response.json({
     segments,
     systemSegments,
-    templates: TEMPLATES,
+    templates: templatesFor(ctx.isShopify),
     flowsBySegment,
+    snapshotsBySegment,
     totals: {
       total: segments.length,
       dynamic: dynamicCount,
@@ -58,8 +79,8 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
   const id = String(fd.get("id") || "");
@@ -80,11 +101,19 @@ export const action = async ({ request }) => {
 };
 
 export default function SegmentsListPage() {
-  const { segments, systemSegments, templates, totals, flowsBySegment = {} } = useLoaderData();
+  const {
+    segments,
+    systemSegments,
+    templates,
+    totals,
+    flowsBySegment = {},
+    snapshotsBySegment = {},
+  } = useLoaderData();
   const navigate = useNavigate();
   const navigation = useNavigation();
   const fetcher = useFetcher();
   const [openMenu, setOpenMenu] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(null);
   const [kindFilter, setKindFilter] = useState("all");
   const [q, setQ] = useState("");
   // Show skeleton rows on a real navigation load (route is being entered or
@@ -295,7 +324,7 @@ export default function SegmentsListPage() {
                 </div>
                 <div className="rt-seg-count">
                   <span className="rt-seg-count-num">{seg.contactCount.toLocaleString()}</span>
-                  <Sparkline values={fakeSpark(seg.contactCount)} />
+                  <Sparkline values={sparkValues(snapshotsBySegment[seg.id], seg.contactCount)} />
                 </div>
                 <div className="rt-seg-flows">
                   {(() => {
@@ -371,18 +400,20 @@ export default function SegmentsListPage() {
                           <Icons.Copy size={14} /> Duplicate
                         </button>
                         <div className="rt-menu-sep" />
-                        <button type="button" disabled className="rt-menu-soon">
-                          <Icons.ArrowUp size={14} /> Export CSV <SoonPill />
-                        </button>
+                        <a
+                          href={`/app/segments/${seg.id}/export`}
+                          download
+                          onClick={() => setOpenMenu(null)}
+                        >
+                          <Icons.ArrowUp size={14} /> Export CSV
+                        </a>
                         <div className="rt-menu-sep" />
                         <button
                           type="button"
                           className="rt-menu-danger"
                           onClick={() => {
                             setOpenMenu(null);
-                            if (window.confirm(`Delete "${seg.name}"? This can't be undone.`)) {
-                              submitRow("delete", seg.id);
-                            }
+                            setConfirmDelete(seg);
                           }}
                         >
                           <Icons.Trash size={14} /> Delete
@@ -451,16 +482,37 @@ export default function SegmentsListPage() {
           </div>
         </div>
       )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete "${confirmDelete.name}"?`}
+          body="The segment is removed from your list. Contacts in it are not deleted. A segment still used as a trigger by a published flow can't be deleted."
+          confirmLabel="Delete segment"
+          destructive
+          loading={fetcher.state !== "idle"}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => { submitRow("delete", confirmDelete.id); setConfirmDelete(null); }}
+        />
+      )}
     </div>
   );
 }
 
-function fakeSpark(count) {
-  // Until we record segment-size history, render a faint upward sweep based
-  // on the current count. Real history will replace this in a follow-up.
-  if (!count) return [0, 0, 0, 0, 0, 0];
-  const c = count;
-  return [c * 0.86, c * 0.9, c * 0.93, c * 0.95, c * 0.98, c];
+/**
+ * Sparkline series for a segment row.
+ *
+ * Real daily snapshots when we have them, with the live count appended so the
+ * rightmost point matches the number printed beside it. A segment younger than
+ * the first snapshot run has no history yet — that renders as a flat line at the
+ * current count, which is honest, rather than the synthetic upward sweep this
+ * used to draw for every row regardless of whether it was growing or shrinking.
+ */
+function sparkValues(snapshots, count) {
+  const current = Number(count) || 0;
+  if (Array.isArray(snapshots) && snapshots.length > 0) {
+    return [...snapshots, current];
+  }
+  return [current, current];
 }
 
 export function ErrorBoundary() {

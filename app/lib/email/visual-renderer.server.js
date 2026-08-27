@@ -30,7 +30,7 @@ const GOOGLE_FONTS_HREF =
   "https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=Archivo+Black&family=Caveat:wght@500;700&family=DM+Serif+Display:ital@0;1&display=swap";
 
 const DEFAULT_BRAND = {
-  logoText: "YOUR STORE", accent: "#1F3D2F", bg: "#FFFFFF",
+  logoText: "YOUR STORE", logoUrl: "", accent: "#1F3D2F", bg: "#FFFFFF",
   ink: "#14201A", subInk: "#2D362F", onAccent: "#FFFFFF", fontPair: "editorial",
 };
 
@@ -70,6 +70,18 @@ function renderLogo(b, brand, fonts, ctx) {
   const brutal = brand.fontPair === "brutal";
   const mono = brand.fontPair === "mono";
   const text = mergeText(b.text || brand.logoText, ctx);
+
+  // An uploaded brand mark wins over the wordmark. Height is tied to the same
+  // small/medium/large control so the two modes stay visually interchangeable.
+  const logoUrl = b.src || brand.logoUrl;
+  if (logoUrl) {
+    const heights = { small: 24, medium: 36, large: 52 };
+    const h = heights[b.size] || 36;
+    return `<tr><td align="${align}" style="padding:0 0 16px;">
+    <img src="${escapeAttr(logoUrl)}" alt="${escapeAttr(text || "")}" height="${h}" style="height:${h}px;width:auto;max-width:100%;display:block;border:0;${align === "center" ? "margin:0 auto;" : ""}" />
+  </td></tr>`;
+  }
+
   const tracking = mono || brutal ? "0.16em" : "0.06em";
   return `<tr><td align="${align}" style="padding:0 0 16px;">
     <div style="font-family:${fonts.display};font-size:${fontSize}px;letter-spacing:${tracking};text-transform:uppercase;font-weight:${brutal ? 900 : 500};color:${b.color || brand.ink};">${escapeAttr(text)}</div>
@@ -193,6 +205,15 @@ function renderDiscount(b, brand, fonts, ctx) {
   </td></tr>`;
 }
 
+/**
+ * Footer block.
+ *
+ * Deliberately does NOT emit a "Powered by Retainify" line. Branding is resolved
+ * once per send by brandingFooterHtml(), which checks the shop's `no_branding`
+ * entitlement, and is appended by the caller. Emitting it here too meant paying
+ * merchants were branded regardless of plan — the exact thing they upgraded to
+ * remove.
+ */
 function renderFooter(b, brand, fonts, ctx) {
   const unsubHtml = b.unsubscribe && ctx.unsubscribeUrl
     ? `<div style="margin-top:8px;"><a href="${escapeAttr(ctx.unsubscribeUrl)}" style="color:${brand.subInk};text-decoration:underline;">Unsubscribe</a></div>`
@@ -204,7 +225,6 @@ function renderFooter(b, brand, fonts, ctx) {
       <div style="font-weight:600;color:${brand.ink};">${escapeAttr(storeName)}</div>
       <div>${escapeAttr(address)}</div>
       ${unsubHtml}
-      <div style="margin-top:6px;font-size:11px;opacity:0.6;">Powered by Retainify</div>
     </div>
   </td></tr>`;
 }
@@ -268,6 +288,10 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
   let skipped = 0;
   const skippedDetail = [];
   const mergeTagsUsed = new Set();
+  // Tracks whether the merchant's own blocks produced an unsubscribe link. If
+  // they didn't, we append one below rather than shipping a marketing email
+  // with no opt-out.
+  let unsubRendered = false;
 
   const productMap = await resolveProductBlocks(blocks, { shop });
   const branding = await brandingFooterHtml(shop);
@@ -322,11 +346,15 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
     const sourceText = JSON.stringify(b);
     const matches = sourceText.match(/\{(first_name|last_name|store_name|discount_code|cart_url)\}/g);
     if (matches) matches.forEach((m) => mergeTagsUsed.add(m.slice(1, -1)));
+    if (b.type === "footer" && b.unsubscribe && ctx.unsubscribeUrl) {
+      unsubRendered = true;
+    }
     rowsArr.push(html);
     rendered++;
   }
 
   const inner = rowsArr.join("\n");
+  const unsubFallback = unsubRendered ? "" : unsubscribeFooterHtml(ctx.unsubscribeUrl);
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -345,6 +373,7 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
       <table width="100%" cellpadding="0" cellspacing="0" style="max-width:600px;background:${safeBrand.bg};border-radius:8px;padding:32px;">
         ${inner}
       </table>
+      ${unsubFallback}
       ${branding}
     </td>
   </tr>
@@ -355,6 +384,7 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
   console.log(
     `[email-render] step=${stepId || "?"} blocks=${blocks.length} rendered=${rendered} skipped=${skipped}` +
     ` htmlBytes=${html.length} mergeTags=[${[...mergeTagsUsed].join(",")}]` +
+    ` unsub=${unsubRendered ? "block" : unsubFallback ? "appended" : "MISSING"}` +
     (skipped > 0 ? ` skippedDetail=[${skippedDetail.join("|")}]` : ""),
   );
 
@@ -387,13 +417,32 @@ export async function brandingFooterHtml(shop) {
   }
 }
 
-// Minimal unsubscribe footer appended to custom HTML that doesn't provide its
-// own {unsubscribe_url}. Keeps custom-HTML sends CAN-SPAM / Shopify compliant.
+/**
+ * Last-resort unsubscribe footer, appended whenever the email body did not
+ * produce an unsubscribe link of its own.
+ *
+ * Used by BOTH render paths. The block path needs it because the merchant can
+ * delete the footer block (or untick its unsubscribe option) in the visual
+ * editor, which would otherwise ship a marketing email with no way out — a
+ * CAN-SPAM violation with nothing in the UI to warn them.
+ *
+ * Carries no branding line: that is resolved separately against the shop's plan.
+ */
+/**
+ * Whether the HTML already contains a clickable unsubscribe, as opposed to
+ * merely the word. Requires an anchor either pointing at our endpoint or
+ * labelled with some form of "unsubscribe".
+ */
+function hasUnsubscribeAnchor(html) {
+  if (!html) return false;
+  if (/<a\b[^>]*href\s*=\s*["'][^"']*\/track\/unsubscribe/i.test(html)) return true;
+  return /<a\b[^>]*>[\s\S]{0,200}?unsubscrib/i.test(html);
+}
+
 function unsubscribeFooterHtml(unsubscribeUrl) {
   if (!unsubscribeUrl) return "";
   return `<div style="font-family:Geist,system-ui,sans-serif;font-size:12px;color:#999;text-align:center;line-height:1.6;padding:24px 16px 8px;">
     <a href="${escapeAttr(unsubscribeUrl)}" style="color:#999;text-decoration:underline;">Unsubscribe</a>
-    <div style="margin-top:6px;font-size:11px;opacity:0.6;">Powered by Retainify</div>
   </div>`;
 }
 
@@ -420,7 +469,10 @@ export function renderCustomHtmlEmail({ html, ctx = {}, stepId, branding = "" })
 
   // 2) Unsubscribe guarantee — only append a footer if the author didn't wire
   //    their own {unsubscribe_url} and there's no existing unsubscribe link.
-  const hasUnsubLink = hadUnsubTag || /unsubscribe/i.test(out);
+  //    The check requires an actual anchor: the old bare /unsubscribe/i test
+  //    matched the word in ordinary body copy ("...to unsubscribe, reply STOP")
+  //    and suppressed the footer on emails that had no link at all.
+  const hasUnsubLink = hadUnsubTag || hasUnsubscribeAnchor(out);
   // Branding rides along with the unsubscribe footer so both land in the same
   // place regardless of whether the merchant supplied a full document.
   const footer = (hasUnsubLink ? "" : unsubscribeFooterHtml(ctx.unsubscribeUrl)) + (branding || "");

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useFetcher, useNavigate, useLocation } from "react-router";
 import Icons from "../ui/Icons.jsx";
-import { TASKS, ESSENTIAL_IDS } from "../../lib/onboarding/tasks.js";
+import { tasksFor } from "../../lib/onboarding/tasks.js";
 
 // ── Small helpers ──────────────────────────────────────────────────────
 function InfoDot() {
@@ -47,11 +47,57 @@ function StorePanel({ ctx, onAdvance }) {
   );
 }
 
+/**
+ * Direct workspaces only. There is no storefront quietly collecting emails, so
+ * the list has to be brought in — this step is done the moment the workspace
+ * has a single contact, which the server detects from real data rather than
+ * from a checkbox.
+ */
+function ContactsPanel({ ctx, onComplete }) {
+  const navigate = useNavigate();
+  return (
+    <div className="ob-panel-pad">
+      <p className="ob-panel-lede">
+        Bring in the people you already have. Upload a CSV and map your columns —
+        names, tags, and any custom fields come across intact. You can add more
+        lists later, or collect signups through a form.
+      </p>
+      <div className="ob-store-confirm">
+        <div className="ob-store-avatar">{ctx.contactCount > 0 ? "✓" : "0"}</div>
+        <div className="ob-store-info">
+          <div className="ob-si-name">
+            {ctx.contactCount > 0
+              ? `${ctx.contactCount.toLocaleString()} contacts`
+              : "No contacts yet"}
+          </div>
+          <div className="ob-si-domain">
+            {ctx.contactCount > 0
+              ? "This step is already complete."
+              : "Import a CSV to complete this step."}
+          </div>
+        </div>
+      </div>
+      <div className="ob-panel-actions">
+        <button className="ob-btn ob-btn-primary" onClick={() => navigate(`/app/contacts${ctx.search}`)}>
+          <Icons.Arrow size={14} /> Import contacts
+        </button>
+        {ctx.contactCount > 0 && (
+          <button className="ob-skip-btn" onClick={onComplete}>Continue</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SenderPanel({ ctx, onAdvance }) {
   const fetcher = useFetcher();
   const busy = fetcher.state !== "idle";
   const [name, setName] = useState(ctx.senderName || ctx.storeName || "");
   const [reply, setReply] = useState(ctx.replyTo || "");
+  // Server-side verdict. The panel submits via fetcher.submit() with a plain
+  // object, which bypasses the input's native type="email" check entirely —
+  // so the action is the only thing actually enforcing this.
+  const replyError = fetcher.data?.fieldError;
   const valid = !!name.trim();
   return (
     <div className="ob-panel-pad">
@@ -68,7 +114,12 @@ function SenderPanel({ ctx, onAdvance }) {
       </div>
       <div className="ob-field-full">
         <label className="ob-field-label">Reply-to email <span className="ob-faint">(optional)</span></label>
-        <input className="ob-input" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Where replies should land" />
+        <input className="ob-input" type="email" value={reply} onChange={(e) => setReply(e.target.value)} placeholder="Where replies should land" />
+        {replyError && (
+          <div className="t-small" style={{ color: "var(--danger, #c0392b)", marginTop: 4 }}>
+            {replyError}
+          </div>
+        )}
       </div>
       <div className="ob-hint"><InfoDot /><span>Emails are sent from this shared, deliverability-optimized address. Contact support to use your own domain for email sending.</span></div>
       <div className="ob-panel-actions">
@@ -310,6 +361,7 @@ function DomainPanel({ ctx, onComplete, onSkip }) {
 
 const PANELS = {
   store: StorePanel,
+  contacts: ContactsPanel,
   sender: SenderPanel,
   domain: DomainPanel,
   embed: EmbedPanel,
@@ -357,24 +409,31 @@ function Ring({ done, total }) {
  *  - owner:  merchant first name (optional)
  *  - onActivate: called when the merchant clicks the activate CTA (onboarding only)
  */
-export default function OnboardingChecklist({ state, ctx, variant = "onboarding", owner, onActivate }) {
+export default function OnboardingChecklist({ state, ctx, variant = "onboarding", owner, onActivate, kind = "shopify" }) {
   const location = useLocation();
   const fetcher = useFetcher();
+
+  // Which tasks this workspace has at all. A direct workspace never sees the
+  // theme-embed or on-site-popup steps, which it could not complete.
+  const allTasks = tasksFor(kind);
 
   // In setup variant we only surface the still-unresolved tasks (the guide is a
   // nudge for what's left), while onboarding shows the full list.
   const tasks = variant === "setup"
-    ? TASKS.filter((t) => !(state.done[t.id] || state.skipped[t.id]))
-    : TASKS;
+    ? allTasks.filter((t) => !(state.done[t.id] || state.skipped[t.id]))
+    : allTasks;
+
+  const essentialIds = allTasks.filter((t) => !t.optional).map((t) => t.id);
 
   const [open, setOpen] = useState(() => {
     const first = tasks.find((t) => !state.done[t.id] && !state.skipped[t.id]);
     return first ? first.id : null;
   });
 
-  const reqDone = ESSENTIAL_IDS.filter((id) => state.done[id]).length;
-  const reqTotal = ESSENTIAL_IDS.length;
-  const pct = Math.round((reqDone / reqTotal) * 100);
+  const reqDone = essentialIds.filter((id) => state.done[id]).length;
+  const reqTotal = essentialIds.length;
+  // Guard the divide: a task list with no essentials would otherwise render NaN%.
+  const pct = reqTotal > 0 ? Math.round((reqDone / reqTotal) * 100) : 100;
   const allRequiredDone = reqDone === reqTotal;
 
   function advanceFrom(id) {

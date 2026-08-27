@@ -27,6 +27,119 @@ model Session {
   refreshTokenExpires DateTime?
 }
 
+// ── Tenancy and authentication ─────────────────────────────────────────────
+//
+// Retainify began as a Shopify-only app, where the shop domain WAS the identity
+// and Shopify handled who you are. Running outside Shopify means owning both.
+//
+// ── Why `key` rather than an accountId foreign key everywhere ───────────────
+// Twenty-seven tables already carry a `shop String` tenant column. Rather than
+// add an accountId to all of them and migrate live data, an Account holds the
+// exact value those rows already store: for a Shopify install that is
+// "store.myshopify.com", for a direct signup it is a generated slug. The column
+// simply stops meaning "a myshopify domain" and starts meaning "a workspace
+// key". Zero data movement, and every existing query keeps working untouched.
+model Account {
+  id        String   @id @default(cuid())
+  // The tenant key. Matches the `shop` column on every data table.
+  key       String   @unique
+  name      String
+  // How this workspace was created. A shopify account is billed by Shopify and
+  // gets commerce features; a direct account is billed by us (later) and sees
+  // commerce features hidden rather than broken.
+  kind      String   @default("direct") // direct | shopify
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memberships Membership[]
+  invites     Invite[]
+  sessions    AuthSession[]
+
+  @@index([kind])
+}
+
+// A person. Distinct from Account: one person can belong to several workspaces
+// (the whole point here — one operator running several businesses).
+model User {
+  id              String    @id @default(cuid())
+  email           String    @unique // lowercased on write
+  name            String    @default("")
+  // scrypt, via node:crypto — see lib/auth/password.server.js. Null for a user
+  // created by invite who has not yet set a password.
+  passwordHash    String?
+  emailVerifiedAt DateTime?
+  lastLoginAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  memberships Membership[]
+  sessions    AuthSession[]
+  invitesSent Invite[]      @relation("InvitedBy")
+}
+
+// Which workspaces a user can reach, and with what rights.
+model Membership {
+  id        String   @id @default(cuid())
+  userId    String
+  accountId String
+  role      String   @default("member") // owner | admin | member
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, accountId])
+  @@index([accountId])
+}
+
+// Our own login sessions. Deliberately NOT the `Session` model above — that one
+// belongs to the Shopify SDK and stores an access token, and conflating the two
+// would let a bug in one become an auth bypass in the other.
+//
+// `tokenHash` is stored, never the token: a leaked database must not yield
+// usable session cookies.
+model AuthSession {
+  id         String   @id @default(cuid())
+  tokenHash  String   @unique
+  userId     String
+  // Which workspace this session is currently looking at. Nullable so a user
+  // between workspaces (or with none yet) still has a valid session.
+  accountId  String?
+  userAgent  String   @default("")
+  ip         String   @default("")
+  expiresAt  DateTime
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  account Account? @relation(fields: [accountId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// Pending team invitation. Also the password-reset carrier — same shape, same
+// expiry semantics, so one table and one consume path rather than two.
+model Invite {
+  id              String    @id @default(cuid())
+  accountId       String?
+  email           String // lowercased
+  role            String    @default("member")
+  kind            String    @default("invite") // invite | password_reset | verify_email
+  tokenHash       String    @unique
+  expiresAt       DateTime
+  acceptedAt      DateTime?
+  invitedByUserId String?
+  createdAt       DateTime  @default(now())
+
+  account   Account? @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  invitedBy User?    @relation("InvitedBy", fields: [invitedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@index([accountId])
+  @@index([expiresAt])
+}
+
 // Per-shop configuration for the Cart Rescue journey
 model ShopSettings {
   id                                 String    @id @default(cuid())
@@ -37,6 +150,12 @@ model ShopSettings {
   emailProvider                      String    @default("resend") // resend | ses
   brandColor                         String    @default("#000000")
   logoUrl                            String    @default("")
+  // The workspace's public website. For a Shopify install this is derivable
+  // from the shop domain, so it stays empty unless overridden; a direct
+  // workspace has no such domain and must supply one, or {store_url} — which is
+  // also the fallback target for any email button left without a URL — has
+  // nowhere to point.
+  websiteUrl                         String    @default("")
   quietHoursStart                    Int       @default(22) // hour 0-23 in store timezone
   quietHoursEnd                      Int       @default(8)
   storeTimezone                      String    @default("UTC")
@@ -74,6 +193,13 @@ model ShopSettings {
   shopifyCustomerSyncLastError       String    @default("")
   // Segments feature — daily snapshot worker. No-op unless ≥24h elapsed.
   lastSegmentSnapshotAt              DateTime?
+  // Historical order backfill. Resumable: the cursor lets a shop with years of
+  // orders be processed across several passes instead of one request that
+  // times out. ordersBackfilledAt is set only on completion.
+  ordersBackfilledAt                 DateTime?
+  ordersBackfillCursor               String?
+  ordersBackfillStatus               String    @default("idle") // idle | running | done | failed
+  ordersBackfillError                String    @default("")
   createdAt                          DateTime  @default(now())
   updatedAt                          DateTime  @updatedAt
 }
@@ -146,6 +272,22 @@ model Contact {
   phone              String?
   whatsappStatus     String    @default("never_opted_in") // subscribed | unsubscribed | invalid | never_opted_in
   whatsappOptInAt    DateTime?
+  // ── Purchase facts, denormalized from Order ────────────────────────────
+  // Kept on the contact rather than aggregated per query because segment
+  // evaluation compares them across the whole audience; as columns they are
+  // indexable and translate straight into a Prisma WHERE, where a per-contact
+  // SUM would force the evaluator's slow JS path over every row.
+  // Maintained by recalcContactOrderStats() on every order write.
+  orderCount         Int       @default(0)
+  totalSpent         Float     @default(0)
+  firstOrderAt       DateTime?
+  lastOrderAt        DateTime?
+  // Merchant-defined properties, keyed by ContactPropertyDef.key. Stored as
+  // JSONB rather than one column per field so a merchant can add a property
+  // without a migration; the definitions table gives the keys type and meaning.
+  // Values are coerced to the declared type on write (see properties.server.js),
+  // so a numeric property is always a number here and can be compared as one.
+  customProps        Json?
   deletedAt          DateTime?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
@@ -153,10 +295,16 @@ model Contact {
   tags ContactTag[]
 
   @@unique([shop, email])
+  // GIN index for the merchant-defined property bag. Declared here rather than
+  // only in SQL so `prisma migrate dev` doesn't generate a migration dropping
+  // it — a hand-written index the datamodel doesn't know about reads as drift.
+  @@index([customProps(ops: JsonbOps)], type: Gin)
   @@index([shop, lastSeenAt])
   @@index([shop, source])
   @@index([shop, subscriptionStatus])
   @@index([shop, whatsappStatus])
+  @@index([shop, lastOrderAt])
+  @@index([shop, totalSpent])
 }
 
 // Merchant-defined tag — per shop. `nameKey` is the lowercased uniqueness key;
@@ -185,6 +333,77 @@ model ContactTag {
 
   @@id([contactId, tagId])
   @@index([tagId])
+}
+
+// Merchant-defined contact property. The schema for one key inside
+// Contact.customProps — label, type, and (for select) its allowed options.
+//
+// `key` is the stable machine name used in the JSON bag, in CSV import mapping,
+// and in segment rules. It is generated from the label once and never changes,
+// so renaming a property in the UI cannot orphan the stored values.
+model ContactPropertyDef {
+  id        String   @id @default(cuid())
+  shop      String
+  key       String // snake_case, immutable once created
+  label     String // display name, freely editable
+  type      String   @default("text") // text | number | date | boolean | select
+  options   Json? // for type = "select": array of allowed string values
+  position  Int      @default(0) // display order in the UI
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([shop, key])
+  @@index([shop, position])
+}
+
+// A saved view of the Contacts table: which filters are applied, which columns
+// are shown and in what order. Lets a merchant keep "VIP buyers" or "Needs
+// re-engagement" one click away instead of rebuilding filters each visit.
+model ContactView {
+  id        String   @id @default(cuid())
+  shop      String
+  name      String
+  // { status, source, tagId, search } plus any custom-property filters.
+  filters   Json?
+  // Ordered array of column keys — built-ins ("email", "status", …) and
+  // custom-property keys prefixed "prop:".
+  columns   Json?
+  isDefault Boolean  @default(false) // opened automatically on arrival
+  position  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shop, position])
+}
+
+// An uploaded file in the shop's content library.
+//
+// The bytes live in Shopify Files (see lib/shopify/files.server.js); this is a
+// local index of them. Keeping our own row is what makes the library listable,
+// searchable and attributable — the Files API cannot tell us which uploads came
+// from this app — and it gives alt text somewhere to live.
+model MediaAsset {
+  id         String   @id @default(cuid())
+  shop       String
+  url        String // Shopify CDN URL, the shareable link
+  shopifyGid String   @default("") // Files API id, for later deletion
+  filename   String   @default("")
+  mimeType   String   @default("")
+  byteSize   Int      @default(0)
+  width      Int? // images only
+  height     Int?
+  alt        String   @default("")
+  // Where it came from, so the library can show "used in emails" vs one-off
+  // uploads: email_block | email_logo | library | popup
+  source     String   @default("library")
+  createdAt  DateTime @default(now())
+  // Soft delete. Removing an asset hides it from the library but must not break
+  // the image in an email that has already been delivered — an inbox copy is
+  // not re-renderable, so the URL has to keep resolving forever.
+  deletedAt  DateTime?
+
+  @@index([shop, createdAt])
+  @@index([shop, mimeType])
 }
 
 // Saved audience group — dynamic (rule tree) or static (explicit member list).
@@ -253,6 +472,34 @@ model SegmentMembership {
   @@unique([segmentId, contactId])
   @@index([segmentId])
   @@index([contactId])
+}
+
+// A placed order, ingested from the orders/create and orders/paid webhooks and
+// by the historical backfill.
+//
+// Exists so the Purchase segment fields (total spent, order count, last order
+// date, AOV) can work at all, and so revenue attribution isn't limited to cart
+// recovery. Only the facts we actually use are stored — no line items, no
+// addresses — because everything here is shopper PII we then have to erase on
+// request, and storing what we don't need is pure liability.
+model Order {
+  id              String    @id @default(cuid())
+  shop            String
+  shopifyOrderId  String // numeric id as a string, stable across API versions
+  email           String // lowercased, links to Contact
+  totalPrice      Float     @default(0)
+  currency        String    @default("USD")
+  financialStatus String    @default("") // paid | pending | refunded | voided | ...
+  processedAt     DateTime // when the customer ordered, not when we ingested
+  cancelledAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  // orders/create and orders/paid both fire for the same order, so the id is
+  // the dedupe key rather than a source of duplicates.
+  @@unique([shop, shopifyOrderId])
+  @@index([shop, email])
+  @@index([shop, processedAt])
 }
 
 // Tracks an abandoned checkout session
@@ -345,6 +592,21 @@ model Journey {
   triggerSegmentKey  String?
   lastEnrollmentAt   DateTime?
   lastEnrollmentHash String?
+  // ── Broadcast fields (trigger = "broadcast") ───────────────────────────
+  // A broadcast is a one-off send rather than an automation: one email, one
+  // audience, once. It reuses this model deliberately — the step editor,
+  // renderer, job queue, suppression, quiet hours, quota and per-recipient
+  // analytics all already operate on a Journey, and a parallel Campaign model
+  // would have to duplicate every one of them.
+  //
+  // The audience is triggerSegmentKey (a Segment id, a sys_* key, or null for
+  // every subscribed contact).
+  scheduledFor       DateTime? // when to send; null means send on publish
+  // Set the moment the audience is enrolled. This is what makes the send
+  // exactly-once: the dispatcher claims a broadcast by writing this, so a
+  // second worker tick — or a second app instance — cannot enroll twice.
+  dispatchedAt       DateTime?
+  recipientCount     Int       @default(0)
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -354,6 +616,8 @@ model Journey {
   @@index([shop, trigger])
   @@index([shop, status])
   @@index([trigger, status, lastEnrollmentAt])
+  // Drives the broadcast dispatcher's "which sends are due" query.
+  @@index([trigger, status, scheduledFor])
 }
 
 // One step within a journey (email send, time delay, push, or exit)
@@ -495,6 +759,11 @@ model PushJob {
   attempts     Int       @default(0)
   lastError    String    @default("")
   sentAt       DateTime?
+  // Set by /track/push-click, which the service worker calls from its
+  // notificationclick handler. Before this column existed the UI reported
+  // "push clicks" as COUNT(status = 'done') — i.e. the number of pushes SENT —
+  // which rendered a 100% click-through rate for every contact.
+  clickedAt    DateTime?
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
 
@@ -503,6 +772,7 @@ model PushJob {
 
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
+  @@index([shop, clickedAt])
 }
 
 // Per-shop WhatsApp Business Account, connected via Meta Embedded Signup.

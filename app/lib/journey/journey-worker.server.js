@@ -3,9 +3,13 @@
  * Called every 60s alongside the cart rescue worker.
  */
 import prisma from "../../db.server.js";
-import { sendEmail, resolveFrom, resolveProvider } from "../email/index.server.js";
+// Shared with the push and WhatsApp workers — the email path used to carry its
+// own copy of isInQuietHours, which is how three send paths drift apart.
+import { isInQuietHours, quietHoursRetryDelay } from "./quiet-hours.server.js";
+import { sendEmail, resolveFrom, resolveProvider, resolveStoreUrl } from "../email/index.server.js";
 import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml } from "../email/visual-renderer.server.js";
-import { buildUnsubscribeUrl } from "../tracking/links.server.js";
+import { buildTextPart } from "../email/text.server.js";
+import { buildUnsubscribeUrl, listUnsubscribeHeaders } from "../tracking/links.server.js";
 import { createDiscountCode } from "../shopify/discounts.server.js";
 import {
   claimDueJourneyJobs,
@@ -13,24 +17,42 @@ import {
   markJourneyJobFailed,
 } from "./journey-queue.server.js";
 import { checkQuota, incrementUsage } from "../billing/entitlements.server.js";
+import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.server.js";
+import { stopShopSending, releaseClaimedJob } from "./shop-work.server.js";
 
-function isInQuietHours(quietStart, quietEnd, timezone) {
-  try {
-    const now = new Date();
-    const formatter = new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: timezone });
-    const hour = parseInt(formatter.format(now), 10);
-    if (quietStart < quietEnd) return hour >= quietStart && hour < quietEnd;
-    return hour >= quietStart || hour < quietEnd;
-  } catch {
-    return false;
-  }
-}
 
 export async function runJourneyWorker() {
-  const jobs = await claimDueJourneyJobs(20);
-  if (!jobs.length) return;
+  const claimed = await claimDueJourneyJobs(20);
+  if (!claimed.length) return;
 
-  for (const job of jobs) {
+  // Never send on behalf of a shop that has gone away. Asking Shopify is the
+  // only reliable test: a Session row survives both an uninstall whose webhook
+  // never landed and a store the merchant has closed outright.
+  const { live, dead, holding } = await partitionByShopHealth(claimed);
+
+  // One shop's verdict condemns its whole backlog, not just the jobs this tick
+  // happened to claim — otherwise the queue drains 20 rows per minute while the
+  // shop stays dead.
+  const condemned = new Map();
+  for (const { job, status } of dead) condemned.set(job.shop, status);
+  for (const [shop, status] of condemned) {
+    const reason = cancelReasonFor(status);
+    const { jobs } = await stopShopSending(shop, reason);
+    console.warn(
+      `[journey-worker] ${shop} — ${reason}; cancelled ${jobs.total} queued jobs ` +
+        `(${jobs.byQueue.email} email, ${jobs.byQueue.push} push, ${jobs.byQueue.whatsapp} whatsapp)`,
+    );
+  }
+
+  // Unreachable, not dead: give the work back and let a later tick decide.
+  for (const job of holding) {
+    await releaseClaimedJob("journeyJob", job.id);
+  }
+  if (holding.length) {
+    console.warn(`[journey-worker] held ${holding.length} job(s) — shop health unknown`);
+  }
+
+  for (const job of live) {
     try {
       await processJourneyJob(job);
     } catch (err) {
@@ -61,11 +83,12 @@ async function processJourneyJob(job) {
     return;
   }
 
-  // Quiet hours — reschedule 1h forward
+  // Inside quiet hours — defer, with jitter so the overnight backlog doesn't
+  // all become due in the same tick.
   if (isInQuietHours(settings.quietHoursStart, settings.quietHoursEnd, settings.storeTimezone)) {
     await prisma.journeyJob.update({
       where: { id: job.id },
-      data: { status: "pending", scheduledFor: new Date(Date.now() + 60 * 60 * 1000) },
+      data: { status: "pending", scheduledFor: new Date(Date.now() + quietHoursRetryDelay()) },
     });
     return;
   }
@@ -91,17 +114,38 @@ async function processJourneyJob(job) {
   // ctx.discount_code merge tag and used by the renderer for the block itself.
   // If no discount block is present, no code is generated. Custom-HTML steps
   // have no discount block, so they never generate a code (discount_code = "").
-  let discountCode = "";
+  let discountBlock = null;
   if (emailMode === "blocks") {
     try { parsedBlocks = JSON.parse(step.emailBlocks || "[]"); } catch { parsedBlocks = []; }
     try { brand = JSON.parse(step.emailBrand || "{}"); } catch { brand = {}; }
-    const discountBlock = parsedBlocks.find((b) => b && b.type === "discount" && Number(b.percent) > 0);
-    if (discountBlock) {
-      try {
-        discountCode = await createDiscountCode(shop, Number(discountBlock.percent));
-      } catch (err) {
-        console.error("[journey-worker] discount code failed:", err.message);
-      }
+    discountBlock = parsedBlocks.find((b) => b && b.type === "discount" && Number(b.percent) > 0) || null;
+  }
+
+  // Email send quota, checked BEFORE minting a discount code. A code created for
+  // a send that is then blocked would sit in the merchant's Shopify admin
+  // forever, redeemable by nobody who was ever told about it.
+  const quota = await checkQuota(shop, "emails", 1);
+  if (quota.exceeded) {
+    if (quota.shouldBlock) {
+      // Fail the job explicitly rather than dropping it silently, so the
+      // merchant can see why nothing sent.
+      await markJourneyJobFailed(job.id, "quota_exceeded");
+      return;
+    }
+    console.warn(
+      `[billing:shadow] email quota exceeded shop=${shop} used=${quota.used} limit=${quota.limit} plan=${quota.planKey} — allowed (enforcement off)`,
+    );
+  }
+
+  // Minted last, once everything that could abort the send has passed. It can
+  // still be orphaned if the provider itself rejects the message, but that is a
+  // genuine failure rather than a decision we made a moment earlier.
+  let discountCode = "";
+  if (discountBlock) {
+    try {
+      discountCode = await createDiscountCode(shop, Number(discountBlock.percent));
+    } catch (err) {
+      console.error("[journey-worker] discount code failed:", err.message);
     }
   }
 
@@ -109,7 +153,11 @@ async function processJourneyJob(job) {
     first_name: firstName || "",
     last_name: rest.join(" "),
     store_name: settings.senderName || "",
-    store_url: `https://${shop}`,
+    // Resolved, not interpolated: the tenant key is a domain only for a Shopify
+    // install. A direct workspace's key is a slug, and `https://<slug>` is a
+    // host that does not exist — which would then become the href of every
+    // button left without a URL.
+    store_url: resolveStoreUrl({ shop, settings }),
     discount_code: discountCode || "",
     cart_url: recoveryUrl || "",
     unsubscribeUrl,
@@ -130,22 +178,6 @@ async function processJourneyJob(job) {
   const provider = resolveProvider(settings);
   const { from, replyTo } = resolveFrom({ settings, provider });
 
-  // Email send quota. In shadow mode (BILLING_ENFORCE unset) this only logs what
-  // would have been blocked — nothing is stopped until we've sized the caps
-  // against real data. `shouldBlock` is already false for comped shops.
-  const quota = await checkQuota(shop, "emails", 1);
-  if (quota.exceeded) {
-    if (quota.shouldBlock) {
-      // Fail the job explicitly rather than dropping it silently, so the
-      // merchant can see why nothing sent.
-      await markJourneyJobFailed(job.id, "quota_exceeded");
-      return;
-    }
-    console.warn(
-      `[billing:shadow] email quota exceeded shop=${shop} used=${quota.used} limit=${quota.limit} plan=${quota.planKey} — allowed (enforcement off)`,
-    );
-  }
-
   const result = await sendEmail(
     {
       to: enrollment.contactEmail,
@@ -153,6 +185,16 @@ async function processJourneyJob(job) {
       replyTo,
       subject,
       html,
+      // Multipart: HTML-only is a long-standing spam heuristic, and the text
+      // part is what watch previews and text-only clients render.
+      text: buildTextPart({ html, unsubscribeUrl }),
+      // RFC 8058 one-click unsubscribe — required by Gmail's and Yahoo's
+      // bulk-sender rules. Without it they throttle or spam-folder the sender,
+      // and every shop on the shared sending domain shares that reputation.
+      headers: listUnsubscribeHeaders({ unsubscribeUrl }),
+      // Stable per job, so a retry after a network timeout that actually
+      // succeeded upstream cannot deliver the same email twice.
+      idempotencyKey: job.id,
     },
     { shop, settings },
   );
@@ -170,22 +212,14 @@ async function processJourneyJob(job) {
   // existing Resend webhook join working; providerMessageId is the neutral key
   // the SES webhook uses.
   const messageId = result.providerMessageId || "";
+  // markJourneyJobDone settles the enrollment when this was the last job
+  // outstanding — across all three queues, and on every terminal path, not just
+  // this successful one. See settleEnrollmentIfFinished.
   await markJourneyJobDone(job.id, {
     sentAt,
     resendMessageId: messageId,
     providerMessageId: messageId,
   });
-
-  // Check if all steps for this enrollment are done — complete enrollment
-  const pendingCount = await prisma.journeyJob.count({
-    where: { enrollmentId: enrollment.id, status: { in: ["pending", "processing"] } },
-  });
-  if (pendingCount === 0) {
-    await prisma.journeyEnrollment.update({
-      where: { id: enrollment.id },
-      data: { completedAt: sentAt, exitReason: "completed" },
-    });
-  }
 }
 
 function defaultSubject(trigger, stepNumber, storeName) {

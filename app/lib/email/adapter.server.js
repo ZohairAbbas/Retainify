@@ -10,7 +10,15 @@
  * @property {string} replyTo
  * @property {string} subject
  * @property {string} html
- * @property {string} [messageId] - idempotency key
+ * @property {string} [text]      - text/plain alternative. Always supply one for
+ *                                  marketing sends: HTML-only is a spam signal.
+ * @property {Record<string,string>} [headers]
+ *                                - extra MIME headers. Carries List-Unsubscribe
+ *                                  and List-Unsubscribe-Post, which Gmail and
+ *                                  Yahoo require from bulk senders.
+ * @property {string} [idempotencyKey]
+ *                                - stable per logical send (we use JourneyJob.id)
+ *                                  so a retried job cannot double-deliver.
  */
 
 /**

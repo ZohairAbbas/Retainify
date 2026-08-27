@@ -5,6 +5,7 @@ import { syncConfirmedSubscriber } from "../lib/shopify/customers.server.js";
 import { sendEmail, resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { renderDiscountRevealEmail } from "../lib/email/templates.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
+import { checkShopHealth, SHOP_CLOSED, SHOP_UNINSTALLED } from "../lib/shopify/shop-health.server.js";
 
 function html(title, body) {
   return new Response(
@@ -55,17 +56,33 @@ export const loader = async ({ request }) => {
     );
   }
 
+  // The link in a shopper's inbox keeps working long after a store closes, so
+  // this route can fire for a shop the workers have already stopped sending
+  // for. A dead shop gets no discount (Shopify would refuse to mint one anyway)
+  // and no email.
+  //
+  // UNKNOWN counts as reachable here, unlike in the workers: a shopper is
+  // waiting on this page right now, and a transient Shopify blip is not a
+  // reason to break double opt-in for a live store.
+  const health = await checkShopHealth(shop);
+  const shopIsGone = health === SHOP_CLOSED || health === SHOP_UNINSTALLED;
+  if (shopIsGone) {
+    console.warn(`[confirm] ${shop} is ${health} — confirming consent only, no discount or email`);
+  }
+
   // Generate discount code
   let discountCode = "";
   const popupSettings = await prisma.popupSettings.findUnique({ where: { shop } });
   const configDiscount = popupSettings?.config?.discount;
   const discountPct = Number.isFinite(configDiscount) ? configDiscount : (popupSettings?.discountPct ?? 10);
 
-  try {
-    discountCode = await createDiscountCode(shop, discountPct);
-  } catch (err) {
-    console.error("[confirm] discount code generation failed:", err.message);
-    // Confirm the email even if discount creation fails
+  if (!shopIsGone) {
+    try {
+      discountCode = await createDiscountCode(shop, discountPct);
+    } catch (err) {
+      console.error("[confirm] discount code generation failed:", err.message);
+      // Confirm the email even if discount creation fails
+    }
   }
 
   // Persist confirmation
@@ -94,8 +111,10 @@ export const loader = async ({ request }) => {
     console.error("[confirm] shopify customer sync failed:", err.message),
   );
 
-  // Send discount reveal email (fire-and-forget)
-  if (discountCode) {
+  // Send discount reveal email (fire-and-forget). Guarded on shop health as
+  // well as on the code itself — the two are linked today, but a future edit
+  // that sends something here regardless of discount must not reopen this hole.
+  if (discountCode && !shopIsGone) {
     sendDiscountEmail(shop, email, discountCode, discountPct).catch((err) =>
       console.error("[confirm] discount reveal email failed:", err.message),
     );
@@ -125,7 +144,7 @@ async function sendDiscountEmail(shop, email, discountCode, discountPct) {
   const provider = resolveProvider(shopSettings);
   const { from, replyTo } = resolveFrom({ settings: shopSettings, provider });
 
-  await sendEmail(
+  const result = await sendEmail(
     {
       to: email,
       from,
@@ -135,4 +154,13 @@ async function sendDiscountEmail(shop, email, discountCode, discountPct) {
     },
     { shop, settings: shopSettings },
   );
+
+  // Same trap as the confirmation send: the adapters return provider errors
+  // rather than throwing, so an unchecked result means a shopper who confirmed
+  // never gets their discount code and nothing anywhere records why.
+  if (!result.ok) {
+    console.error(
+      `[track.confirm] discount email REJECTED by provider shop=${shop} from="${from}" replyTo="${replyTo}": ${result.error}`,
+    );
+  }
 }

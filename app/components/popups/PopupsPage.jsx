@@ -12,7 +12,7 @@ function triggerSummary(popup) {
   return `after ${delay}s`;
 }
 
-function PopupOverview({ popup, signupCount, onEdit, onBrowse, onToggle }) {
+function PopupOverview({ popup, signupCount, storeDomain, storeName, onEdit, onBrowse, onToggle }) {
   if (!popup || !popup.template) {
     return (
       <div
@@ -68,18 +68,22 @@ function PopupOverview({ popup, signupCount, onEdit, onBrowse, onToggle }) {
             <div className="rt-pop-current-vibe">{template.vibe}</div>
             <h3 className="rt-pop-current-name">{template.name}</h3>
             <p className="t-small muted" style={{ margin: 0, lineHeight: 1.6 }}>{template.oneliner}</p>
+            {/* Conversion rate and attributed revenue used to sit here as
+                permanent em-dashes: the storefront script sends no impression
+                events, so neither could ever be computed. Showing what we do
+                measure beats two placeholders that never fill in. */}
             <div className="rt-pop-current-stats">
               <div>
-                <div className="rt-pop-stat-num">—</div>
-                <div className="rt-pop-stat-label">Conversion</div>
+                <div className="rt-pop-stat-num">{signupCount.total.toLocaleString()}</div>
+                <div className="rt-pop-stat-label">Signups</div>
               </div>
               <div>
-                <div className="rt-pop-stat-num">{signupCount}</div>
-                <div className="rt-pop-stat-label">Subscribers</div>
+                <div className="rt-pop-stat-num">{signupCount.confirmed.toLocaleString()}</div>
+                <div className="rt-pop-stat-label">Confirmed</div>
               </div>
               <div>
-                <div className="rt-pop-stat-num">—</div>
-                <div className="rt-pop-stat-label">Attributed rev.</div>
+                <div className="rt-pop-stat-num">{signupCount.last30.toLocaleString()}</div>
+                <div className="rt-pop-stat-label">Last 30 days</div>
               </div>
             </div>
             <div className="rt-pop-current-actions">
@@ -97,12 +101,13 @@ function PopupOverview({ popup, signupCount, onEdit, onBrowse, onToggle }) {
       <div className="rt-pop-preview-card">
         <div className="rt-pop-preview-head">
           <span className="rt-pop-preview-head-title">Storefront preview</span>
-          <span className="t-small muted">northhill.shop</span>
+          {/* Was hardcoded to a fictional store name for every merchant. */}
+          <span className="t-small muted">{storeDomain}</span>
         </div>
         <div className="rt-pop-preview-stage">
           <FitToParent naturalWidth={720} naturalHeight={520}>
             <div style={{ width: 720, height: 520 }}>
-              <StorefrontFrame dim={popup.template !== "custom"}>
+              <StorefrontFrame dim={popup.template !== "custom"} storeDomain={storeDomain} storeName={storeName}>
                 <template.Render data={config} />
               </StorefrontFrame>
             </div>
@@ -168,7 +173,7 @@ function PopupGallery({ activeId, onUseTemplate }) {
   );
 }
 
-export default function PopupsPage({ popup, signupCount, onEnterEditor, onToggle, onUseTemplate }) {
+export default function PopupsPage({ popup, signupCount, storeDomain, storeName, onEnterEditor, onToggle, onUseTemplate }) {
   const galleryRef = useRef(null);
   return (
     <div className="rt-pop-page">
@@ -185,6 +190,8 @@ export default function PopupsPage({ popup, signupCount, onEnterEditor, onToggle
       <PopupOverview
         popup={popup}
         signupCount={signupCount}
+        storeDomain={storeDomain}
+        storeName={storeName}
         onEdit={() => onEnterEditor(popup?.template)}
         onBrowse={() => galleryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
         onToggle={onToggle}

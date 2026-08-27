@@ -21,7 +21,7 @@
  */
 import { Webhook } from "svix";
 import prisma from "../db.server.js";
-import { upsertContact } from "../lib/contacts/contacts.server.js";
+import { unsubscribeContact } from "../lib/contacts/contacts.server.js";
 import { canUseDomainSlot, MAX_CUSTOM_DOMAINS } from "../lib/email/domain-slots.server.js";
 
 const SECRET = process.env.RESEND_WEBHOOK_SECRET || "";
@@ -183,18 +183,12 @@ async function handleEvent(eventType, messageId, data) {
       return;
     }
 
-    await prisma.emailSuppression.upsert({
-      where: { shop_email: { shop: job.shop, email: toAddr } },
-      create: { shop: job.shop, email: toAddr, reason },
-      update: { reason },
-    });
-    await upsertContact({
-      shop: job.shop,
-      email: toAddr,
-      subscriptionStatus:
-        reason === "bounce" ? "bounced" : reason === "complaint" ? "complained" : "unsubscribed",
-    }).catch((err) =>
-      console.error("[resend-webhook] upsertContact failed:", err.message),
+    // unsubscribeContact normalizes the address before writing. Providers echo
+    // back whatever casing the envelope carried, and the suppression lookup on
+    // the send path uses the normalized Contact email — writing a mixed-case row
+    // here would leave a suppression that never matches.
+    await unsubscribeContact(job.shop, toAddr, reason).catch((err) =>
+      console.error("[resend-webhook] suppression write failed:", err.message),
     );
     console.log(`[resend-webhook] suppressed ${toAddr} on ${job.shop} reason=${reason} via messageId=${messageId}`);
     return;

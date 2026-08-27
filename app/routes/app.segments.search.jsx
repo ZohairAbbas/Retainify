@@ -1,12 +1,12 @@
 // GET /app/segments/search?q=... — tiny contact-search endpoint used by the
 // Segment Builder's static-member picker. Returns up to 10 matches.
 
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import { listContacts } from "../lib/contacts/contacts.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const url = new URL(request.url);
   const q = (url.searchParams.get("q") || "").trim();
   if (q.length < 2) return Response.json({ contacts: [] });

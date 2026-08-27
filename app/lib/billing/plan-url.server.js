@@ -1,5 +1,9 @@
 /**
- * Plan-selection page URL.
+ * Plan-selection page URL, and the provider seam that decides which one to use.
+ *
+ * A Shopify workspace checks out through Shopify App Pricing. A direct (web)
+ * workspace has no store and therefore no Shopify checkout — today it has no
+ * self-serve checkout at all, and changes plan by contacting us.
  *
  * Shopify App Pricing hosts the plan picker — we never build a checkout. The URL
  * is derived from the STORE handle and the APP handle:
@@ -37,6 +41,36 @@ export const APP_HANDLE =
 export function planSelectionUrl(shop) {
   const storeHandle = String(shop || "").replace(".myshopify.com", "");
   return `https://admin.shopify.com/store/${storeHandle}/charges/${APP_HANDLE}/pricing_plans`;
+}
+
+/**
+ * Which billing provider owns checkout for a workspace.
+ *
+ * This is the seam to extend when web workspaces get self-serve billing: add a
+ * "stripe" case here and a matching branch in the Plans page CTA, and nothing
+ * else on the page has to change. Everything else it renders — usage meters,
+ * entitlements, the comparison table — is provider-agnostic already.
+ */
+export const BILLING_SHOPIFY = "shopify";
+/** No self-serve checkout: the plan is changed by talking to us. */
+export const BILLING_NONE = "none";
+
+/**
+ * @param {{ isShopify: boolean }} ctx the result of requireAccount()
+ * @returns {"shopify"|"none"}
+ */
+export function billingProviderFor(ctx) {
+  return ctx?.isShopify ? BILLING_SHOPIFY : BILLING_NONE;
+}
+
+/**
+ * Where a workspace with no self-serve checkout should write to change plan.
+ * Empty when unset — the page then asks them to get in touch without naming an
+ * address, rather than printing a mailbox that may not exist.
+ */
+export function billingContactEmail() {
+  // eslint-disable-next-line no-undef
+  return process.env.BILLING_CONTACT_EMAIL || "";
 }
 
 /**

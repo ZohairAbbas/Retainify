@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { Link, useFetcher, useLoaderData, useNavigate, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import Icons from "../components/ui/Icons.jsx";
+import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import Avatar from "../components/contacts/Avatar.jsx";
 import StatusPill from "../components/contacts/StatusPill.jsx";
 import LifecyclePill from "../components/contacts/LifecyclePill.jsx";
 import TagChip from "../components/contacts/TagChip.jsx";
-import SoonPill from "../components/contacts/SoonPill.jsx";
 import StatCard from "../components/contacts/StatCard.jsx";
 import SegmentKindPill from "../components/segments/SegmentKindPill.jsx";
 import Sparkline from "../components/segments/Sparkline.jsx";
@@ -27,13 +27,13 @@ import {
 } from "../lib/segments/segments.server.js";
 import { getSystemSegmentById, isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import { listTagsForShop } from "../lib/contacts/tags.server.js";
-import { computeLifecycle, getContactStats } from "../lib/contacts/contacts.server.js";
-import { FIELDS } from "../lib/segments/fields.server.js";
+import { computeLifecycle, emptyContactStats, getContactStatsBatch } from "../lib/contacts/contacts.server.js";
+import { fieldsFor } from "../lib/segments/fields.server.js";
 import prisma from "../db.server.js";
 
 export const loader = async ({ params, request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const id = params.id;
 
   let segment = null;
@@ -73,19 +73,19 @@ export const loader = async ({ params, request }) => {
       const last = contacts.pop();
       nextCursor = last.id;
     }
-    contactRows = await Promise.all(
-      contacts.map(async (c) => {
-        const stats = await getContactStats(shop, c.email);
-        return {
-          id: c.id, email: c.email, name: c.name,
-          subscriptionStatus: c.subscriptionStatus,
-          lifecycle: computeLifecycle(c, stats),
-          tags: c.tags.map((ct) => ({ id: ct.tag.id, name: ct.tag.name, color: ct.tag.color })),
-          stats,
-          lastSeenAt: c.lastSeenAt,
-        };
-      }),
-    );
+    // One batched stats query for the page, not one per contact.
+    const statsByEmail = await getContactStatsBatch(shop, contacts.map((c) => c.email));
+    contactRows = contacts.map((c) => {
+      const stats = statsByEmail.get(c.email) || emptyContactStats();
+      return {
+        id: c.id, email: c.email, name: c.name,
+        subscriptionStatus: c.subscriptionStatus,
+        lifecycle: computeLifecycle(c, stats),
+        tags: c.tags.map((ct) => ({ id: ct.tag.id, name: ct.tag.name, color: ct.tag.color })),
+        stats,
+        lastSeenAt: c.lastSeenAt,
+      };
+    });
   } else {
     // Dynamic: hydrate the sample with full contact rows.
     const ids = sample.map((s) => s.id);
@@ -94,19 +94,18 @@ export const loader = async ({ params, request }) => {
         where: { id: { in: ids }, shop, deletedAt: null },
         include: { tags: { include: { tag: true } } },
       });
-      contactRows = await Promise.all(
-        contacts.map(async (c) => {
-          const stats = await getContactStats(shop, c.email);
-          return {
-            id: c.id, email: c.email, name: c.name,
-            subscriptionStatus: c.subscriptionStatus,
-            lifecycle: computeLifecycle(c, stats),
-            tags: c.tags.map((ct) => ({ id: ct.tag.id, name: ct.tag.name, color: ct.tag.color })),
-            stats,
-            lastSeenAt: c.lastSeenAt,
-          };
-        }),
-      );
+      const statsByEmail = await getContactStatsBatch(shop, contacts.map((c) => c.email));
+      contactRows = contacts.map((c) => {
+        const stats = statsByEmail.get(c.email) || emptyContactStats();
+        return {
+          id: c.id, email: c.email, name: c.name,
+          subscriptionStatus: c.subscriptionStatus,
+          lifecycle: computeLifecycle(c, stats),
+          tags: c.tags.map((ct) => ({ id: ct.tag.id, name: ct.tag.name, color: ct.tag.color })),
+          stats,
+          lastSeenAt: c.lastSeenAt,
+        };
+      });
     }
   }
 
@@ -163,7 +162,9 @@ export const loader = async ({ params, request }) => {
     lifecycleMix,
     contactRows,
     tags,
-    fields: FIELDS,
+    // Commerce fields are hidden without a store — a rule on them would
+    // match nobody, permanently.
+    fields: fieldsFor(ctx.isShopify),
     snapshots: snapshots.map((s) => ({ takenAt: s.takenAt, count: s.count })),
     recentEntered: enteredRows.map((r) => enrich(r, "enteredAt")),
     recentLeft: leftRows.map((r) => enrich(r, "leftAt")),
@@ -173,8 +174,8 @@ export const loader = async ({ params, request }) => {
 };
 
 export const action = async ({ params, request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
   const id = params.id;
@@ -224,17 +225,19 @@ export default function SegmentDetailPage() {
     nextCursor,
   } = useLoaderData();
 
-  // Snapshot series → sparkline values. Append the live count so the
-  // rightmost point matches the big stat card. When there are no snapshots
-  // yet, fall back to the synthetic curve so the card isn't blank.
+  // Snapshot series → sparkline values. Append the live count so the rightmost
+  // point matches the big stat card. A segment with no snapshots yet renders
+  // flat at its current size; it used to fall back to a synthetic upward curve,
+  // which read as growth that had never been measured.
   const snapshotSeries =
     snapshots.length > 0
       ? [...snapshots.map((s) => s.count), count]
-      : fakeSpark(count);
+      : [count, count];
   const navigate = useNavigate();
   const fetcher = useFetcher();
   const [tab, setTab] = useState("contacts");
   const [openKebab, setOpenKebab] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [editingName, setEditingName] = useState(false);
   const [editingDesc, setEditingDesc] = useState(false);
   const [nameDraft, setNameDraft] = useState(segment.name);
@@ -327,20 +330,20 @@ export default function SegmentDetailPage() {
                       >
                         <Icons.Copy size={14} /> Duplicate
                       </button>
-                      <button type="button" disabled className="rt-menu-soon">
-                        <Icons.ArrowUp size={14} /> Export CSV <SoonPill />
-                      </button>
+                      <a
+                        href={`/app/segments/${segment.id}/export`}
+                        download
+                        onClick={() => setOpenKebab(false)}
+                      >
+                        <Icons.ArrowUp size={14} /> Export CSV
+                      </a>
                       <div className="rt-menu-sep" />
                       <button
                         type="button"
                         className="rt-menu-danger"
                         onClick={() => {
                           setOpenKebab(false);
-                          if (window.confirm(`Delete "${segment.name}"? This can't be undone.`)) {
-                            const fd = new FormData();
-                            fd.set("intent", "delete");
-                            fetcher.submit(fd, { method: "post" });
-                          }
+                          setConfirmDelete(true);
                         }}
                       >
                         <Icons.Trash size={14} /> Delete
@@ -710,14 +713,31 @@ export default function SegmentDetailPage() {
           )}
         </div>
       )}
+
+      {confirmDelete && (
+        <ConfirmDialog
+          title={`Delete "${segment.name}"?`}
+          body="The segment is removed from your list. Contacts in it are not deleted. A segment still used as a trigger by a published flow can't be deleted."
+          confirmLabel="Delete segment"
+          destructive
+          loading={fetcher.state !== "idle"}
+          onCancel={() => setConfirmDelete(false)}
+          onConfirm={() => {
+            setConfirmDelete(false);
+            const fd = new FormData();
+            fd.set("intent", "delete");
+            fetcher.submit(fd, { method: "post" });
+          }}
+        />
+      )}
     </div>
   );
 }
 
 function LifecycleSummary({ mix }) {
   const total = Object.values(mix).reduce((a, b) => a + b, 0);
-  const order = ["new", "active", "at_risk", "churned", "never_purchased"];
-  const labels = { new: "New", active: "Active", at_risk: "At-risk", churned: "Churned", never_purchased: "Never purchased" };
+  const order = ["new", "active", "at_risk", "churned"];
+  const labels = { new: "New", active: "Active", at_risk: "At-risk", churned: "Churned" };
   if (!total) return <div className="t-small muted">No data.</div>;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -734,11 +754,6 @@ function LifecycleSummary({ mix }) {
       })}
     </div>
   );
-}
-
-function fakeSpark(count) {
-  if (!count) return [0, 0, 0, 0, 0, 0];
-  return [count * 0.86, count * 0.9, count * 0.93, count * 0.95, count * 0.98, count];
 }
 
 export function ErrorBoundary() {

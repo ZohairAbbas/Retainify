@@ -17,7 +17,10 @@
     "prisma": "prisma",
     "graphql-codegen": "graphql-codegen",
     "vite": "vite",
-    "typecheck": "react-router typegen && tsc --noEmit"
+    "typecheck": "react-router typegen && tsc --noEmit",
+    "billing:cutover": "node scripts/grandfather-shops.mjs",
+    "billing:cutover:dry": "node scripts/grandfather-shops.mjs --dry-run",
+    "check:gdpr": "node scripts/check-gdpr-coverage.mjs"
   },
   "type": "module",
   "engines": {

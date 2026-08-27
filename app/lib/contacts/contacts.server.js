@@ -166,32 +166,45 @@ export async function upsertContact(input) {
 }
 
 /**
- * v1 lifecycle computation. Orders data isn't synced yet, so we fall back to:
- *   - firstSeen within 14 days → "new"
- *   - has cart abandons, last one > 90 days ago → "churned"
- *   - has cart abandons, last one > 30 days ago → "at_risk"
- *   - otherwise → "never_purchased"
+ * Lifecycle stage for a contact.
  *
- * Once Orders sync ships, swap to the rules in segments_contacts_ideas.md
- * (active when ordered ≤30d, at_risk 31–90d, churned >90d).
+ * Measures ENGAGEMENT RECENCY, not purchase history. The previous version was
+ * written against order data that is not ingested anywhere: it had no branch
+ * that could return "active", and fell through to "never_purchased" for anyone
+ * past 14 days who had not abandoned a cart. That labelled a shop's best repeat
+ * customers "Never purchased" on the contacts table, the profile header and the
+ * lifecycle diagram — and made the "Active" segment filter match nobody, ever.
+ *
+ * Signals: when we first saw them, when we last saw them (any touchpoint —
+ * popup, checkout, sync, push), when they last abandoned a cart, and when they
+ * last ordered. Purchase recency is the strongest of these, which is what the
+ * original order-based design was reaching for; it just had no order data to
+ * read.
+ *
+ * @param {{ firstSeenAt: Date|string, lastSeenAt?: Date|string, lastOrderAt?: Date|string|null }} contact
+ * @param {{ lastCartAbandonAt?: Date|string|null }} [stats]
+ * @returns {"new"|"active"|"at_risk"|"churned"}
  */
 export function computeLifecycle(contact, stats) {
+  const DAY = 24 * 60 * 60 * 1000;
   const now = Date.now();
+
   const firstSeen = new Date(contact.firstSeenAt).getTime();
-  const daysSinceFirstSeen = (now - firstSeen) / (1000 * 60 * 60 * 24);
+  if (Number.isFinite(firstSeen) && (now - firstSeen) / DAY <= 14) return "new";
 
-  if (daysSinceFirstSeen <= 14) return "new";
+  const signals = [contact.lastSeenAt, contact.lastOrderAt, stats?.lastCartAbandonAt]
+    .filter(Boolean)
+    .map((d) => new Date(d).getTime())
+    .filter((t) => Number.isFinite(t));
 
-  const lastCart = stats?.lastCartAbandonAt
-    ? new Date(stats.lastCartAbandonAt).getTime()
-    : null;
-  if (lastCart) {
-    const daysSinceCart = (now - lastCart) / (1000 * 60 * 60 * 24);
-    if (daysSinceCart > 90) return "churned";
-    if (daysSinceCart > 30) return "at_risk";
-  }
+  // No usable timestamp at all — treat as long-dormant rather than inventing a
+  // more flattering stage.
+  if (!signals.length) return "churned";
 
-  return "never_purchased";
+  const daysSinceActivity = (now - Math.max(...signals)) / DAY;
+  if (daysSinceActivity <= 30) return "active";
+  if (daysSinceActivity <= 90) return "at_risk";
+  return "churned";
 }
 
 /**
@@ -241,16 +254,29 @@ export async function getContactStats(shop, email) {
         enrollment: { contactEmail: lower },
       },
     }),
+    // Real clicks, recorded by /track/push-click. This used to count
+    // status === "done" — the number of pushes SENT — and so reported a 100%
+    // click-through rate for every contact who had received one.
     prisma.pushJob.count({
       where: {
         shop,
-        status: "done",
+        clickedAt: { not: null },
         enrollment: { contactEmail: lower },
       },
     }),
   ]);
 
+  // Purchase facts live on the Contact row itself (maintained by lib/orders),
+  // so they cost one lookup rather than an aggregate over Order.
+  const contactRow = await prisma.contact.findUnique({
+    where: { shop_email: { shop, email: lower } },
+    select: { orderCount: true, totalSpent: true, lastOrderAt: true },
+  });
+
   return buildStats({
+    orderCount: contactRow?.orderCount || 0,
+    totalSpent: contactRow?.totalSpent || 0,
+    lastOrderAt: contactRow?.lastOrderAt || null,
     cartAbandonCount: cartAggregate._count?._all || 0,
     lastCartAbandonAt: cartAggregate._max?.abandonedAt || null,
     lastCartValue: cartAggregate._max?.totalPrice || 0,
@@ -267,11 +293,14 @@ function buildStats(parts = {}) {
   const emailsSent = parts.emailsSent || 0;
   const emailsOpened = parts.emailsOpened || 0;
   const emailsClicked = parts.emailsClicked || 0;
+  const orderCount = parts.orderCount || 0;
   return {
-    totalSpent: 0,
-    orderCount: 0,
-    lastOrderAt: null,
-    averageOrderValue: 0,
+    // Real figures now, from the aggregates lib/orders maintains on Contact.
+    // These were hardcoded to zero while no order data existed.
+    totalSpent: parts.totalSpent || 0,
+    orderCount,
+    lastOrderAt: parts.lastOrderAt || null,
+    aov: orderCount ? (parts.totalSpent || 0) / orderCount : 0,
     cartAbandonCount: parts.cartAbandonCount || 0,
     lastCartAbandonAt: parts.lastCartAbandonAt || null,
     lastCartValue: parts.lastCartValue || 0,
@@ -331,8 +360,8 @@ export async function getContactStatsBatch(shop, emails) {
        GROUP BY e."contactEmail"`,
     prisma.$queryRaw`
       SELECT e."contactEmail" AS email,
-             COUNT(*) FILTER (WHERE p."sentAt" IS NOT NULL)   AS sent,
-             COUNT(*) FILTER (WHERE p."status" = 'done')      AS clicked
+             COUNT(*) FILTER (WHERE p."sentAt" IS NOT NULL)    AS sent,
+             COUNT(*) FILTER (WHERE p."clickedAt" IS NOT NULL) AS clicked
         FROM "PushJob" p
         JOIN "JourneyEnrollment" e ON e."id" = p."enrollmentId"
        WHERE p."shop" = ${shop} ${emailFilter}
@@ -360,6 +389,20 @@ export async function getContactStatsBatch(shop, emails) {
     if (!s) continue;
     s.pushesSent = Number(row.sent) || 0;
     s.pushesClicked = Number(row.clicked) || 0;
+  }
+
+  // Purchase facts, straight off the Contact rows — one query for the batch.
+  const contactRows = await prisma.contact.findMany({
+    where: { shop, email: { in: list } },
+    select: { email: true, orderCount: true, totalSpent: true, lastOrderAt: true },
+  });
+  for (const row of contactRows) {
+    const s = out.get(row.email);
+    if (!s) continue;
+    s.orderCount = row.orderCount || 0;
+    s.totalSpent = row.totalSpent || 0;
+    s.lastOrderAt = row.lastOrderAt || null;
+    s.aov = s.orderCount ? s.totalSpent / s.orderCount : 0;
   }
 
   return out;
@@ -399,6 +442,28 @@ export async function summarizeContacts(shop) {
  * Also returns filteredTotal (count of ALL rows matching the filter, not just
  * the current page) so the UI can show "Showing X of Y" accurately.
  */
+/**
+ * The Prisma filter behind the contacts list.
+ *
+ * Extracted because three call sites need to agree on it — the list itself, the
+ * "select all matching filter" bulk actions, and the CSV export. Three separate
+ * copies is how an export quietly stops matching the rows on screen.
+ */
+export function buildContactWhere({ shop, status, source, tagId, search }) {
+  const where = { shop, deletedAt: null };
+  if (status && status !== "all") where.subscriptionStatus = status;
+  if (source && source !== "all") where.source = source;
+  if (tagId && tagId !== "all") where.tags = { some: { tagId } };
+  if (search) {
+    const q = String(search).trim();
+    where.OR = [
+      { email: { contains: q, mode: "insensitive" } },
+      { name: { contains: q, mode: "insensitive" } },
+    ];
+  }
+  return where;
+}
+
 export async function listContacts({
   shop,
   status,
@@ -408,19 +473,7 @@ export async function listContacts({
   cursor,
   limit = 50,
 }) {
-  const where = { shop, deletedAt: null };
-  if (status && status !== "all") where.subscriptionStatus = status;
-  if (source && source !== "all") where.source = source;
-  if (tagId && tagId !== "all") {
-    where.tags = { some: { tagId } };
-  }
-  if (search) {
-    const q = search.trim();
-    where.OR = [
-      { email: { contains: q, mode: "insensitive" } },
-      { name: { contains: q, mode: "insensitive" } },
-    ];
-  }
+  const where = buildContactWhere({ shop, status, source, tagId, search });
 
   const take = search ? Math.min(limit, 200) : limit;
 
@@ -450,19 +503,8 @@ export async function listContacts({
  * server-side "select all filtered" bulk actions.
  */
 export async function listAllContactIds({ shop, status, source, tagId, search }) {
-  const where = { shop, deletedAt: null };
-  if (status && status !== "all") where.subscriptionStatus = status;
-  if (source && source !== "all") where.source = source;
-  if (tagId && tagId !== "all") where.tags = { some: { tagId } };
-  if (search) {
-    const q = search.trim();
-    where.OR = [
-      { email: { contains: q, mode: "insensitive" } },
-      { name: { contains: q, mode: "insensitive" } },
-    ];
-  }
   return prisma.contact.findMany({
-    where,
+    where: buildContactWhere({ shop, status, source, tagId, search }),
     select: { id: true, email: true },
     orderBy: [{ lastSeenAt: "desc" }, { id: "desc" }],
   });
@@ -499,6 +541,65 @@ export async function resubscribeContact(shop, email) {
     where: { shop, email: lower },
     data: { subscriptionStatus: "subscribed" },
   });
+}
+
+/**
+ * Suppress and mark unsubscribed in bulk.
+ *
+ * Chunked set-based writes rather than one round trip per contact: the caller
+ * can be acting on an entire filtered list, and a per-row loop there is tens of
+ * thousands of sequential queries inside one request.
+ *
+ * @param {string} shop
+ * @param {string[]} emails
+ * @returns {Promise<number>} contacts affected
+ */
+export async function bulkUnsubscribe(shop, emails) {
+  const unique = [...new Set(emails.map(normalizeEmail).filter(Boolean))];
+  if (!unique.length) return 0;
+
+  // Chunked to keep each statement's parameter list within Postgres' limits.
+  const CHUNK = 1000;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const slice = unique.slice(i, i + CHUNK);
+    await prisma.$transaction([
+      // createMany + skipDuplicates is the set-based equivalent of upserting
+      // each suppression; rows that already exist keep their original reason
+      // and createdAt, which is what we want for an unsubscribe.
+      prisma.emailSuppression.createMany({
+        data: slice.map((email) => ({ shop, email, reason: "unsubscribe" })),
+        skipDuplicates: true,
+      }),
+      prisma.contact.updateMany({
+        where: { shop, email: { in: slice } },
+        data: { subscriptionStatus: "unsubscribed" },
+      }),
+    ]);
+  }
+  return unique.length;
+}
+
+/**
+ * Soft-delete many contacts at once.
+ *
+ * @param {string} shop
+ * @param {string[]} ids
+ * @returns {Promise<number>} contacts affected
+ */
+export async function bulkSoftDelete(shop, ids) {
+  const unique = [...new Set(ids.filter(Boolean))];
+  if (!unique.length) return 0;
+
+  const CHUNK = 1000;
+  let total = 0;
+  for (let i = 0; i < unique.length; i += CHUNK) {
+    const { count } = await prisma.contact.updateMany({
+      where: { shop, id: { in: unique.slice(i, i + CHUNK) } },
+      data: { deletedAt: new Date() },
+    });
+    total += count;
+  }
+  return total;
 }
 
 export async function updateContactName(shop, id, name) {

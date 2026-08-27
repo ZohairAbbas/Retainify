@@ -1,11 +1,14 @@
 import { useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import { PUBLIC_PLANS, formatLimit, isUnlimited } from "../lib/billing/plans.js";
 import { getUsageSummary } from "../lib/billing/entitlements.server.js";
 import {
   planSelectionUrl,
   planHandleFromRequest,
+  billingProviderFor,
+  billingContactEmail,
+  BILLING_SHOPIFY,
 } from "../lib/billing/plan-url.server.js";
 
 const FEATURE_ROWS = [
@@ -26,8 +29,13 @@ const FEATURE_ROWS = [
 ];
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
+
+  // Both workspace kinds see this page. Usage, entitlements and the comparison
+  // table are keyed on `shop` (the workspace key) and work identically for a
+  // direct workspace; only checkout differs, which is what `provider` selects.
+  const provider = billingProviderFor(ctx);
 
   // Subscription sync happens in the parent /app loader (app.jsx), which runs
   // for every /app/* route and therefore also catches Shopify's post-approval
@@ -48,7 +56,11 @@ export const loader = async ({ request }) => {
       contacts: { used: contacts.used, limit: contacts.limit },
     },
     plans: PUBLIC_PLANS,
-    planUrl: planSelectionUrl(shop),
+    provider,
+    // Only meaningful for the Shopify provider; null keeps the client from
+    // rendering a link it can't honour.
+    planUrl: provider === BILLING_SHOPIFY ? planSelectionUrl(shop) : null,
+    contactEmail: provider === BILLING_SHOPIFY ? "" : billingContactEmail(),
   };
 };
 
@@ -93,7 +105,47 @@ function cellFor(plan, row) {
   return formatLimit(plan.limits[row.key]);
 }
 
-export default function PlansPage() {
+/**
+ * How a workspace changes plan. One branch per billing provider — a future
+ * "stripe" case slots in here beside these two and touches nothing else.
+ */
+function PlanCta({ provider, planUrl, planKey, contactEmail }) {
+  if (provider === "shopify") {
+    return (
+      <>
+        {/* Shopify hosts the plan picker and owns the checkout. target="_top"
+            is required — the admin cannot render inside our embedded iframe. */}
+        <a
+          className="btn btn-primary"
+          href={planUrl}
+          target="_top"
+          rel="noopener noreferrer"
+        >
+          {planKey === "free" ? "Choose a plan" : "Change plan"}
+        </a>
+        <div className="t-small muted" style={{ marginTop: 10 }}>
+          Plans, billing and cancellation are handled by Shopify and appear on your Shopify invoice.
+        </div>
+      </>
+    );
+  }
+
+  // BILLING_NONE — no self-serve checkout for web workspaces yet.
+  return (
+    <div className="t-small muted">
+      To change your plan, get in touch
+      {contactEmail ? (
+        <>
+          {" at "}
+          <a href={`mailto:${contactEmail}`}>{contactEmail}</a>
+        </>
+      ) : null}
+      {" — self-serve billing is coming to the web app soon."}
+    </div>
+  );
+}
+
+function PlansPageInner() {
   const {
     justUpgraded,
     planKey,
@@ -102,7 +154,9 @@ export default function PlansPage() {
     enforced,
     usage,
     plans,
+    provider,
     planUrl,
+    contactEmail,
   } = useLoaderData();
 
   const compDate = compedUntil
@@ -239,19 +293,12 @@ export default function PlansPage() {
         </div>
 
         <div style={{ marginTop: 24 }}>
-          {/* Shopify hosts the plan picker and owns the checkout. target="_top"
-              is required — the admin cannot render inside our embedded iframe. */}
-          <a
-            className="btn btn-primary"
-            href={planUrl}
-            target="_top"
-            rel="noopener noreferrer"
-          >
-            {planKey === "free" ? "Choose a plan" : "Change plan"}
-          </a>
-          <div className="t-small muted" style={{ marginTop: 10 }}>
-            Plans, billing and cancellation are handled by Shopify and appear on your Shopify invoice.
-          </div>
+          <PlanCta
+            provider={provider}
+            planUrl={planUrl}
+            planKey={planKey}
+            contactEmail={contactEmail}
+          />
         </div>
       </section>
     </div>
@@ -263,3 +310,7 @@ export function ErrorBoundary() {
 }
 
 export const headers = (headersArgs) => boundary.headers(headersArgs);
+
+export default function PlansPage() {
+  return <PlansPageInner />;
+}

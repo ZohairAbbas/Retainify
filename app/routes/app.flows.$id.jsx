@@ -1,9 +1,12 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
 import { saveDraft, publishJourney, pauseJourney, unpublishToDraft, archiveJourney } from "../lib/journey/journey-lifecycle.server.js";
+import { validateFlowForPublish } from "../lib/journey/flow-validation.server.js";
+import { sendTestEmail } from "../lib/email/test-send.server.js";
+import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { getStepStats } from "../lib/journey/journey-analytics.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
@@ -12,6 +15,7 @@ import { evaluateSegment } from "../lib/segments/evaluator.server.js";
 import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
 import SoonPill from "../components/contacts/SoonPill.jsx";
+import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
 const EXIT_CRITERIA_OPTIONS = [
@@ -26,8 +30,8 @@ const SEGMENT_EXIT_CRITERIA = [
 ];
 
 export const loader = async ({ request, params }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const { id } = params;
 
   const [journey, settings, whatsappTemplates] = await Promise.all([
@@ -89,7 +93,21 @@ export const loader = async ({ request, params }) => {
     },
     canvasNodes,
     settings: settings ?? {},
+    // Prefills the "Send test" recipient. The logged-in staff address is the
+    // right default; reply-to is the next best guess for an inbox the merchant
+    // actually reads.
+    testEmailDefault: ctx.user?.email || ctx.session?.email || settings?.replyTo || "",
+    // The address this shop actually sends from, resolved by the same seam the
+    // worker uses, so the builder shows the truth rather than a placeholder.
+    sendingFromAddress: (() => {
+      const provider = resolveProvider(settings);
+      const { from } = resolveFrom({ settings, provider });
+      return from.match(/<([^>]+)>/)?.[1] || from;
+    })(),
     stats,
+    // Gates the commerce triggers in the picker and the commerce channels
+    // below — neither can fire without a connected store.
+    isShopify: ctx.isShopify,
     segmentChoices,
     triggerSegmentCount,
     whatsappTemplates,
@@ -154,8 +172,8 @@ function expandCanvasNodes(steps) {
 }
 
 export const action = async ({ request, params }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const { id } = params;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
@@ -163,7 +181,85 @@ export const action = async ({ request, params }) => {
   const journey = await prisma.journey.findFirst({ where: { id, shop } });
   if (!journey) return { ok: false };
 
-  if (intent === "save-draft") {
+  // save-draft and publish share the same payload shape. Publishing a dirty
+  // canvas used to be two separate fetcher submissions 100ms apart, which React
+  // Router cancels (both went through the same fetcher) — so on any connection
+  // slower than the timeout the save was aborted and the PREVIOUS version went
+  // live under a "published" confirmation. One request, one transaction.
+  if (intent === "save-draft" || intent === "publish") {
+    const isPublish = intent === "publish";
+
+    // A publish can arrive without canvas state (e.g. re-publishing an unchanged
+    // flow), in which case there is nothing to save first.
+    const hasDraftPayload = fd.get("nodes") !== null;
+
+    if (hasDraftPayload) {
+      await persistDraft({ id, journey, fd });
+    }
+
+    if (!isPublish) return { ok: true, saved: true };
+
+    const validation = await validateFlowForPublish(id);
+    if (!validation.ok) {
+      // The draft is already saved at this point — the merchant keeps their work
+      // and only the go-live step is refused.
+      return { ok: false, saved: hasDraftPayload, publishErrors: validation.errors };
+    }
+
+    const backfillSegmentMembers = fd.get("backfillSegmentMembers") === "1";
+    const result = await publishJourney(id, { backfillSegmentMembers });
+    return {
+      ok: true,
+      saved: hasDraftPayload,
+      published: true,
+      segmentBaseline: result?.segmentBaseline ?? null,
+    };
+  }
+
+  // Send a real email through the real render + send pipeline, to an address the
+  // merchant chooses. The editor previously had a "Send test" button with no
+  // handler at all, which left email — the primary channel — as the only one
+  // with no way to preview an actual send.
+  if (intent === "send-test-email") {
+    let blocks = [];
+    let brand = {};
+    try { blocks = JSON.parse(String(fd.get("emailBlocks") || "[]")); } catch { blocks = []; }
+    try { brand = JSON.parse(String(fd.get("emailBrand") || "{}")); } catch { brand = {}; }
+
+    const result = await sendTestEmail({
+      shop,
+      to: String(fd.get("to") || ""),
+      subject: String(fd.get("subject") || ""),
+      // The editor's CURRENT state, not the saved step — a merchant who just
+      // edited a headline expects the test to show that headline.
+      emailMode: String(fd.get("emailMode") || "blocks"),
+      emailHtml: String(fd.get("emailHtml") || ""),
+      emailBlocks: blocks,
+      emailBrand: brand,
+    });
+    return { intent: "send-test-email", ...result };
+  }
+
+  if (intent === "pause") {
+    await pauseJourney(id);
+    return { ok: true };
+  }
+
+  if (intent === "unpublish") {
+    await unpublishToDraft(id);
+    return { ok: true, unpublished: true };
+  }
+
+  if (intent === "archive") {
+    await archiveJourney(id);
+    return { ok: true, archived: true };
+  }
+
+  return { ok: false };
+};
+
+/** Translate the canvas payload into saveDraft()'s step shape and persist it. */
+async function persistDraft({ id, journey, fd }) {
     const nodes = JSON.parse(String(fd.get("nodes") || "[]"));
     const name = String(fd.get("name") || journey.name);
     const entryFrequency = String(fd.get("entryFrequency") || journey.entryFrequency);
@@ -188,10 +284,16 @@ export const action = async ({ request, params }) => {
         if (n.kind === "exit") {
           return { nodeType: "exit" };
         }
+        // Note: push and WhatsApp steps deliberately send no delayHours.
+        // Timing for every sendable step is derived from the Wait nodes above
+        // it (saveDraft accumulates them), exactly as it is for email. The old
+        // per-step "Timing" control in the inspector wrote a value that
+        // saveDraft then overwrote, so it accepted input and silently discarded
+        // it; the control has been removed rather than given a second, competing
+        // timing model.
         if (n.kind === "push") {
           return {
             nodeType: "push",
-            delayHours: Number(n.delayHours) || 0,
             isEnabled: n.isEnabled !== false,
             pushTitle: n.pushTitle || "",
             pushBody: n.pushBody || "",
@@ -202,7 +304,6 @@ export const action = async ({ request, params }) => {
         if (n.kind === "whatsapp") {
           return {
             nodeType: "whatsapp",
-            delayHours: Number(n.delayHours) || 0,
             isEnabled: n.isEnabled !== false,
             waTemplateName: n.waTemplateName || "",
             waLanguage: n.waLanguage || "",
@@ -226,35 +327,10 @@ export const action = async ({ request, params }) => {
       });
 
     await saveDraft(id, { name, entryFrequency, exitCriteria, steps: stepsForSave, triggerSegmentKey, trigger });
-    return { ok: true, saved: true };
-  }
-
-  if (intent === "publish") {
-    const backfillSegmentMembers = fd.get("backfillSegmentMembers") === "1";
-    const result = await publishJourney(id, { backfillSegmentMembers });
-    return { ok: true, published: true, segmentBaseline: result?.segmentBaseline ?? null };
-  }
-
-  if (intent === "pause") {
-    await pauseJourney(id);
-    return { ok: true };
-  }
-
-  if (intent === "unpublish") {
-    await unpublishToDraft(id);
-    return { ok: true };
-  }
-
-  if (intent === "archive") {
-    await archiveJourney(id);
-    return { ok: true, archived: true };
-  }
-
-  return { ok: false };
-};
+}
 
 export default function FlowBuilder() {
-  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [] } = useLoaderData();
+  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [], testEmailDefault = "", sendingFromAddress = "", isShopify = true } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -280,6 +356,9 @@ export default function FlowBuilder() {
   // navigation. Resolved by either saving the draft + navigating, or
   // discarding draft state and navigating directly.
   const [pendingLeavePath, setPendingLeavePath] = useState(null);
+  const [dialog, setDialog] = useState(null);
+  // Destination to navigate to once an in-flight save-draft completes.
+  const [navigateAfterSave, setNavigateAfterSave] = useState(null);
 
   const isDirty = useMemo(() => {
     return (
@@ -294,12 +373,51 @@ export default function FlowBuilder() {
 
   const selected = nodes.find((n) => n.id === selectedId);
 
+  // Validation failures keep the modal open and are rendered inside it, so the
+  // merchant sees exactly which step blocked the publish.
+  const publishErrors = fetcher.data?.publishErrors || null;
+
+  // Deferred navigation after "Save draft & continue". Waiting on the fetcher
+  // rather than a timer means the draft is guaranteed persisted before the
+  // component unmounts.
   useEffect(() => {
+    if (!navigateAfterSave) return;
+    if (fetcher.state !== "idle") return;
+    if (fetcher.data?.saved) {
+      const dest = navigateAfterSave;
+      setNavigateAfterSave(null);
+      navigate(dest);
+    } else if (fetcher.data && fetcher.data.ok === false) {
+      // The save failed — stay put and surface it rather than navigating away
+      // from work that was not persisted.
+      setNavigateAfterSave(null);
+      setToast({ tone: "info", text: "Couldn't save your draft. Nothing was lost — try again." });
+    }
+  }, [navigateAfterSave, fetcher.state, fetcher.data, navigate]);
+
+  useEffect(() => {
+    if (fetcher.data?.archived) {
+      navigate(`/app/flows${location.search}`);
+      return;
+    }
     if (fetcher.data?.published) {
       setShowPublishModal(false);
       setToast(publishToastMessage(fetcher.data.segmentBaseline));
     }
   }, [fetcher.data]);
+
+  // Browser-level guard for reloads and tab closes. In-app navigation is
+  // covered by the confirm modal below; this catches everything outside React
+  // Router's control, where previously a reload silently discarded the canvas.
+  useEffect(() => {
+    if (!isDirty) return undefined;
+    const onBeforeUnload = (e) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [isDirty]);
 
   // Auto-dismiss the toast. Cleared on unmount so a navigation mid-timer
   // doesn't setState on a gone component.
@@ -377,9 +495,10 @@ export default function FlowBuilder() {
     setSelectedId(newNode.id);
   }
 
-  function saveDraftAction() {
+  /** The canvas payload, shared by save-draft and publish. */
+  function draftFormData(intent) {
     const fd = new FormData();
-    fd.set("intent", "save-draft");
+    fd.set("intent", intent);
     fd.set("name", name);
     fd.set("entryFrequency", entryFrequency);
     fd.set("exitCriteria", JSON.stringify(exitCriteria));
@@ -390,24 +509,23 @@ export default function FlowBuilder() {
     if (triggerDraft === "segment_entered") {
       fd.set("triggerSegmentKey", triggerSegmentKey || "");
     }
-    fetcher.submit(fd, { method: "post" });
+    return fd;
   }
 
+  function saveDraftAction() {
+    fetcher.submit(draftFormData("save-draft"), { method: "post" });
+  }
+
+  /**
+   * Publish always carries the current canvas, so the server saves and publishes
+   * in a single request. The previous version fired save-draft and then publish
+   * 100ms apart through the same fetcher, which React Router cancels — so a slow
+   * save silently published the previous version instead.
+   */
   function publishAction({ backfillSegmentMembers = false } = {}) {
-    const build = () => {
-      const fd = new FormData();
-      fd.set("intent", "publish");
-      if (backfillSegmentMembers) fd.set("backfillSegmentMembers", "1");
-      return fd;
-    };
-    if (isDirty) {
-      saveDraftAction();
-      setTimeout(() => {
-        fetcher.submit(build(), { method: "post" });
-      }, 100);
-    } else {
-      fetcher.submit(build(), { method: "post" });
-    }
+    const fd = draftFormData("publish");
+    if (backfillSegmentMembers) fd.set("backfillSegmentMembers", "1");
+    fetcher.submit(fd, { method: "post" });
   }
 
   function pauseAction() {
@@ -429,6 +547,9 @@ export default function FlowBuilder() {
         <EmailEditor
           flow={{ name, trigger: journey.trigger }}
           node={emailNode}
+          testEmailDefault={testEmailDefault}
+          senderName={settings?.senderName || ""}
+          sendingFrom={sendingFromAddress}
           onBack={() => setEmailEditorNodeId(null)}
           onSave={(updatedNode) => {
             updateNode(updatedNode.id, {
@@ -453,7 +574,13 @@ export default function FlowBuilder() {
         <div className="rt-bt-left">
           <button
             className="btn btn-ghost btn-icon"
-            onClick={() => navigate(`/app/flows${location.search}`)}
+            onClick={() => {
+              const dest = `/app/flows${location.search}`;
+              // Same guard the TriggerPicker uses. The back arrow previously
+              // discarded unsaved canvas edits without a word.
+              if (isDirty) setPendingLeavePath(dest);
+              else navigate(dest);
+            }}
             aria-label="Back"
           >
             <Icons.ArrowBack size={16} />
@@ -498,18 +625,36 @@ export default function FlowBuilder() {
                 <button
                   className={`btn btn-ghost${showAnalytics ? " rt-toggle-on" : ""}`}
                   onClick={() => setShowAnalytics((v) => !v)}
+                  title="Show per-step numbers on the canvas"
                 >
-                  <Icons.Chart size={14} /> Analytics
+                  <Icons.Chart size={14} /> Inline stats
                 </button>
               )}
               <span className="rt-bt-divider" />
             </>
           )}
+          {/* The full campaign report. Available whatever the flow's status and
+              whichever view is open — a paused flow's history is exactly what a
+              merchant wants to look at before deciding to relaunch it. */}
+          <button
+            className="btn btn-ghost"
+            onClick={() => navigate(`/app/flows/${journey.id}/analytics${location.search}`)}
+          >
+            <Icons.Chart size={14} /> Analytics
+          </button>
           {isPublished && (
             <button className="btn btn-secondary" onClick={pauseAction} disabled={saving}>
               <Icons.Pause size={13} /> Pause
             </button>
           )}
+          {/* The unpublish and archive intents were both implemented on the
+              server with nothing in the UI that could reach them. */}
+          <FlowMoreMenu
+            isPublished={isPublished}
+            onUnpublish={() => setDialog({ kind: "unpublish" })}
+            onArchive={() => setDialog({ kind: "archive" })}
+            onAnalytics={() => navigate(`/app/flows/${journey.id}/analytics${location.search}`)}
+          />
           <button
             className="btn btn-secondary"
             onClick={saveDraftAction}
@@ -566,6 +711,7 @@ export default function FlowBuilder() {
               selectedId={selectedId}
               onSelect={setSelectedId}
               onChange={updateNode}
+              onOpenEditor={setEmailEditorNodeId}
             />
           )}
         </div>
@@ -586,7 +732,9 @@ export default function FlowBuilder() {
             segmentChoices={segmentChoices}
             triggerSegmentCount={triggerSegmentCount}
             settings={settings}
+            sendingFromAddress={sendingFromAddress}
             whatsappTemplates={whatsappTemplates}
+            isShopify={isShopify}
             onChange={(patch) => selected && updateNode(selected.id, patch)}
             onOpenEditor={setEmailEditorNodeId}
             // Block destructive cross-route nav when there are unsaved
@@ -603,6 +751,35 @@ export default function FlowBuilder() {
         </div>
       </div>
 
+      {dialog?.kind === "unpublish" && (
+        <ConfirmDialog
+          title="Unpublish this flow?"
+          body="It returns to draft and stops enrolling anyone new. Contacts already partway through keep receiving their remaining messages — pause instead if you want those stopped too."
+          confirmLabel="Unpublish"
+          loading={saving}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            fetcher.submit({ intent: "unpublish" }, { method: "post" });
+            setDialog(null);
+          }}
+        />
+      )}
+
+      {dialog?.kind === "archive" && (
+        <ConfirmDialog
+          title="Archive this flow?"
+          body="It's paused and hidden from your flows list. Its history stays available in the campaign report."
+          confirmLabel="Archive"
+          destructive
+          loading={saving}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            fetcher.submit({ intent: "archive" }, { method: "post" });
+            setDialog(null);
+          }}
+        />
+      )}
+
       <PublishToast toast={toast} onDismiss={() => setToast(null)} />
 
       {showPublishModal && (
@@ -611,6 +788,7 @@ export default function FlowBuilder() {
           onCancel={() => setShowPublishModal(false)}
           onConfirm={publishAction}
           loading={saving}
+          errors={publishErrors}
           segmentBackfill={{
             eligible: triggerDraft === "segment_entered" && !!triggerSegmentKey,
             count: triggerSegmentCount || 0,
@@ -621,12 +799,13 @@ export default function FlowBuilder() {
         <LeaveDraftModal
           onCancel={() => setPendingLeavePath(null)}
           onSaveAndContinue={() => {
-            saveDraftAction();
-            // Wait for the save to settle before navigating, otherwise
-            // the unsaved-warning state desyncs with the persisted row.
-            const dest = pendingLeavePath;
+            // Navigate only once the save has actually landed — see
+            // navigateAfterSave below. A fixed timeout here was the same race
+            // the publish path had: unmounting mid-submit can abort the
+            // request, silently discarding the draft it promised to save.
+            setNavigateAfterSave(pendingLeavePath);
             setPendingLeavePath(null);
-            setTimeout(() => navigate(dest), 120);
+            saveDraftAction();
           }}
           onDiscardAndContinue={() => {
             const dest = pendingLeavePath;
@@ -635,6 +814,42 @@ export default function FlowBuilder() {
           }}
           loading={saving}
         />
+      )}
+    </div>
+  );
+}
+
+/** Overflow menu in the builder top bar. */
+function FlowMoreMenu({ isPublished, onUnpublish, onArchive, onAnalytics }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rt-kebab-wrap">
+      <button
+        className="btn btn-ghost btn-icon"
+        onClick={() => setOpen((v) => !v)}
+        aria-label="More actions"
+        aria-expanded={open}
+      >
+        <Icons.More size={16} />
+      </button>
+      {open && (
+        <>
+          <div className="rt-veil" onClick={() => setOpen(false)} />
+          <div className="rt-menu" style={{ right: 0, left: "auto" }}>
+            <button onClick={() => { setOpen(false); onAnalytics(); }}>
+              <Icons.Chart size={14} /> Campaign report
+            </button>
+            {isPublished && (
+              <button onClick={() => { setOpen(false); onUnpublish(); }}>
+                <Icons.EyeOff size={14} /> Unpublish to draft
+              </button>
+            )}
+            <div className="rt-menu-sep" />
+            <button className="rt-menu-danger" onClick={() => { setOpen(false); onArchive(); }}>
+              <Icons.Trash size={14} /> Archive flow
+            </button>
+          </div>
+        </>
       )}
     </div>
   );
@@ -862,16 +1077,20 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
   );
 }
 
+/**
+ * Placeholder shown on the canvas for an email step with no blocks yet.
+ *
+ * Deliberately abstract. It used to render invented body copy ("Hi Alex, thanks
+ * for joining us…") over a fake wordmark, which reads as a preview of the real
+ * email rather than as the empty state it actually is.
+ */
 function EmailPreview({ node }) {
   return (
     <div className="rt-email-preview">
-      <div className="rt-email-logo">YOUR STORE</div>
-      <div className="rt-email-hero" />
-      <div className="rt-email-h">{node.subject || "Hello there"}</div>
+      <div className="rt-email-h">{node.subject || "No subject yet"}</div>
       <div className="rt-email-body">
-        Hi Alex, thanks for joining us. We hand-pick a few favourites each week — here's something we think you'll love.
+        Nothing designed yet — open the visual editor to build this email.
       </div>
-      <div className="rt-email-btn">Shop now</div>
     </div>
   );
 }
@@ -962,7 +1181,7 @@ function InsertMenu({ open, onClose, onAdd }) {
   );
 }
 
-function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave }) {
+function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
   if (!node) {
     return (
       <div className="rt-ins">
@@ -1024,7 +1243,19 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
               }
             }}
             confirmLeave={confirmLeave}
+            isShopify={isShopify}
           />
+          {/* The loader already resolves this count for the publish modal's
+              backfill offer; showing it here too tells the merchant how large
+              the audience is while they're choosing, not after. */}
+          {activeTrigger === "segment_entered" && triggerSegmentKey && triggerSegmentCount !== null && (
+            <div className="field-help" style={{ marginTop: 8 }}>
+              {triggerSegmentCount.toLocaleString()}{" "}
+              {triggerSegmentCount === 1 ? "contact matches" : "contacts match"} this segment right now.
+              {" "}They won&apos;t be enrolled unless you choose to when publishing — this flow triggers
+              when someone <em>enters</em>.
+            </div>
+          )}
         </div>
 
         <div className="rt-ins-section">
@@ -1144,8 +1375,13 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
             value={node.subject || ""}
             onChange={(e) => onChange({ subject: e.target.value })}
           />
+          {/* A recommendation, not a limit — the old copy said "N characters
+              remaining" and happily counted into the negatives. */}
           <div className="field-help">
-            {50 - (node.subject || "").length} characters remaining
+            {(node.subject || "").length} characters
+            {(node.subject || "").length > 50
+              ? " — long subjects get truncated in most inboxes"
+              : " · around 50 reads best"}
           </div>
 
           <label className="field-label" style={{ marginTop: 16 }}>Preview text</label>
@@ -1181,9 +1417,12 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
             <span className="rt-toggle-switch" />
             <span>Step enabled</span>
           </label>
-          {settings?.senderName && (
+          {/* The real resolved from-address, computed by the same seam the send
+              path uses. This used to print a literal "noreply@..." whenever
+              senderEmail was empty — which is every shop on the shared domain. */}
+          {sendingFromAddress && (
             <div className="field-help" style={{ marginTop: 12 }}>
-              From: {settings.senderName} &lt;{settings.senderEmail || "noreply@..."}&gt;
+              From: {settings?.senderName || "Your Store"} &lt;{sendingFromAddress}&gt;
             </div>
           )}
         </div>
@@ -1242,10 +1481,10 @@ function Inspector({ node, journey, entryFrequency, setEntryFrequency, exitCrite
           />
         </div>
 
-        <div className="rt-ins-section">
-          <div className="t-micro muted" style={{ marginBottom: 12 }}>Timing</div>
-          <DelayEditor node={{ hours: node.delayHours }} onChange={(p) => onChange({ delayHours: p.hours })} />
-        </div>
+        {/* Timing comes from the Wait steps above this one on the canvas, exactly
+            as it does for email. A per-step delay editor used to sit here, but
+            saveDraft overwrites push/WhatsApp delays with the accumulated canvas
+            value — so the control took input and silently discarded it. */}
 
         <div className="rt-ins-section">
           <label className="rt-toggle">
@@ -1465,10 +1704,10 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
         </div>
       )}
 
-      <div className="rt-ins-section">
-        <div className="t-micro muted" style={{ marginBottom: 12 }}>Timing</div>
-        <DelayEditor node={{ hours: node.delayHours }} onChange={(p) => onChange({ delayHours: p.hours })} />
-      </div>
+      {/* Timing comes from the Wait steps above this one on the canvas, exactly
+            as it does for email. A per-step delay editor used to sit here, but
+            saveDraft overwrites push/WhatsApp delays with the accumulated canvas
+            value — so the control took input and silently discarded it. */}
 
       <div className="rt-ins-section">
         <label className="rt-toggle">
@@ -1489,10 +1728,13 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
 // body with a readable label for the mapped variable so merchants see the shape
 // of the message as they configure it.
 function WhatsappPreview({ bodyText, vars = {}, mediaUrl }) {
+  // Bracketed placeholders rather than invented sample values, matching the
+  // email test send. A name like "Alex" in a preview reads as real data and
+  // leaves the merchant wondering where it came from.
   const labelFor = (num) => {
     const ref = vars[String(num)];
-    if (ref === "contactName") return "Alex";
-    if (ref === "recoveryUrl") return "yourstore.com/cart";
+    if (ref === "contactName") return "[Contact name]";
+    if (ref === "recoveryUrl") return "[Cart link]";
     if (ref && String(ref).trim()) return String(ref);
     return `{{${num}}}`;
   };
@@ -1565,7 +1807,22 @@ function CheckOption({ label, checked, onChange, soon }) {
   );
 }
 
-function FormView({ nodes, journey, selectedId, onSelect, onChange }) {
+const FORM_KIND_LABEL = {
+  email: "Email",
+  delay: "Delay",
+  push: "Push notification",
+  whatsapp: "WhatsApp",
+};
+
+function formViewTitle(n) {
+  if (n.kind === "email") return n.emailName || "Email";
+  if (n.kind === "delay") return `Wait ${formatHours(n.hours)}`;
+  if (n.kind === "push") return n.pushTitle || "Push notification";
+  if (n.kind === "whatsapp") return n.waTemplateName || "WhatsApp message";
+  return n.kind;
+}
+
+function FormView({ nodes, journey, selectedId, onSelect, onChange, onOpenEditor }) {
   const trig = TRIGGER_CONFIG[journey.trigger] || TRIGGER_CONFIG.customer_created;
   const TrigIcon = Icons[trig.icon];
   const triggerNode = nodes.find((n) => n.kind === "trigger");
@@ -1602,19 +1859,20 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange }) {
             className={`rt-form-section${selectedId === n.id ? " rt-form-selected" : ""}`}
           >
             <div className="rt-form-section-head">
+              {/* Every sendable kind gets its own icon and label. This used
+                  to be a two-way email/delay branch, so a push or WhatsApp step
+                  rendered with no icon, the heading "Delay", and no fields. */}
               <div className={`rt-node-glyph rt-tint-${n.kind}`}>
                 {n.kind === "email" && <Icons.Mail size={14} />}
                 {n.kind === "delay" && <Icons.Clock size={14} />}
+                {n.kind === "push" && <Icons.Bell size={14} />}
+                {n.kind === "whatsapp" && <Icons.Whatsapp size={14} />}
               </div>
               <div>
                 <div className="t-micro muted">
-                  Step {i + 1} · {n.kind === "email" ? "Email" : "Delay"}
+                  Step {i + 1} · {FORM_KIND_LABEL[n.kind] || n.kind}
                 </div>
-                <div className="t-h2">
-                  {n.kind === "email"
-                    ? n.emailName || "Email"
-                    : `Wait ${formatHours(n.hours)}`}
-                </div>
+                <div className="t-h2">{formViewTitle(n)}</div>
               </div>
               <button
                 className="btn btn-ghost btn-sm"
@@ -1635,17 +1893,76 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange }) {
                     onChange={(e) => onChange(n.id, { subject: e.target.value })}
                   />
                 </div>
+                {/* The old "Template" select wrote JourneyStep.templateStyle,
+                    which the renderer never reads — design comes entirely from
+                    emailBlocks/emailBrand. It's replaced with a route into the
+                    editor that actually changes the design. */}
+                <div>
+                  <label className="field-label">Design</label>
+                  <button
+                    className="btn btn-secondary"
+                    style={{ width: "100%", justifyContent: "center" }}
+                    onClick={() => onOpenEditor && onOpenEditor(n.id)}
+                  >
+                    Open visual editor
+                  </button>
+                </div>
+                <div>
+                  <label className="field-label">Enabled</label>
+                  <label className="rt-toggle" style={{ marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={n.isEnabled !== false}
+                      onChange={() => onChange(n.id, { isEnabled: n.isEnabled === false })}
+                    />
+                    <span className="rt-toggle-switch" />
+                    <span>{n.isEnabled !== false ? "On" : "Off"}</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {n.kind === "push" && (
+              <div className="rt-form-grid">
+                <div>
+                  <label className="field-label">Title</label>
+                  <input
+                    className="input"
+                    value={n.pushTitle || ""}
+                    maxLength={65}
+                    onChange={(e) => onChange(n.id, { pushTitle: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Body</label>
+                  <input
+                    className="input"
+                    value={n.pushBody || ""}
+                    maxLength={200}
+                    onChange={(e) => onChange(n.id, { pushBody: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="field-label">Enabled</label>
+                  <label className="rt-toggle" style={{ marginTop: 6 }}>
+                    <input
+                      type="checkbox"
+                      checked={n.isEnabled !== false}
+                      onChange={() => onChange(n.id, { isEnabled: n.isEnabled === false })}
+                    />
+                    <span className="rt-toggle-switch" />
+                    <span>{n.isEnabled !== false ? "On" : "Off"}</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            {n.kind === "whatsapp" && (
+              <div className="rt-form-grid">
                 <div>
                   <label className="field-label">Template</label>
-                  <select
-                    className="select"
-                    value={n.templateStyle || "classic"}
-                    onChange={(e) => onChange(n.id, { templateStyle: e.target.value })}
-                  >
-                    <option value="classic">Classic</option>
-                    <option value="bold">Bold</option>
-                    <option value="minimal">Minimal</option>
-                  </select>
+                  <input className="input" value={n.waTemplateName || "Not selected"} readOnly />
+                  <div className="field-help">Pick a template in Canvas view.</div>
                 </div>
                 <div>
                   <label className="field-label">Enabled</label>
@@ -1663,23 +1980,13 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange }) {
             )}
 
             {n.kind === "delay" && (
+              // The unit select used to be an uncontrolled <select> with no
+              // onChange — switching to days did nothing while the number stayed
+              // in hours. DelayEditor owns both halves and keeps them in sync.
               <div className="rt-form-grid">
                 <div>
                   <label className="field-label">Duration</label>
-                  <input
-                    className="input"
-                    type="number"
-                    min="0"
-                    value={n.hours || 0}
-                    onChange={(e) => onChange(n.id, { hours: Number(e.target.value) || 0 })}
-                  />
-                </div>
-                <div>
-                  <label className="field-label">Unit</label>
-                  <select className="select" defaultValue="hours">
-                    <option value="hours">hours</option>
-                    <option value="days">days</option>
-                  </select>
+                  <DelayEditor node={n} onChange={(patch) => onChange(n.id, patch)} />
                 </div>
               </div>
             )}
@@ -1739,24 +2046,49 @@ function PublishToast({ toast, onDismiss }) {
   );
 }
 
-function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfill }) {
+function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfill, errors }) {
   const [backfill, setBackfill] = useState(false);
   // Offered only on first publish of a segment-triggered flow that has members
   // waiting. Re-publishing never backfills, so the box would be a lie.
   const showBackfill = !isPublished && segmentBackfill?.eligible && segmentBackfill.count > 0;
   const n = segmentBackfill?.count || 0;
+  const hasErrors = Array.isArray(errors) && errors.length > 0;
 
   return (
     <div className="rt-modal-backdrop">
       <div className="rt-publish-modal">
         <h2 className="t-h1" style={{ margin: "0 0 8px" }}>
-          {isPublished ? "Publish changes?" : "Publish flow?"}
+          {hasErrors
+            ? "Fix these before publishing"
+            : isPublished
+              ? "Publish changes?"
+              : "Publish flow?"}
         </h2>
         <p className="t-small muted" style={{ margin: "0 0 24px", lineHeight: 1.6 }}>
-          {isPublished
-            ? "Your changes will go live. New enrollments will use the updated flow."
-            : "This will make the flow active and start sending messages to customers."}
+          {hasErrors
+            ? "Your draft has been saved. These steps would not send as configured:"
+            : isPublished
+              ? "Your changes will go live. New enrollments will use the updated flow."
+              : "This will make the flow active and start sending messages to customers."}
         </p>
+        {hasErrors && (
+          <ul
+            style={{
+              margin: "0 0 24px",
+              padding: "12px 16px 12px 32px",
+              background: "var(--danger-bg, #FBE9E7)",
+              color: "var(--danger-ink, #8A2018)",
+              border: "1px solid var(--danger-ink, #E0B4AE)",
+              borderRadius: 8,
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            {errors.map((e, i) => (
+              <li key={i}>{e.message}</li>
+            ))}
+          </ul>
+        )}
         {showBackfill && (
           <label
             className="t-small"
@@ -1784,14 +2116,15 @@ function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfi
         )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
           <button className="btn btn-secondary" onClick={onCancel} disabled={loading}>
-            Cancel
+            {hasErrors ? "Close" : "Cancel"}
           </button>
           <button
             className="btn btn-primary"
             onClick={() => onConfirm({ backfillSegmentMembers: showBackfill && backfill })}
             disabled={loading}
           >
-            <Icons.Play size={13} /> {isPublished ? "Publish changes" : "Publish flow"}
+            <Icons.Play size={13} />{" "}
+            {hasErrors ? "Try again" : isPublished ? "Publish changes" : "Publish flow"}
           </button>
         </div>
       </div>

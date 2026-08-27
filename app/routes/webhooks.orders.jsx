@@ -2,7 +2,7 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { enrollContact } from "../lib/journey/journey-queue.server.js";
 import { evaluateExitCriteria } from "../lib/journey/exit-criteria.server.js";
-import { upsertContact } from "../lib/contacts/contacts.server.js";
+import { recordOrder } from "../lib/orders/orders.server.js";
 
 export const action = async ({ request }) => {
   const { shop, payload } = await authenticate.webhook(request);
@@ -16,17 +16,16 @@ export const action = async ({ request }) => {
     payload.shipping_address?.phone ||
     "";
 
-  // Capture the phone for the WhatsApp channel (used when opt-in is not required).
-  if (customerEmail && phone) {
-    const firstName = payload.customer?.first_name || "";
-    const lastName = payload.customer?.last_name || "";
-    await upsertContact({
-      shop,
-      email: customerEmail,
-      name: [firstName, lastName].filter(Boolean).join(" "),
-      phone,
-      source: "shopify_customer",
-    }).catch((err) => console.error("[webhook] upsertContact (orders) failed:", err.message));
+  // Persist the order and refresh the buyer's purchase aggregates. This also
+  // upserts the Contact (carrying the phone through for the WhatsApp channel),
+  // which is what the previous inline upsert did on its own.
+  //
+  // Idempotent: orders/create and orders/paid both fire for the same order, and
+  // Shopify retries, so this runs more than once per order by design.
+  if (customerEmail) {
+    await recordOrder(shop, { ...payload, phone: payload.phone || phone }).catch((err) =>
+      console.error("[webhook] recordOrder failed:", err.message),
+    );
   }
 
   // Mark abandoned cart recovered if this order matches one. Pending journey

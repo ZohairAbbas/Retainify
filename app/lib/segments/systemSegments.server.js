@@ -4,7 +4,6 @@
 import { evaluateSegment } from "./evaluator.server.js";
 
 const SEVEN_DAYS = 7;
-const ONE_DAY = 1;
 
 export const SYSTEM_SEGMENTS = [
   {
@@ -112,6 +111,4 @@ export async function listSystemSegmentsWithCounts(shop) {
     }),
   );
   return results;
-  // ONE_DAY is unused at runtime but reserved for a future "active today" segment.
-  void ONE_DAY;
 }

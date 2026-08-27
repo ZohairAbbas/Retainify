@@ -1,13 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher, useLoaderData, useNavigate, useRouteError, useSearchParams } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server.js";
+import { requireAccount } from "../lib/auth/require.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import Avatar from "../components/contacts/Avatar.jsx";
 import StatusPill from "../components/contacts/StatusPill.jsx";
 import LifecyclePill from "../components/contacts/LifecyclePill.jsx";
 import TagChip from "../components/contacts/TagChip.jsx";
-import SoonPill from "../components/contacts/SoonPill.jsx";
 import StatCard from "../components/contacts/StatCard.jsx";
 import FilterDropdown from "../components/contacts/FilterDropdown.jsx";
 import SyncModal from "../components/contacts/SyncModal.jsx";
@@ -17,6 +16,9 @@ import BulkBar from "../components/contacts/BulkBar.jsx";
 import AddContactModal from "../components/contacts/AddContactModal.jsx";
 import ImportCsvModal from "../components/contacts/ImportCsvModal.jsx";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
+import { ConfirmDialog, PromptDialog, Toast } from "../components/ui/Dialog.jsx";
+import { ColumnsButton, ColumnsModal, ViewsBar } from "../components/contacts/ColumnsMenu.jsx";
+import PropertiesModal from "../components/contacts/PropertiesModal.jsx";
 import { quotaState } from "../lib/billing/gate.server.js";
 import {
   SOURCE,
@@ -25,26 +27,47 @@ import {
   relativeTime,
 } from "../components/contacts/constants.js";
 import {
+  bulkSoftDelete,
+  bulkUnsubscribe,
   computeLifecycle,
   createManualContact,
-  getContactStats,
+  emptyContactStats,
   listContacts,
   listAllContactIds,
   resubscribeContact,
   softDeleteContact,
   summarizeContacts,
+  getContactStatsBatch,
   unsubscribeContact,
-  upsertContact,
-  normalizeEmail,
 } from "../lib/contacts/contacts.server.js";
+import { importContactRows, MAX_ROWS_PER_BATCH } from "../lib/contacts/import.server.js";
 import { runContactsBackfillIfNeeded } from "../lib/contacts/backfill.server.js";
-import { listTagsForShop, bulkApplyTag, upsertTag, applyTagByName } from "../lib/contacts/tags.server.js";
+import { runOrdersBackfillIfNeeded } from "../lib/orders/backfill.server.js";
+import { listTagsForShop, bulkApplyTag, upsertTag } from "../lib/contacts/tags.server.js";
 import { getSyncProgress } from "../lib/contacts/shopifyCustomerSync.server.js";
 import { createSegment } from "../lib/segments/segments.server.js";
+import {
+  createProperty,
+  deleteProperty,
+  listProperties,
+  PROP_PREFIX,
+  updateProperty,
+} from "../lib/contacts/properties.server.js";
+import {
+  BUILTIN_COLUMNS,
+  COLUMN_GROUPS,
+  createView,
+  deleteView,
+  getDefaultColumns,
+  listViews,
+  sanitizeColumns,
+  setDefaultColumns,
+  updateView,
+} from "../lib/contacts/views.server.js";
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const url = new URL(request.url);
 
   const status = url.searchParams.get("status") || "all";
@@ -53,38 +76,64 @@ export const loader = async ({ request }) => {
   const search = url.searchParams.get("q") || "";
   const cursor = url.searchParams.get("cursor") || undefined;
 
+  // Unifies contacts already in our own tables (popup signups, cart
+  // abandoners, push subscribers). Purely local, so it is correct for every
+  // workspace kind.
   const backfill = await runContactsBackfillIfNeeded(shop);
 
-  const [{ rows, nextCursor, filteredTotal }, summary, tags, sync] = await Promise.all([
-    listContacts({ shop, status, source, tagId, search, cursor }),
-    summarizeContacts(shop),
-    listTagsForShop(shop),
-    getSyncProgress(shop),
-  ]);
+  // Historical orders, so purchase columns aren't empty for an existing shop.
+  // Resumable and self-limiting; never blocks the page on a failure.
+  //
+  // Shopify only. Without a store this reaches for an Admin API client that
+  // does not exist and fails on every single page load — caught and logged, but
+  // pure noise and wasted work for a workspace that has no orders by definition.
+  if (ctx.isShopify) {
+    runOrdersBackfillIfNeeded(shop).catch((err) =>
+      console.error("[contacts] orders backfill failed:", err.message),
+    );
+  }
 
-  // Cheap on-demand lifecycle computation. We only need cart-abandon hints, so
-  // batch one aggregate per contact in the current page.
-  const enriched = await Promise.all(
-    rows.map(async (c) => {
-      const stats = await getContactStats(shop, c.email);
-      return {
-        id: c.id,
-        email: c.email,
-        name: c.name,
-        firstSeenAt: c.firstSeenAt,
-        lastSeenAt: c.lastSeenAt,
-        source: c.source,
-        subscriptionStatus: c.subscriptionStatus,
-        lifecycleStage: computeLifecycle(c, stats),
-        tags: c.tags.map((ct) => ({
-          id: ct.tag.id,
-          name: ct.tag.name,
-          color: ct.tag.color,
-        })),
-        stats,
-      };
-    }),
-  );
+  const [{ rows, nextCursor, filteredTotal }, summary, tags, sync, properties, views, savedColumns] =
+    await Promise.all([
+      listContacts({ shop, status, source, tagId, search, cursor }),
+      summarizeContacts(shop),
+      listTagsForShop(shop),
+      getSyncProgress(shop),
+      listProperties(shop),
+      listViews(shop),
+      getDefaultColumns(shop),
+    ]);
+
+  // A stored column list can reference a property that has since been deleted,
+  // so it is sanitized on read as well as write — rendering a column with no
+  // definition behind it would throw.
+  const columns = sanitizeColumns(savedColumns, properties);
+
+  // Per-contact stats for the page, in a fixed number of grouped queries.
+  // This was one getContactStats() call per row — six queries per contact — so
+  // a 50-row page issued around 300 round trips to render one screen.
+  const statsByEmail = await getContactStatsBatch(shop, rows.map((c) => c.email));
+  const enriched = rows.map((c) => {
+    const stats = statsByEmail.get(c.email) || emptyContactStats();
+    return {
+      id: c.id,
+      email: c.email,
+      name: c.name,
+      firstSeenAt: c.firstSeenAt,
+      lastSeenAt: c.lastSeenAt,
+      source: c.source,
+      subscriptionStatus: c.subscriptionStatus,
+      phone: c.phone || "",
+      customProps: c.customProps || {},
+      lifecycleStage: computeLifecycle(c, stats),
+      tags: c.tags.map((ct) => ({
+        id: ct.tag.id,
+        name: ct.tag.name,
+        color: ct.tag.color,
+      })),
+      stats,
+    };
+  });
 
   // SOFT cap by design. We keep accepting contacts past the limit and only
   // prompt — silently dropping a merchant's signups to enforce billing would
@@ -96,8 +145,17 @@ export const loader = async ({ request }) => {
     summary,
     tags,
     sync,
+    isShopify: ctx.isShopify,
     backfill,
     contactQuota,
+    properties,
+    // Named views exclude the nameless row that stores the default column
+    // layout — it is configuration, not something to show in a view switcher.
+    views: views.filter((v) => !v.isDefault),
+    columns,
+    builtinColumns: BUILTIN_COLUMNS,
+    columnGroups: COLUMN_GROUPS,
+    propPrefix: PROP_PREFIX,
     nextCursor: nextCursor || null,
     filteredTotal,
     filters: { status, source, tagId, search },
@@ -105,10 +163,94 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
-  const shop = session.shop;
+  const ctx = await requireAccount(request);
+  const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
+
+  // Declared inside the action deliberately. React Router only strips
+  // server-only code from `loader`/`action`/`headers`/`middleware` exports — a
+  // module-scope helper touching a *.server module gets pulled into the client
+  // bundle and fails the build.
+  const bulkFilters = () => ({
+    status: String(fd.get("filterStatus") || "all"),
+    source: String(fd.get("filterSource") || "all"),
+    tagId: String(fd.get("filterTagId") || "all"),
+    search: String(fd.get("filterSearch") || ""),
+  });
+  const selectAllFiltered = fd.get("selectAllFiltered") === "1";
+  const resolveBulkEmails = async () => {
+    if (!selectAllFiltered) return fd.getAll("email").map(String).filter(Boolean);
+    const all = await listAllContactIds({ shop, ...bulkFilters() });
+    return all.map((c) => c.email);
+  };
+  const resolveBulkIds = async () => {
+    if (!selectAllFiltered) return fd.getAll("contactId").map(String).filter(Boolean);
+    const all = await listAllContactIds({ shop, ...bulkFilters() });
+    return all.map((c) => c.id);
+  };
+
+  // ── Custom properties, saved views, column layout ────────────────────────
+  if (intent === "create_property") {
+    return createProperty(shop, {
+      label: String(fd.get("label") || ""),
+      type: String(fd.get("type") || "text"),
+      options: String(fd.get("options") || "")
+        .split(/[\n,]/)
+        .map((o) => o.trim())
+        .filter(Boolean),
+    });
+  }
+
+  if (intent === "update_property") {
+    return updateProperty(shop, String(fd.get("id") || ""), {
+      label: fd.get("label") !== null ? String(fd.get("label")) : undefined,
+      options:
+        fd.get("options") !== null
+          ? String(fd.get("options")).split(/[\n,]/).map((o) => o.trim()).filter(Boolean)
+          : undefined,
+    });
+  }
+
+  if (intent === "delete_property") {
+    return deleteProperty(shop, String(fd.get("id") || ""));
+  }
+
+  if (intent === "save_columns") {
+    let columns = [];
+    try { columns = JSON.parse(String(fd.get("columns") || "[]")); } catch { columns = []; }
+    const defs = await listProperties(shop);
+    await setDefaultColumns(shop, sanitizeColumns(columns, defs));
+    return { ok: true, columnsSaved: true };
+  }
+
+  if (intent === "create_view") {
+    let columns = [];
+    let filters = {};
+    try { columns = JSON.parse(String(fd.get("columns") || "[]")); } catch { columns = []; }
+    try { filters = JSON.parse(String(fd.get("filters") || "{}")); } catch { filters = {}; }
+    return createView(shop, { name: String(fd.get("name") || ""), filters, columns });
+  }
+
+  if (intent === "update_view") {
+    let columns;
+    let filters;
+    if (fd.get("columns") !== null) {
+      try { columns = JSON.parse(String(fd.get("columns"))); } catch { columns = undefined; }
+    }
+    if (fd.get("filters") !== null) {
+      try { filters = JSON.parse(String(fd.get("filters"))); } catch { filters = undefined; }
+    }
+    return updateView(shop, String(fd.get("id") || ""), {
+      name: fd.get("name") !== null ? String(fd.get("name")) : undefined,
+      filters,
+      columns,
+    });
+  }
+
+  if (intent === "delete_view") {
+    return deleteView(shop, String(fd.get("id") || ""));
+  }
 
   if (intent === "add_contact") {
     const email = String(fd.get("email") || "");
@@ -130,57 +272,35 @@ export const action = async ({ request }) => {
     return { ok: true };
   }
 
+  // Both bulk paths below used to run one await per contact. With "select all
+  // matching filter" on a large list that is tens of thousands of sequential
+  // round trips inside a single request — it times out partway and leaves the
+  // operation half-applied. Set-based writes make the cost independent of the
+  // selection size.
   if (intent === "bulk_unsubscribe") {
-    const selectAllFiltered = fd.get("selectAllFiltered") === "1";
-    if (selectAllFiltered) {
-      const filterStatus = String(fd.get("filterStatus") || "all");
-      const filterSource = String(fd.get("filterSource") || "all");
-      const filterTagId = String(fd.get("filterTagId") || "all");
-      const filterSearch = String(fd.get("filterSearch") || "");
-      const all = await listAllContactIds({ shop, status: filterStatus, source: filterSource, tagId: filterTagId, search: filterSearch });
-      for (const { email } of all) await unsubscribeContact(shop, email);
-    } else {
-      const emails = fd.getAll("email").map(String).filter(Boolean);
-      for (const email of emails) await unsubscribeContact(shop, email);
-    }
-    return { ok: true };
+    const emails = await resolveBulkEmails();
+    if (!emails.length) return { ok: false, error: "No contacts selected." };
+    const count = await bulkUnsubscribe(shop, emails);
+    return { ok: true, bulk: "unsubscribe", count };
   }
 
   if (intent === "bulk_delete") {
-    const selectAllFiltered = fd.get("selectAllFiltered") === "1";
-    if (selectAllFiltered) {
-      const filterStatus = String(fd.get("filterStatus") || "all");
-      const filterSource = String(fd.get("filterSource") || "all");
-      const filterTagId = String(fd.get("filterTagId") || "all");
-      const filterSearch = String(fd.get("filterSearch") || "");
-      const all = await listAllContactIds({ shop, status: filterStatus, source: filterSource, tagId: filterTagId, search: filterSearch });
-      for (const { id } of all) await softDeleteContact(shop, id);
-    } else {
-      const ids = fd.getAll("contactId").map(String).filter(Boolean);
-      for (const id of ids) await softDeleteContact(shop, id);
-    }
-    return { ok: true };
+    const ids = await resolveBulkIds();
+    if (!ids.length) return { ok: false, error: "No contacts selected." };
+    const count = await bulkSoftDelete(shop, ids);
+    return { ok: true, bulk: "delete", count };
   }
 
   if (intent === "bulk_apply_tag") {
-    const selectAllFiltered = fd.get("selectAllFiltered") === "1";
     const tagName = String(fd.get("tagName") || "").trim();
-    if (!tagName) return { ok: false };
+    if (!tagName) return { ok: false, error: "Enter a tag name." };
     const tag = await upsertTag(shop, tagName);
-    if (!tag) return { ok: false };
-    if (selectAllFiltered) {
-      const filterStatus = String(fd.get("filterStatus") || "all");
-      const filterSource = String(fd.get("filterSource") || "all");
-      const filterTagId = String(fd.get("filterTagId") || "all");
-      const filterSearch = String(fd.get("filterSearch") || "");
-      const all = await listAllContactIds({ shop, status: filterStatus, source: filterSource, tagId: filterTagId, search: filterSearch });
-      await bulkApplyTag(shop, all.map((c) => c.id), tag.id);
-    } else {
-      const ids = fd.getAll("contactId").map(String).filter(Boolean);
-      if (!ids.length) return { ok: false };
-      await bulkApplyTag(shop, ids, tag.id);
-    }
-    return { ok: true };
+    if (!tag) return { ok: false, error: "Could not create that tag." };
+
+    const ids = await resolveBulkIds();
+    if (!ids.length) return { ok: false, error: "No contacts selected." };
+    await bulkApplyTag(shop, ids, tag.id);
+    return { ok: true, bulk: "tag", count: ids.length, tagName };
   }
 
   if (intent === "resubscribe") {
@@ -189,51 +309,52 @@ export const action = async ({ request }) => {
     return { ok: true };
   }
 
+  // One CHUNK of an import. The client slices the file and posts batches in
+  // sequence, so a large list arrives as many small requests instead of one
+  // oversized body that blows the request limit or times out mid-write.
   if (intent === "import_csv") {
     let rows;
     try {
       rows = JSON.parse(String(fd.get("rows") || "[]"));
     } catch {
-      return { intent: "import_csv", ok: false, imported: 0, skippedDuplicate: 0, skippedInvalid: 0 };
+      return {
+        intent: "import_csv",
+        ok: false,
+        error: "That batch could not be read. Please retry the import.",
+      };
     }
-    let imported = 0;
-    let skippedDuplicate = 0;
-    let skippedInvalid = 0;
-    for (const row of rows) {
-      const email = normalizeEmail(row.email);
-      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-        skippedInvalid++;
-        continue;
-      }
-      const { contact, created, revived } = await upsertContact({
-        shop,
-        email,
-        name: row.name || "",
-        source: "csv_import",
-        subscriptionStatus: "subscribed",
-        marketingConsentAt: new Date(),
-        revive: true,
-      });
-      // A revived contact was deleted and is now back in the list, so it counts
-      // as imported rather than as a duplicate that was left untouched.
-      if (contact && (created || revived)) {
-        imported++;
-        if (Array.isArray(row.tags)) {
-          for (const tagName of row.tags) {
-            if (tagName) await applyTagByName(shop, contact.id, tagName);
-          }
-        }
-      } else {
-        skippedDuplicate++;
-      }
+    if (!Array.isArray(rows)) {
+      return { intent: "import_csv", ok: false, error: "Unexpected import payload." };
     }
-    return { intent: "import_csv", ok: true, imported, skippedDuplicate, skippedInvalid };
+    if (rows.length > MAX_ROWS_PER_BATCH) {
+      return {
+        intent: "import_csv",
+        ok: false,
+        error: `Batches are limited to ${MAX_ROWS_PER_BATCH} rows.`,
+      };
+    }
+
+    // The merchant has ticked the box confirming these people opted in. Without
+    // it contacts import as non-marketable rather than being handed a
+    // fabricated consent timestamp.
+    const consent = fd.get("consent") === "1";
+
+    const counts = await importContactRows(shop, rows, { consent });
+    return { intent: "import_csv", ok: true, ...counts };
   }
 
   if (intent === "bulk_save_as_segment") {
-    const ids = fd.getAll("contactId").map(String).filter(Boolean);
     const name = String(fd.get("name") || "").trim();
-    if (!ids.length || !name) return { ok: false };
+    if (!name) return { ok: false, error: "Give the segment a name." };
+
+    // "Select all matching filter" sends no contactId fields, only the filters.
+    // The old version read contactId exclusively, found none, and returned
+    // { ok: false } — so the merchant was prompted for a name, submitted, and
+    // nothing happened, with no error anywhere. resolveBulkIds handles both
+    // shapes, exactly as the other bulk intents do.
+    const ids = await resolveBulkIds();
+    if (!ids.length) return { ok: false, error: "No contacts selected." };
+
     const seg = await createSegment(shop, {
       name,
       description: `Static segment of ${ids.length} contact${ids.length === 1 ? "" : "s"} saved from Contacts.`,
@@ -241,15 +362,44 @@ export const action = async ({ request }) => {
       filterTree: null,
       memberContactIds: ids,
     });
-    return { ok: true, segmentId: seg.id };
+    return { ok: true, segmentId: seg.id, segmentName: name, memberCount: ids.length };
   }
 
   return { ok: false };
 };
 
+/**
+ * Rendering rules per column key.
+ *
+ * `width` feeds the grid track list; `numeric` right-aligns; `cellClass` carries
+ * the existing row styling so a reordered table still looks like the old one.
+ * Custom properties are handled separately below — they share one presentation.
+ */
+const COLUMN_SPEC = {
+  contact:   { width: "2.2fr",  cellClass: "rt-cname" },
+  status:    { width: "1.05fr" },
+  lifecycle: { width: "1.05fr" },
+  tags:      { width: "1.4fr",  cellClass: "rt-ctags" },
+  carts:     { width: "0.95fr", numeric: true, cellClass: "rt-tnum rt-tmoney" },
+  lastSeen:  { width: "0.95fr", numeric: true, cellClass: "rt-tnum rt-tdate" },
+  firstSeen: { width: "0.95fr", numeric: true, cellClass: "rt-tnum rt-tdate" },
+  source:    { width: "1fr" },
+  phone:     { width: "1.1fr" },
+  emails:    { width: "0.8fr",  numeric: true, cellClass: "rt-tnum t-mono" },
+  opens:     { width: "0.8fr",  numeric: true, cellClass: "rt-tnum t-mono" },
+  orders:    { width: "0.7fr",  numeric: true, cellClass: "rt-tnum t-mono" },
+  spent:     { width: "0.9fr",  numeric: true, cellClass: "rt-tnum rt-tmoney" },
+  lastOrder: { width: "0.95fr", numeric: true, cellClass: "rt-tnum rt-tdate" },
+};
+
+const DASH = <span className="muted">—</span>;
+
 export default function ContactsPage() {
   const loaderData = useLoaderData();
-  const { summary, tags, sync, backfill, filters, contactQuota } = loaderData;
+  const {
+    summary, tags, sync, backfill, filters, contactQuota, isShopify,
+    properties = [], views = [], builtinColumns = [], columnGroups = [], propPrefix = "prop:",
+  } = loaderData;
   const [params, setParams] = useSearchParams();
   const navigate = useNavigate();
   const fetcher = useFetcher();
@@ -300,6 +450,16 @@ export default function ContactsPage() {
   const [importOpen, setImportOpen] = useState(false);
   const [showUnify, setShowUnify] = useState(backfill?.didRun && backfill.added > 0);
   const [openMenu, setOpenMenu] = useState(null);
+  // Which confirm/prompt dialog is open, replacing window.confirm/prompt.
+  const [dialog, setDialog] = useState(null);
+  // Column layout is server-persisted; local state lets the merchant rearrange
+  // before committing with "Save layout".
+  const [columns, setColumns] = useState(loaderData.columns);
+  const [activeViewId, setActiveViewId] = useState(null);
+  const [propsOpen, setPropsOpen] = useState(false);
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const [toast, setToast] = useState(null);
+  const busy = fetcher.state !== "idle";
 
   const allPageChecked = contacts.length > 0 && contacts.every((c) => selected.has(c.id));
   // Show "select all N" banner when the full page is checked but not everything is selected yet
@@ -344,15 +504,137 @@ export default function ContactsPage() {
     return m;
   }, [tags]);
 
+  const bulkCount = selectAllFiltered ? filteredTotal : selected.size;
+
+  // The export honours whatever filters are active, so "export what I'm
+  // looking at" does what it says.
+  const exportQuery = new URLSearchParams();
+  if (filters.status !== "all") exportQuery.set("status", filters.status);
+  if (filters.source !== "all") exportQuery.set("source", filters.source);
+  if (filters.tagId !== "all") exportQuery.set("tag", filters.tagId);
+  if (filters.search) exportQuery.set("q", filters.search);
+  const exportHref = `/app/contacts/export?${exportQuery.toString()}`;
+
+  // Bulk actions used to complete with no feedback whatsoever — the page simply
+  // re-rendered, giving no sign that 1,200 contacts had just been unsubscribed.
+  useEffect(() => {
+    if (fetcher.state !== "idle" || !fetcher.data) return;
+    const d = fetcher.data;
+    if (d.ok === false && d.error) {
+      setToast(d.error);
+      return;
+    }
+    if (!d.ok) return;
+    const n = (d.count || 0).toLocaleString();
+    if (d.bulk === "unsubscribe") setToast(`Unsubscribed ${n} contacts.`);
+    else if (d.bulk === "delete") setToast(`Deleted ${n} contacts.`);
+    else if (d.bulk === "tag") setToast(`Tagged ${n} contacts as "${d.tagName}".`);
+    else if (d.segmentId) setToast(`Segment "${d.segmentName}" created with ${(d.memberCount || 0).toLocaleString()} contacts.`);
+  }, [fetcher.state, fetcher.data]);
+
+  // Resolve the saved column keys into render-ready descriptors. Anything that
+  // no longer resolves (a deleted property) is dropped rather than throwing.
+  const propByKey = new Map(properties.map((pr) => [pr.key, pr]));
+  const activeColumns = columns
+    .map((key) => {
+      if (key.startsWith(propPrefix)) {
+        const def = propByKey.get(key.slice(propPrefix.length));
+        if (!def) return null;
+        return {
+          key,
+          label: def.label,
+          width: "1fr",
+          propKey: def.key,
+          propType: def.type,
+          cellClass: "t-small",
+        };
+      }
+      const builtin = builtinColumns.find((b) => b.key === key);
+      if (!builtin) return null;
+      const spec = COLUMN_SPEC[key] || { width: "1fr" };
+      return { key, label: builtin.label, ...spec };
+    })
+    .filter(Boolean);
+
+  // checkbox + configured columns + row-actions gutter
+  const gridTemplate = `40px ${activeColumns.map((c) => c.width).join(" ")} 44px`;
+
+  function renderCell(col, c) {
+    if (col.propKey) {
+      const raw = c.customProps?.[col.propKey];
+      if (raw === undefined || raw === null || raw === "") return DASH;
+      if (col.propType === "boolean") return raw ? "Yes" : "No";
+      if (col.propType === "date") {
+        const d = new Date(raw);
+        return Number.isNaN(d.getTime()) ? DASH : d.toLocaleDateString();
+      }
+      if (col.propType === "number") return Number(raw).toLocaleString();
+      return String(raw);
+    }
+
+    switch (col.key) {
+      case "contact":
+        return (
+          <>
+            <Avatar name={c.name} email={c.email} size={32} />
+            <div style={{ minWidth: 0 }}>
+              <div className="rt-cname-email">{c.email}</div>
+              <div className="rt-cname-name">{c.name || "—"}</div>
+            </div>
+          </>
+        );
+      case "status":
+        return <StatusPill status={c.subscriptionStatus} />;
+      case "lifecycle":
+        return <LifecyclePill stage={c.lifecycleStage} />;
+      case "tags":
+        return (
+          <>
+            {c.tags.slice(0, 2).map((t) => <TagChip key={t.id} tag={t} />)}
+            {c.tags.length > 2 && <span className="rt-tag-overflow">+{c.tags.length - 2}</span>}
+            {c.tags.length === 0 && <span className="muted t-small">—</span>}
+          </>
+        );
+      case "carts":
+        return c.stats.cartAbandonCount
+          ? `${c.stats.cartAbandonCount} · ${fmtMoney(c.stats.lastCartValue)}`
+          : DASH;
+      case "lastSeen":
+        return relativeTime(c.lastSeenAt);
+      case "firstSeen":
+        return relativeTime(c.firstSeenAt);
+      case "source":
+        return SOURCE[c.source] || c.source;
+      case "phone":
+        return c.phone || DASH;
+      case "emails":
+        return c.stats.emailsSent ? c.stats.emailsSent.toLocaleString() : DASH;
+      case "opens":
+        return c.stats.emailsSent ? `${c.stats.openRate.toFixed(0)}%` : DASH;
+      case "orders":
+        return c.stats.orderCount ? c.stats.orderCount.toLocaleString() : DASH;
+      case "spent":
+        return c.stats.orderCount ? fmtMoney(c.stats.totalSpent) : DASH;
+      case "lastOrder":
+        return c.stats.lastOrderAt ? relativeTime(c.stats.lastOrderAt) : DASH;
+      default:
+        return null;
+    }
+  }
+
   const showFullEmpty = summary.total === 0;
 
   if (showFullEmpty) {
     return (
       <div className="rt-page">
-        <ContactsEmpty onSync={() => setSyncOpen(true)} onAdd={() => setAddOpen(true)} />
+        <ContactsEmpty
+          onSync={isShopify ? () => setSyncOpen(true) : null}
+          onAdd={() => setAddOpen(true)}
+          onImport={() => setImportOpen(true)}
+        />
         <SyncModal open={syncOpen} onClose={() => setSyncOpen(false)} initialSync={sync} />
         <AddContactModal open={addOpen} onClose={() => setAddOpen(false)} />
-        <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} />
+        <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} properties={properties} />
       </div>
     );
   }
@@ -399,24 +681,28 @@ export default function ContactsPage() {
             Contacts
           </h1>
           <p className="t-body muted" style={{ margin: "8px 0 0", maxWidth: 540 }}>
-            Everyone who has touched your store — subscribers, buyers, cart abandoners,
-            and push opt-ins, unified into a single profile.
+            {isShopify
+              ? "Everyone who has touched your store — subscribers, buyers, cart abandoners, and push opt-ins, unified into a single profile."
+              : "Everyone on your list, with every field you import and every send they've received, unified into a single profile."}
           </p>
         </div>
         <div className="rt-page-actions">
-          {sync.lastSyncedAt && (
+          {/* Nothing to sync from without a connected store. */}
+          {isShopify && sync.lastSyncedAt && (
             <div className="rt-sync-pill">
               <Icons.Clock size={12} />
               <span>Last synced {relativeTime(sync.lastSyncedAt)}</span>
             </div>
           )}
-          <button
-            type="button"
-            className="btn btn-secondary"
-            onClick={() => setSyncOpen(true)}
-          >
-            <Icons.Refresh size={14} /> Sync from Shopify
-          </button>
+          {isShopify && (
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={() => setSyncOpen(true)}
+            >
+              <Icons.Refresh size={14} /> Sync from Shopify
+            </button>
+          )}
           <button
             type="button"
             className="btn btn-secondary"
@@ -443,9 +729,12 @@ export default function ContactsPage() {
                   >
                     <Icons.ArrowDown size={14} /> Import CSV
                   </button>
-                  <button type="button" disabled className="rt-menu-soon">
-                    <Icons.ArrowUp size={14} /> Export CSV <SoonPill />
-                  </button>
+                  {/* A real link, not a fetcher — the response is a streamed
+                      file download the browser must handle itself. Carries the
+                      current filters so it exports what's on screen. */}
+                  <a href={exportHref} download onClick={() => setOpenMenu(null)}>
+                    <Icons.ArrowUp size={14} /> Export CSV
+                  </a>
                 </div>
               </>
             )}
@@ -495,7 +784,7 @@ export default function ContactsPage() {
         />
       </section>
 
-      {showUnify && (
+      {isShopify && showUnify && (
         <UnifyBanner
           count={backfill.added}
           onDismiss={() => setShowUnify(false)}
@@ -505,6 +794,26 @@ export default function ContactsPage() {
           }}
         />
       )}
+
+      <ViewsBar
+        views={views}
+        activeViewId={activeViewId}
+        dirty={activeViewId === null && (filters.status !== "all" || filters.source !== "all" || filters.tagId !== "all")}
+        onSelect={(id) => {
+          setActiveViewId(id);
+          const view = views.find((v) => v.id === id);
+          const next = new URLSearchParams();
+          if (view?.filters) {
+            for (const [k, v] of Object.entries(view.filters)) {
+              if (v && v !== "all") next.set(k === "tagId" ? "tag" : k === "search" ? "q" : k, String(v));
+            }
+          }
+          setParams(next, { replace: true });
+          if (Array.isArray(view?.columns) && view.columns.length) setColumns(view.columns);
+        }}
+        onSaveNew={() => setDialog({ kind: "save-view" })}
+        onDelete={(v) => setDialog({ kind: "delete-view", view: v })}
+      />
 
       <div className="rt-toolbar rt-toolbar-stack">
         <div className="rt-chips rt-chips-wrap">
@@ -573,6 +882,10 @@ export default function ContactsPage() {
           />
         </div>
         <div className="rt-toolbar-right">
+          <ColumnsButton onClick={() => setColumnsOpen(true)} />
+          <button className="btn btn-secondary" onClick={() => setPropsOpen(true)}>
+            <Icons.Tag size={14} /> Properties
+          </button>
           <div className="rt-search">
             <Icons.Search size={14} />
             <input
@@ -604,7 +917,7 @@ export default function ContactsPage() {
         </div>
       </div>
 
-      <div className="rt-ctable">
+      <div className="rt-ctable" style={{ "--rt-ct-cols": gridTemplate }}>
         <div className="rt-cthead">
           <div className="rt-ctcheck">
             <input
@@ -615,12 +928,11 @@ export default function ContactsPage() {
               aria-label="Select all"
             />
           </div>
-          <div>Contact</div>
-          <div>Status</div>
-          <div>Lifecycle</div>
-          <div>Tags</div>
-          <div className="rt-tnum">Carts</div>
-          <div className="rt-tnum">Last seen</div>
+          {activeColumns.map((col) => (
+            <div key={col.key} className={col.numeric ? "rt-tnum" : undefined}>
+              {col.label}
+            </div>
+          ))}
           <div />
         </div>
 
@@ -675,34 +987,11 @@ export default function ContactsPage() {
                   aria-label={`Select ${c.email}`}
                 />
               </div>
-              <div className="rt-cname">
-                <Avatar name={c.name} email={c.email} size={32} />
-                <div style={{ minWidth: 0 }}>
-                  <div className="rt-cname-email">{c.email}</div>
-                  <div className="rt-cname-name">{c.name || "—"}</div>
+              {activeColumns.map((col) => (
+                <div key={col.key} className={col.cellClass}>
+                  {renderCell(col, c)}
                 </div>
-              </div>
-              <div>
-                <StatusPill status={c.subscriptionStatus} />
-              </div>
-              <div>
-                <LifecyclePill stage={c.lifecycleStage} />
-              </div>
-              <div className="rt-ctags">
-                {c.tags.slice(0, 2).map((t) => (
-                  <TagChip key={t.id} tag={t} />
-                ))}
-                {c.tags.length > 2 && (
-                  <span className="rt-tag-overflow">+{c.tags.length - 2}</span>
-                )}
-                {c.tags.length === 0 && <span className="muted t-small">—</span>}
-              </div>
-              <div className="rt-tnum rt-tmoney">
-                {c.stats.cartAbandonCount
-                  ? `${c.stats.cartAbandonCount} · ${fmtMoney(c.stats.lastCartValue)}`
-                  : <span className="muted">—</span>}
-              </div>
-              <div className="rt-tnum rt-tdate">{relativeTime(c.lastSeenAt)}</div>
+              ))}
               <div className="rt-tactions">
                 <button
                   type="button"
@@ -745,7 +1034,9 @@ export default function ContactsPage() {
                         className="rt-menu-danger"
                         onClick={() => {
                           setOpenMenu(null);
-                          submitRowAction("delete", c);
+                          // Row delete had no confirmation at all — one stray
+                          // click removed a contact with no undo.
+                          setDialog({ kind: "delete-one", contact: c });
                         }}
                       >
                         <Icons.Trash size={14} /> Delete
@@ -792,33 +1083,151 @@ export default function ContactsPage() {
       )}
 
       <BulkBar
-        selectedCount={selectAllFiltered ? filteredTotal : selected.size}
-        onAddTag={() => {
-          const name = window.prompt("Tag name");
-          if (name) submitBulk("bulk_apply_tag", { tagName: name });
-        }}
-        onSaveAsSegment={() => {
-          const count = selectAllFiltered ? filteredTotal : selected.size;
-          const name = window.prompt(
-            `Save these ${count} contact(s) as a static segment. Name?`,
-          );
-          if (name && name.trim()) {
-            submitBulk("bulk_save_as_segment", { name: name.trim() });
-          }
-        }}
-        onUnsubscribe={() => submitBulk("bulk_unsubscribe")}
-        onDelete={() => {
-          const count = selectAllFiltered ? filteredTotal : selected.size;
-          if (window.confirm(`Delete ${count} contact(s)?`)) {
-            submitBulk("bulk_delete");
-          }
-        }}
-        onClear={() => setSelected(new Set())}
+        selectedCount={bulkCount}
+        onAddTag={() => setDialog({ kind: "tag" })}
+        onSaveAsSegment={() => setDialog({ kind: "segment" })}
+        // Unsubscribing in bulk is as consequential as deleting — it is
+        // irreversible from the shopper's side and permanently shrinks the
+        // sendable list — so it gets a confirmation too. Only delete had one.
+        onUnsubscribe={() => setDialog({ kind: "unsubscribe" })}
+        onDelete={() => setDialog({ kind: "delete" })}
+        onClear={() => { setSelected(new Set()); setSelectAllFiltered(false); }}
+        onExport={exportHref}
       />
+
+      {dialog?.kind === "tag" && (
+        <PromptDialog
+          title="Add a tag"
+          body={`Applies to ${bulkCount.toLocaleString()} selected ${bulkCount === 1 ? "contact" : "contacts"}. Existing tags are reused.`}
+          label="Tag name"
+          placeholder="e.g. VIP"
+          confirmLabel="Add tag"
+          loading={busy}
+          onCancel={() => setDialog(null)}
+          onConfirm={(tagName) => { submitBulk("bulk_apply_tag", { tagName }); setDialog(null); }}
+        />
+      )}
+
+      {dialog?.kind === "segment" && (
+        <PromptDialog
+          title="Save as segment"
+          body={`Creates a static segment containing the ${bulkCount.toLocaleString()} selected ${bulkCount === 1 ? "contact" : "contacts"}.`}
+          label="Segment name"
+          placeholder="e.g. Spring launch list"
+          confirmLabel="Create segment"
+          loading={busy}
+          onCancel={() => setDialog(null)}
+          onConfirm={(name) => { submitBulk("bulk_save_as_segment", { name }); setDialog(null); }}
+        />
+      )}
+
+      {dialog?.kind === "unsubscribe" && (
+        <ConfirmDialog
+          title={`Unsubscribe ${bulkCount.toLocaleString()} ${bulkCount === 1 ? "contact" : "contacts"}?`}
+          body="They stop receiving marketing email immediately and are added to your suppression list. Only they can opt back in."
+          confirmLabel="Unsubscribe"
+          destructive
+          loading={busy}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => { submitBulk("bulk_unsubscribe"); setDialog(null); }}
+        />
+      )}
+
+      {dialog?.kind === "delete-one" && (
+        <ConfirmDialog
+          title="Delete this contact?"
+          body={`${dialog.contact.email} will be removed from your list and from every segment.`}
+          confirmLabel="Delete"
+          destructive
+          loading={busy}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => { submitRowAction("delete", dialog.contact); setDialog(null); }}
+        />
+      )}
+
+      {dialog?.kind === "delete" && (
+        <ConfirmDialog
+          title={`Delete ${bulkCount.toLocaleString()} ${bulkCount === 1 ? "contact" : "contacts"}?`}
+          body="They're removed from your list and from every segment. Their suppression history is kept, so a deleted contact who had unsubscribed stays unsubscribed."
+          confirmLabel="Delete"
+          destructive
+          loading={busy}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => { submitBulk("bulk_delete"); setDialog(null); }}
+        />
+      )}
+
+      {dialog?.kind === "save-view" && (
+        <PromptDialog
+          title="Save this view"
+          body="Remembers the current filters and column layout so you can come back to them in one click."
+          label="View name"
+          placeholder="e.g. Unsubscribed this month"
+          confirmLabel="Save view"
+          loading={busy}
+          onCancel={() => setDialog(null)}
+          onConfirm={(name) => {
+            fetcher.submit(
+              {
+                intent: "create_view",
+                name,
+                filters: JSON.stringify(filters),
+                columns: JSON.stringify(columns),
+              },
+              { method: "post" },
+            );
+            setDialog(null);
+          }}
+        />
+      )}
+
+      {dialog?.kind === "delete-view" && (
+        <ConfirmDialog
+          title={`Delete the "${dialog.view.name}" view?`}
+          body="Only the saved filters and layout are removed. No contacts are affected."
+          confirmLabel="Delete view"
+          destructive
+          loading={busy}
+          onCancel={() => setDialog(null)}
+          onConfirm={() => {
+            fetcher.submit({ intent: "delete_view", id: dialog.view.id }, { method: "post" });
+            if (activeViewId === dialog.view.id) setActiveViewId(null);
+            setDialog(null);
+          }}
+        />
+      )}
+
+      {columnsOpen && (
+        <ColumnsModal
+          builtins={builtinColumns}
+          groups={columnGroups}
+          properties={properties}
+          propPrefix={propPrefix}
+          columns={columns}
+          onChange={setColumns}
+          saving={busy}
+          onClose={() => setColumnsOpen(false)}
+          onSave={(next) => {
+            fetcher.submit(
+              { intent: "save_columns", columns: JSON.stringify(next) },
+              { method: "post" },
+            );
+            setColumnsOpen(false);
+          }}
+        />
+      )}
+
+      <PropertiesModal
+        open={propsOpen}
+        onClose={() => setPropsOpen(false)}
+        properties={properties}
+      />
+
+      <Toast message={toast} onDismiss={() => setToast(null)} />
 
       <SyncModal open={syncOpen} onClose={() => setSyncOpen(false)} initialSync={sync} />
       <AddContactModal open={addOpen} onClose={() => setAddOpen(false)} />
-      <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} />
+      <ImportCsvModal open={importOpen} onClose={() => setImportOpen(false)} properties={properties} />
     </div>
   );
 }

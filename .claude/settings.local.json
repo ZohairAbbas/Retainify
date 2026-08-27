@@ -5,7 +5,8 @@
       "WebFetch(domain:www.privy.com)",
       "WebSearch",
       "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\zohair.abbas\\\\Retainify\" -Directory)",
-      "Bash(Select-Object Name)"
+      "Bash(Select-Object Name)",
+      "Bash(python3 -)"
     ]
   },
   "enableAllProjectMcpServers": true,

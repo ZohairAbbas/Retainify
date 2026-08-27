@@ -21,3 +21,21 @@ export function isInQuietHours(quietStart, quietEnd, timezone) {
     return false;
   }
 }
+
+/**
+ * How long to defer a job that landed inside quiet hours.
+ *
+ * Jittered rather than a flat hour. Without it every message deferred overnight
+ * becomes due within the same worker tick at the top of the wake hour, so a
+ * shop's whole backlog leaves in one burst — which is exactly the pattern
+ * mailbox providers throttle, and it lands every customer's email at the same
+ * minute.
+ *
+ * 45–90 minutes: still re-checks promptly once the window closes, but spreads
+ * the backlog across several ticks.
+ */
+export function quietHoursRetryDelay() {
+  const base = 45 * 60 * 1000;
+  const spread = 45 * 60 * 1000;
+  return base + Math.floor(Math.random() * spread);
+}

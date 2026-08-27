@@ -20,7 +20,13 @@ export const loader = async ({ request }) => {
     return new Response(JSON.stringify({ enabled: false }), { status: 400, headers: HEADERS });
   }
 
-  const settings = await prisma.popupSettings.findUnique({ where: { shop } });
+  const [settings, shopSettings] = await Promise.all([
+    prisma.popupSettings.findUnique({ where: { shop } }),
+    prisma.shopSettings.findUnique({
+      where: { shop },
+      select: { whatsappEnabled: true },
+    }),
+  ]);
 
   if (!settings || !settings.enabled) {
     return new Response(JSON.stringify({ enabled: false }), { status: 200, headers: HEADERS });
@@ -34,6 +40,11 @@ export const loader = async ({ request }) => {
       enabled: true,
       template,
       config,
+      // Whether the popup should collect a WhatsApp number and consent. Gated on
+      // the channel being switched on for the shop AND opted into for the popup
+      // — collecting consent for a channel that can't send is just extra
+      // friction on the email signup.
+      whatsappOptIn: !!shopSettings?.whatsappEnabled && config?.whatsappOptIn === true,
       // Legacy fields — kept for any old extension build still in the wild.
       headline: settings.headline,
       bodyText: settings.bodyText,

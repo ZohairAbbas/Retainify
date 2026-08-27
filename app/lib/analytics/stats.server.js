@@ -1,9 +1,15 @@
 /**
- * Analytics query helpers for the dashboard.
+ * Dashboard analytics.
  *
- * Scoped to cart_abandoned journeys to preserve the dashboard's current
- * "Cart Rescue performance" framing. Widening the scope to all triggers is a
- * UX decision deferred to a follow-up.
+ * Scope note: messaging stats cover EVERY flow and every channel. They used to
+ * be filtered to `trigger: "cart_abandoned"`, which made the dashboard lie to
+ * anyone whose flows were welcome series, post-purchase or segment-triggered —
+ * they saw "Emails sent: 0" and an empty performance table while mail was
+ * actively going out.
+ *
+ * Cart-recovery attribution stays cart-scoped, because it genuinely is: it
+ * measures recovered checkouts against rescue emails, and no other trigger
+ * participates in that funnel.
  */
 import prisma from "../../db.server.js";
 
@@ -11,12 +17,31 @@ function sinceDate(days) {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
 }
 
-async function cartAbandonedJourneyIds(shop) {
+/**
+ * Ids of every live flow for a shop, optionally narrowed to one trigger or to a
+ * single campaign (the dashboard's flow selector).
+ */
+async function journeyIds(shop, { trigger, journeyId } = {}) {
   const journeys = await prisma.journey.findMany({
-    where: { shop, trigger: "cart_abandoned", archivedAt: null },
+    where: {
+      shop,
+      archivedAt: null,
+      ...(trigger ? { trigger } : {}),
+      ...(journeyId ? { id: journeyId } : {}),
+    },
     select: { id: true },
   });
   return journeys.map((j) => j.id);
+}
+
+/** Flows for the dashboard's campaign selector, most recently updated first. */
+export async function listCampaignChoices(shop) {
+  const journeys = await prisma.journey.findMany({
+    where: { shop, archivedAt: null },
+    select: { id: true, name: true, status: true, trigger: true },
+    orderBy: { updatedAt: "desc" },
+  });
+  return journeys;
 }
 
 /**
@@ -35,39 +60,52 @@ async function cartAbandonedJourneyIds(shop) {
  * checkouts (enrolled at email-entry, completed seconds later before any
  * delay elapsed) don't pollute the rate.
  */
-export async function getCartRescueStats(shop, days = 30) {
+export async function getCartRescueStats(shop, days = 30, { journeyId = null } = {}) {
   const since = sinceDate(days);
-  const journeyIds = await cartAbandonedJourneyIds(shop);
-  const hasJourneys = journeyIds.length > 0;
 
-  const stepFilter = { step: { journeyId: { in: journeyIds } } };
+  // `journeyId` scopes the whole card to one campaign, driving the dashboard's
+  // flow selector. Null means every live flow.
+  const [allJourneyIds, cartJourneyIds] = await Promise.all([
+    journeyIds(shop, { journeyId }),
+    journeyIds(shop, { trigger: "cart_abandoned", journeyId }),
+  ]);
 
-  const [sent, opened, clicked, abandoned, recoveredRows, pendingJobs, signups, suppressions] = await Promise.all([
-    hasJourneys
-      ? prisma.journeyJob.count({ where: { ...stepFilter, sentAt: { gte: since, not: null } } })
+  const hasAny = allJourneyIds.length > 0;
+  const hasCartJourneys = cartJourneyIds.length > 0;
+
+  // Messaging counters span every flow and every channel.
+  const allSteps = { step: { journeyId: { in: allJourneyIds } } };
+
+  const [
+    sent,
+    opened,
+    clicked,
+    pushSent,
+    pushClicked,
+    whatsappSent,
+    pendingJobs,
+    abandoned,
+    recoveredRows,
+    subscribers,
+    suppressions,
+  ] = await Promise.all([
+    hasAny ? prisma.journeyJob.count({ where: { ...allSteps, sentAt: { gte: since, not: null } } }) : 0,
+    hasAny ? prisma.journeyJob.count({ where: { ...allSteps, openedAt: { gte: since, not: null } } }) : 0,
+    hasAny ? prisma.journeyJob.count({ where: { ...allSteps, clickedAt: { gte: since, not: null } } }) : 0,
+    hasAny ? prisma.pushJob.count({ where: { ...allSteps, sentAt: { gte: since, not: null } } }) : 0,
+    hasAny ? prisma.pushJob.count({ where: { ...allSteps, clickedAt: { gte: since, not: null } } }) : 0,
+    hasAny ? prisma.whatsappJob.count({ where: { ...allSteps, sentAt: { gte: since, not: null } } }) : 0,
+    hasAny
+      ? prisma.journeyJob.count({ where: { ...allSteps, status: { in: ["pending", "processing"] } } })
       : 0,
-    hasJourneys
-      ? prisma.journeyJob.count({ where: { ...stepFilter, openedAt: { gte: since, not: null } } })
-      : 0,
-    hasJourneys
-      ? prisma.journeyJob.count({ where: { ...stepFilter, clickedAt: { gte: since, not: null } } })
-      : 0,
-    // Denominator: enrollments where a rescue email landed AT LEAST 1 HOUR
-    // AFTER the customer abandoned. That threshold excludes "noise"
-    // enrollments — customers who entered their email at checkout, got a
-    // rescue email fired within seconds by the worker (because the step's
-    // delayHours was 0), and completed their order anyway. A genuine
-    // abandonment is one where the customer was gone long enough for the
-    // email to plausibly have a role.
-    //
-    // Symmetric with the numerator below: both sides require the same
-    // "real rescue attempt" definition, so the rate is interpretable.
-    hasJourneys
+
+    // ── Cart-recovery funnel: deliberately cart-scoped ──────────────────────
+    hasCartJourneys
       ? prisma.$queryRaw`
           SELECT COUNT(*)::int AS count
           FROM "JourneyEnrollment" e
           WHERE e.shop = ${shop}
-            AND e."journeyId" = ANY(${journeyIds})
+            AND e."journeyId" = ANY(${cartJourneyIds})
             AND e."enrolledAt" >= ${since}
             AND EXISTS (
               SELECT 1 FROM "JourneyJob" j
@@ -77,16 +115,7 @@ export async function getCartRescueStats(shop, days = 30) {
             )
         `
       : [{ count: 0 }],
-    // Numerator: AbandonedCart rows recovered in the window, but ONLY when a
-    // rescue email shipped at least 1 hour after the customer abandoned AND
-    // before they recovered. The 1-hour gap is what makes the attribution
-    // meaningful: anything shorter means the email landed while the customer
-    // was still in their checkout session and the recovery would have
-    // happened regardless.
-    //
-    // Raw SQL because Prisma can't express the cross-row time-bracket
-    // condition cleanly.
-    hasJourneys
+    hasCartJourneys
       ? prisma.$queryRaw`
           SELECT c."recoveredRevenue"
           FROM "AbandonedCart" c
@@ -105,11 +134,15 @@ export async function getCartRescueStats(shop, days = 30) {
             )
         `
       : [],
-    hasJourneys
-      ? prisma.journeyJob.count({ where: { ...stepFilter, status: { in: ["pending", "processing"] } } })
-      : 0,
-    prisma.popupSignup.count({ where: { shop, confirmedAt: { not: null } } }),
-    prisma.emailSuppression.count({ where: { shop } }),
+
+    // ── Audience ────────────────────────────────────────────────────────────
+    // The whole marketable list, not just confirmed popup signups — the old
+    // number contradicted the figure the Contacts page showed for the same shop.
+    prisma.contact.count({
+      where: { shop, deletedAt: null, subscriptionStatus: "subscribed" },
+    }),
+    // Scoped to the reporting window, like every other figure on the card.
+    prisma.emailSuppression.count({ where: { shop, createdAt: { gte: since } } }),
   ]);
 
   const recoveredCount = recoveredRows.length;
@@ -121,30 +154,37 @@ export async function getCartRescueStats(shop, days = 30) {
     sent,
     opened,
     clicked,
+    pushSent,
+    pushClicked,
+    whatsappSent,
     recoveredCount,
     recoveredRevenue,
     abandoned: abandonedCount,
     pendingJobs,
-    signups,
+    subscribers,
     suppressions,
+    hasCartJourneys,
     openRate: sent > 0 ? (opened / sent) * 100 : 0,
     clickRate: sent > 0 ? (clicked / sent) * 100 : 0,
+    pushClickRate: pushSent > 0 ? (pushClicked / pushSent) * 100 : 0,
     recoveryRate: abandonedCount > 0 ? (recoveredCount / abandonedCount) * 100 : 0,
   };
 }
 
 /**
  * Per-step breakdown for the dashboard's "Email performance" table.
- * Returns one row per email step in any cart_abandoned journey, keyed by step.
+ *
+ * One row per email step across ALL flows, carrying the flow name so the table
+ * stays readable once a shop runs more than one.
  */
-export async function getEmailBreakdown(shop, days = 30) {
+export async function getEmailBreakdown(shop, days = 30, { journeyId = null } = {}) {
   const since = sinceDate(days);
-  const journeyIds = await cartAbandonedJourneyIds(shop);
-  if (journeyIds.length === 0) return [];
+  const ids = await journeyIds(shop, { journeyId });
+  if (ids.length === 0) return [];
 
   const steps = await prisma.journeyStep.findMany({
     where: {
-      journeyId: { in: journeyIds },
+      journeyId: { in: ids },
       nodeType: "email",
       isArchived: false,
     },
@@ -153,27 +193,43 @@ export async function getEmailBreakdown(shop, days = 30) {
       stepNumber: true,
       subject: true,
       emailName: true,
+      journeyId: true,
       journey: { select: { name: true } },
     },
     orderBy: [{ journeyId: "asc" }, { stepNumber: "asc" }],
   });
+  if (steps.length === 0) return [];
 
-  return Promise.all(
-    steps.map(async (step) => {
-      const [sent, opened, clicked] = await Promise.all([
-        prisma.journeyJob.count({ where: { stepId: step.id, sentAt: { gte: since, not: null } } }),
-        prisma.journeyJob.count({ where: { stepId: step.id, openedAt: { gte: since, not: null } } }),
-        prisma.journeyJob.count({ where: { stepId: step.id, clickedAt: { gte: since, not: null } } }),
-      ]);
-      return {
-        stepId: step.id,
-        stepNumber: step.stepNumber,
-        label: step.emailName || step.subject || `Email ${step.stepNumber}`,
-        journeyName: step.journey?.name || "",
-        sent,
-        opened,
-        clicked,
-      };
-    }),
+  // One grouped query instead of three counts per step — a shop with a handful
+  // of flows was previously issuing dozens of round trips to render this table.
+  const grouped = await prisma.$queryRaw`
+    SELECT j."stepId"                                          AS "stepId",
+           COUNT(*) FILTER (WHERE j."sentAt"    IS NOT NULL)    AS sent,
+           COUNT(*) FILTER (WHERE j."openedAt"  IS NOT NULL)    AS opened,
+           COUNT(*) FILTER (WHERE j."clickedAt" IS NOT NULL)    AS clicked
+      FROM "JourneyJob" j
+     WHERE j."shop" = ${shop}
+       AND j."stepId" = ANY(${steps.map((s) => s.id)})
+       AND j."sentAt" >= ${since}
+     GROUP BY j."stepId"
+  `;
+  const statsByStep = Object.fromEntries(
+    grouped.map((r) => [
+      r.stepId,
+      { sent: Number(r.sent) || 0, opened: Number(r.opened) || 0, clicked: Number(r.clicked) || 0 },
+    ]),
   );
+
+  return steps.map((step) => {
+    const s = statsByStep[step.id] || { sent: 0, opened: 0, clicked: 0 };
+    return {
+      stepId: step.id,
+      stepNumber: step.stepNumber,
+      label: step.emailName || step.subject || `Email ${step.stepNumber}`,
+      journeyName: step.journey?.name || "",
+      sent: s.sent,
+      opened: s.opened,
+      clicked: s.clicked,
+    };
+  });
 }

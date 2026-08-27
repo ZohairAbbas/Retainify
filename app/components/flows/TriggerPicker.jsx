@@ -13,7 +13,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router";
 import Icons from "../ui/Icons.jsx";
-import { TRIGGER_CONFIG } from "../../lib/triggerConfig.js";
+import { TRIGGER_CONFIG, triggersFor } from "../../lib/triggerConfig.js";
 import { relativeTime } from "../contacts/constants.js";
 
 export default function TriggerPicker({
@@ -29,11 +29,14 @@ export default function TriggerPicker({
   // to a segment route. If it returns false, navigation is cancelled. Used
   // by the flow builder inspector to warn about unsaved draft changes.
   confirmLeave,
+  // Commerce triggers (cart abandoned, order placed, win-back) can never fire
+  // without a connected store, so they are not offered to a direct workspace.
+  isShopify = true,
 }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const triggers = useMemo(
-    () => Object.entries(TRIGGER_CONFIG).map(([id, cfg]) => ({ id, ...cfg })),
-    [],
+    () => Object.entries(triggersFor(isShopify)).map(([id, cfg]) => ({ id, ...cfg })),
+    [isShopify],
   );
 
   return (
@@ -67,6 +70,9 @@ export default function TriggerPicker({
 
       {!hideDescription && (
         <div className="field-help" style={{ marginTop: 10 }}>
+          {/* Read from the full map, not the filtered one: a flow created while
+              a store was connected keeps its trigger, and its description must
+              still render after that store goes away. */}
           {TRIGGER_CONFIG[value]?.desc}
         </div>
       )}
@@ -97,6 +103,9 @@ function SegmentTriggerCard({
   onCloseGallery,
   onPick,
   confirmLeave,
+  // Commerce triggers (cart abandoned, order placed, win-back) can never fire
+  // without a connected store, so they are not offered to a direct workspace.
+  isShopify = true,
 }) {
   const seg = segmentChoices.find((s) => s.key === segmentKey);
   // Guarded navigation helper — used for the destructive cross-route links
