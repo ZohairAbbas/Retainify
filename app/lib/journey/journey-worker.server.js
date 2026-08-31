@@ -10,15 +10,18 @@ import { sendEmail, resolveFrom, resolveProvider, resolveStoreUrl } from "../ema
 import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml } from "../email/visual-renderer.server.js";
 import { buildTextPart } from "../email/text.server.js";
 import { buildUnsubscribeUrl, listUnsubscribeHeaders } from "../tracking/links.server.js";
-import { createDiscountCode } from "../shopify/discounts.server.js";
+import { createDiscountCode, classifyDiscountError } from "../shopify/discounts.server.js";
 import {
   claimDueJourneyJobs,
   markJourneyJobDone,
   markJourneyJobFailed,
+  settleEnrollmentIfFinished,
 } from "./journey-queue.server.js";
 import { checkQuota, incrementUsage } from "../billing/entitlements.server.js";
+import { PERMANENT, isStale } from "./failure-policy.server.js";
 import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.server.js";
-import { stopShopSending, releaseClaimedJob } from "./shop-work.server.js";
+import { stopShopSending, releaseClaimedJob, cancelStaleJob } from "./shop-work.server.js";
+import { checkStepSequence, CANCEL, WAIT, SEQUENCE_RECHECK_MS } from "./sequence-gate.server.js";
 
 
 export async function runJourneyWorker() {
@@ -48,11 +51,24 @@ export async function runJourneyWorker() {
   for (const job of holding) {
     await releaseClaimedJob("journeyJob", job.id);
   }
+
+  // Too old to be worth sending. A queue that stalls — a suspended provider
+  // key, a worker down for a weekend — resumes eventually, and without this the
+  // whole backlog goes out at once: welcome mail for signups from months ago.
+  const fresh = [];
+  for (const job of live) {
+    if (isStale(job.scheduledFor)) {
+      await cancelStaleJob("journeyJob", job);
+      console.warn(`[journey-worker] job ${job.id} cancelled — past the staleness cutoff`);
+    } else {
+      fresh.push(job);
+    }
+  }
   if (holding.length) {
     console.warn(`[journey-worker] held ${holding.length} job(s) — shop health unknown`);
   }
 
-  for (const job of live) {
+  for (const job of fresh) {
     try {
       await processJourneyJob(job);
     } catch (err) {
@@ -73,6 +89,25 @@ async function processJourneyJob(job) {
     return;
   }
 
+  // A flow is a narrative: this step assumes the ones before it landed. Checked
+  // before any rendering or discount minting so a blocked step costs nothing.
+  const sequence = await checkStepSequence(enrollment.id, step.stepNumber);
+  if (sequence.verdict === CANCEL) {
+    await prisma.journeyJob.update({
+      where: { id: job.id },
+      data: { status: "cancelled", lastError: `sequence broken — ${sequence.reason}` },
+    });
+    await settleEnrollmentIfFinished(enrollment.id, { failed: true });
+    console.warn(`[journey-worker] job ${job.id} cancelled — ${sequence.reason}`);
+    return;
+  }
+  if (sequence.verdict === WAIT) {
+    // Released rather than rescheduled in place: waiting on a sibling step is
+    // not an attempt, and must not spend the retry budget.
+    await releaseClaimedJob("journeyJob", job.id, SEQUENCE_RECHECK_MS);
+    return;
+  }
+
   const [settings, suppression] = await Promise.all([
     prisma.shopSettings.findUnique({ where: { shop } }),
     prisma.emailSuppression.findFirst({ where: { shop, email: enrollment.contactEmail } }),
@@ -86,10 +121,12 @@ async function processJourneyJob(job) {
   // Inside quiet hours — defer, with jitter so the overnight backlog doesn't
   // all become due in the same tick.
   if (isInQuietHours(settings.quietHoursStart, settings.quietHoursEnd, settings.storeTimezone)) {
-    await prisma.journeyJob.update({
-      where: { id: job.id },
-      data: { status: "pending", scheduledFor: new Date(Date.now() + quietHoursRetryDelay()) },
-    });
+    // Hand the attempt back: a quiet-hours deferral is not a send attempt.
+    // Charging one meant a job hitting the window on three consecutive nights
+    // reached the attempt ceiling without ever being sent, and then sat pending
+    // and unclaimable forever — 1,264 jobs were lost this way before anyone
+    // noticed, because a stranded row looks perfectly healthy.
+    await releaseClaimedJob("journeyJob", job.id, quietHoursRetryDelay());
     return;
   }
 
@@ -129,7 +166,7 @@ async function processJourneyJob(job) {
     if (quota.shouldBlock) {
       // Fail the job explicitly rather than dropping it silently, so the
       // merchant can see why nothing sent.
-      await markJourneyJobFailed(job.id, "quota_exceeded");
+      await markJourneyJobFailed(job.id, "quota_exceeded", PERMANENT);
       return;
     }
     console.warn(
@@ -145,7 +182,21 @@ async function processJourneyJob(job) {
     try {
       discountCode = await createDiscountCode(shop, Number(discountBlock.percent));
     } catch (err) {
-      console.error("[journey-worker] discount code failed:", err.message);
+      // Do NOT send without the code. The renderer drops the discount block
+      // when discount_code is empty, but the subject still promises the offer
+      // ("Your first order — 10% off") and any {discount_code} merge tag in
+      // body text renders as an empty string. Swallowing this turned a broken
+      // email into a job marked done, invisible to us and to the merchant.
+      //
+      // Most mint failures are throttling or a Shopify blip, so the retry
+      // usually succeeds; a missing scope holds as an ops failure instead of
+      // burning the retry budget.
+      const errorClass = classifyDiscountError(err);
+      console.error(
+        `[journey-worker] job ${job.id} discount mint failed (${errorClass}) — not sending: ${err.message}`,
+      );
+      await markJourneyJobFailed(job.id, `discount code could not be created: ${err.message}`, errorClass);
+      return;
     }
   }
 
@@ -200,7 +251,7 @@ async function processJourneyJob(job) {
   );
 
   if (!result.ok) {
-    await markJourneyJobFailed(job.id, result.error);
+    await markJourneyJobFailed(job.id, result.error, result.errorClass);
     return;
   }
 

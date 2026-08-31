@@ -215,7 +215,7 @@ export const action = async ({ request }) => {
           idempotencyKey: `confirm:${signup.id}:${Math.floor(Date.now() / RESEND_COOLDOWN_MS)}`,
         },
         { shop, settings: shopSettings },
-      ).then((result) => {
+      ).then(async (result) => {
         // The adapters RETURN provider errors, they don't throw — so the .catch
         // below never sees them. Without this branch a rejected send (a bad
         // reply_to, a revoked key, an unverified domain) is invisible in both
@@ -225,6 +225,20 @@ export const action = async ({ request }) => {
           console.error(
             `[popup-signup] confirmation REJECTED by provider shop=${shop} from="${from}" replyTo="${replyTo}": ${result.error}`,
           );
+          return result;
+        }
+        // Store the provider message id so the open/click webhook has something
+        // to match on. Without it these events arrive, find no JourneyJob, and
+        // are discarded — which is how 92 real engagement events were lost.
+        if (result?.providerMessageId) {
+          await prisma.popupSignup
+            .update({
+              where: { id: signup.id },
+              data: { confirmMessageId: result.providerMessageId },
+            })
+            .catch((err) =>
+              console.error("[popup-signup] could not store confirm message id:", err.message),
+            );
         }
         return result;
       });

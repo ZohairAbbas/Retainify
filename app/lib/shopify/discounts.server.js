@@ -1,4 +1,30 @@
 import { unauthenticated } from "../../shopify.server.js";
+import { OPS, PERMANENT, TRANSIENT } from "../journey/failure-policy.server.js";
+
+/**
+ * Classify a discount-minting failure the same way the email adapters classify
+ * a send failure, so the queue can react instead of shrugging.
+ *
+ * This used to be swallowed: the caller caught the throw, logged it, and sent
+ * the email anyway with discount_code empty. The renderer then dropped the
+ * discount block — but the SUBJECT still promised the offer, and any
+ * {discount_code} merge tag in body text rendered as an empty string. The job
+ * was marked done, so a broken email looked like a clean send.
+ */
+export function classifyDiscountError(err) {
+  const status = Number(err?.status ?? err?.response?.code ?? err?.$metadata?.httpStatusCode) || 0;
+  const message = String(err?.message || "");
+
+  if (status === 429 || /throttl|rate limit/i.test(message)) return TRANSIENT;
+  if (status >= 500) return TRANSIENT;
+  // A shop we can no longer authenticate against, or one missing write_discounts.
+  if (status === 401 || status === 403) return OPS;
+  if (/access denied|not approved|scope/i.test(message)) return OPS;
+  // userErrors from the mutation are a malformed request; retrying is pointless.
+  if (status >= 400) return PERMANENT;
+  // Network blips and anything unrecognised: retry rather than discard.
+  return TRANSIENT;
+}
 
 const CHARSET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 

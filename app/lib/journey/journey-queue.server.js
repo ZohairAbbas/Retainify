@@ -1,4 +1,5 @@
 import prisma from "../../db.server.js";
+import { decideFailureOutcome, MAX_ATTEMPTS } from "./failure-policy.server.js";
 
 /**
  * Enroll a contact in a journey — creates one JourneyJob per sendable step.
@@ -159,7 +160,7 @@ export async function claimDueJourneyJobs(limit = 20) {
     where: {
       status: "pending",
       scheduledFor: { lte: now },
-      attempts: { lt: 3 },
+      attempts: { lt: MAX_ATTEMPTS },
     },
     take: limit,
     orderBy: { scheduledFor: "asc" },
@@ -237,18 +238,49 @@ export async function markJourneyJobDone(jobId, extras = {}) {
   await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
 }
 
-export async function markJourneyJobFailed(jobId, error) {
+/**
+ * Record a failed send and decide whether it gets another go.
+ *
+ * @param {string} jobId
+ * @param {string} error human-readable, stored on the row
+ * @param {string} [errorClass] from the adapter — see failure-policy.server.js.
+ *        Omitted by callers that caught a thrown exception rather than a send
+ *        result; those are treated as transient, because an unclassified
+ *        failure is far more likely to be a blip than a permanently bad address.
+ */
+export async function markJourneyJobFailed(jobId, error, errorClass) {
   const job = await prisma.journeyJob.findUnique({ where: { id: jobId } });
   if (!job) return;
-  const newStatus = job.attempts >= 3 ? "failed" : "pending";
-  const backoffMs = Math.pow(2, job.attempts) * 5 * 60 * 1000;
-  const scheduledFor = newStatus === "pending" ? new Date(Date.now() + backoffMs) : job.scheduledFor;
+
+  const now = new Date();
+  const firstFailedAt = job.firstFailedAt || now;
+  const outcome = decideFailureOutcome({
+    errorClass,
+    attempts: job.attempts,
+    firstFailedAt: job.firstFailedAt,
+    now,
+  });
+
   await prisma.journeyJob.update({
     where: { id: jobId },
-    data: { status: newStatus, lastError: String(error).slice(0, 500), scheduledFor },
+    data: {
+      status: outcome.status,
+      lastError: String(error).slice(0, 500),
+      firstFailedAt,
+      // An ops failure is our fault, not the job's, so it must not spend the
+      // retry budget — the claim query rejects anything at attempts >= MAX.
+      ...(outcome.consumesAttempt ? {} : { attempts: Math.max(0, job.attempts - 1) }),
+      scheduledFor:
+        outcome.status === "pending" ? new Date(now.getTime() + outcome.retryInMs) : job.scheduledFor,
+    },
   });
+
+  console.warn(
+    `[journey-queue] job ${jobId} ${outcome.status} (${errorClass || "unclassified"}) — ${outcome.note}: ${String(error).slice(0, 120)}`,
+  );
+
   // Only a permanent failure ends anything; a retry still owes an outcome.
-  if (newStatus === "failed") {
+  if (outcome.status === "failed") {
     await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
   }
 }

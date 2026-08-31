@@ -234,7 +234,22 @@ export default function CampaignAnalytics() {
       {/* Email */}
       <div className="t-micro muted" style={{ marginBottom: 12 }}>Email performance</div>
       <section className="rt-stats" style={{ marginBottom: 24 }}>
-        <Stat label="Sent" value={fmt(overview.email.sent)} sub={overview.email.failed ? `${fmt(overview.email.failed)} failed` : "No failures"} />
+        <Stat
+          label="Sent"
+          value={fmt(overview.email.sent)}
+          sub={overview.email.failed ? `${fmt(overview.email.failed)} failed` : "No failures"}
+        />
+        {/* Delivery is only shown for windows we can actually measure. Sends
+            made before delivery events were subscribed carry no delivery data,
+            and printing "0 delivered" for them would misreport healthy email as
+            a total failure. */}
+        {overview.email.deliveryTracked && (
+          <Stat
+            label="Delivered"
+            value={fmt(overview.email.delivered)}
+            sub={`${pct(overview.email.deliveryRate)} of sends reached the inbox`}
+          />
+        )}
         <Stat label="Open rate" value={pct(overview.email.openRate)} sub={`${fmt(overview.email.opened)} opened`} />
         <Stat label="Click rate" value={pct(overview.email.clickRate)} sub={`${fmt(overview.email.clicked)} clicked`} />
         <Stat

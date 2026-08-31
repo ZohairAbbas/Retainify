@@ -47,6 +47,22 @@ function rate(numerator, denominator) {
 }
 
 /**
+ * When Resend's email.delivered / email.failed topics were subscribed.
+ *
+ * Before this moment no delivery event was ever emitted, so every send in that
+ * period has deliveredAt null regardless of whether it actually arrived. A
+ * delivery rate computed across it would report 0% for months of healthy mail —
+ * worse than showing nothing, because it looks like a catastrophe rather than
+ * an absence of data.
+ */
+const DELIVERY_TRACKING_SINCE = new Date("2026-08-29T00:00:00Z");
+
+/** Whether a reporting window contains only sends we could measure delivery for. */
+function deliveryTrackingCoversWindow(since) {
+  return since >= DELIVERY_TRACKING_SINCE;
+}
+
+/**
  * Headline numbers for one campaign.
  *
  * @param {string} shop
@@ -68,6 +84,7 @@ export async function getCampaignOverview(shop, journeyId, days = 30) {
     completed,
     exited,
     emailSent,
+    emailDelivered,
     emailOpened,
     emailClicked,
     emailFailed,
@@ -90,6 +107,7 @@ export async function getCampaignOverview(shop, journeyId, days = 30) {
       },
     }),
     prisma.journeyJob.count({ where: { ...stepScope, sentAt: { gte: since, not: null } } }),
+    prisma.journeyJob.count({ where: { ...stepScope, deliveredAt: { gte: since, not: null } } }),
     prisma.journeyJob.count({ where: { ...stepScope, openedAt: { gte: since, not: null } } }),
     prisma.journeyJob.count({ where: { ...stepScope, clickedAt: { gte: since, not: null } } }),
     prisma.journeyJob.count({ where: { ...stepScope, status: "failed", updatedAt: { gte: since } } }),
@@ -114,10 +132,26 @@ export async function getCampaignOverview(shop, journeyId, days = 30) {
     exited,
     inProgress: emailPending,
     email: {
+      // "sent" means the provider accepted the message — that is all it has
+      // ever meant. "delivered" is the provider confirming it reached the
+      // inbox, which is a different and smaller number.
       sent: emailSent,
+      delivered: emailDelivered,
       opened: emailOpened,
       clicked: emailClicked,
       failed: emailFailed,
+      // Delivery events were subscribed on 2026-08-29; every send before that
+      // has deliveredAt null because the events were never emitted, not because
+      // the mail bounced. Reporting a delivery rate over that history would
+      // read as "0% delivered" for months of perfectly fine email, so the rate
+      // is deliberately null until the window contains only measurable sends.
+      // deliveryRate is therefore honest-or-absent, never wrong.
+      deliveryRate: deliveryTrackingCoversWindow(since)
+        ? rate(emailDelivered, emailSent)
+        : null,
+      deliveryTracked: deliveryTrackingCoversWindow(since),
+      // Engagement rates stay on "sent" so they remain comparable with the
+      // historical figures merchants have already seen.
       openRate: rate(emailOpened, emailSent),
       clickRate: rate(emailClicked, emailSent),
       clickToOpenRate: rate(emailClicked, emailOpened),

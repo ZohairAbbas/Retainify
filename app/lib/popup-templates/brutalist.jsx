@@ -46,7 +46,7 @@ export function RenderBrutal({ data, scale }) {
         </h2>
         <div className="tpl-brutal-sub">{data.sub}</div>
         <div className="tpl-brutal-form">
-          <input className="tpl-brutal-input" placeholder="EMAIL@HERE.COM" readOnly />
+          <input className="tpl-brutal-input" placeholder={data.placeholder || "EMAIL@HERE.COM"} readOnly />
           <button type="button" className="tpl-brutal-btn">{data.cta}</button>
         </div>
         <div className="tpl-brutal-fine">{data.fine}</div>
@@ -68,6 +68,7 @@ export function EditorBrutal({ data, onUpdate }) {
           <label className="field-label">Subtitle</label>
           <textarea className="textarea" rows={2} value={data.sub || ""} onChange={(e) => onUpdate({ sub: e.target.value })} />
         </div>
+        <TextField label="Email placeholder" value={data.placeholder} onChange={(v) => onUpdate({ placeholder: v })} />
         <TextField label="Button label" value={data.cta} onChange={(v) => onUpdate({ cta: v })} />
         <TextField label="Corner tag (optional)" value={data.cornerTag} onChange={(v) => onUpdate({ cornerTag: v })} />
         <TextField label="Fine print" value={data.fine} onChange={(v) => onUpdate({ fine: v })} />
@@ -108,6 +109,7 @@ export const brutalistTemplate = {
     eyebrow: "STOP RIGHT THERE.",
     headline: "TAKE ",
     sub: "Off your first order. No spam. Cancel whenever. Members get first dibs on every drop.",
+    placeholder: "EMAIL@HERE.COM",
     cta: "GET IT",
     cornerTag: "TODAY ONLY",
     fine: "BY SUBSCRIBING YOU AGREE TO RECEIVE MARKETING EMAILS.",

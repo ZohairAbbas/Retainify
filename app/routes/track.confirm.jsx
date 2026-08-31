@@ -1,6 +1,6 @@
 import prisma from "../db.server.js";
 import { verifyConfirmToken } from "../lib/email/confirm.server.js";
-import { createDiscountCode } from "../lib/shopify/discounts.server.js";
+import { createDiscountCode, classifyDiscountError } from "../lib/shopify/discounts.server.js";
 import { syncConfirmedSubscriber } from "../lib/shopify/customers.server.js";
 import { sendEmail, resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { renderDiscountRevealEmail } from "../lib/email/templates.server.js";
@@ -80,8 +80,15 @@ export const loader = async ({ request }) => {
     try {
       discountCode = await createDiscountCode(shop, discountPct);
     } catch (err) {
-      console.error("[confirm] discount code generation failed:", err.message);
-      // Confirm the email even if discount creation fails
+      // The confirmation itself is never blocked — the shopper acted in good
+      // faith and their consent is recorded regardless. But this is a real
+      // failure with a visible consequence (no reveal email, and the page shows
+      // no code), so it is classified and logged as one rather than left as a
+      // bare line nobody would ever go looking for.
+      const errorClass = classifyDiscountError(err);
+      console.error(
+        `[confirm] discount mint failed (${errorClass}) for ${shop} — confirming without a code: ${err.message}`,
+      );
     }
   }
 
@@ -115,7 +122,7 @@ export const loader = async ({ request }) => {
   // well as on the code itself — the two are linked today, but a future edit
   // that sends something here regardless of discount must not reopen this hole.
   if (discountCode && !shopIsGone) {
-    sendDiscountEmail(shop, email, discountCode, discountPct).catch((err) =>
+    sendDiscountEmail(shop, email, discountCode, discountPct, signup.id).catch((err) =>
       console.error("[confirm] discount reveal email failed:", err.message),
     );
   }
@@ -131,7 +138,7 @@ export const loader = async ({ request }) => {
   );
 };
 
-async function sendDiscountEmail(shop, email, discountCode, discountPct) {
+async function sendDiscountEmail(shop, email, discountCode, discountPct, signupId) {
   const shopSettings = await prisma.shopSettings.findUnique({ where: { shop } });
   const popupSettings = await prisma.popupSettings.findUnique({ where: { shop } });
 
@@ -162,5 +169,20 @@ async function sendDiscountEmail(shop, email, discountCode, discountPct) {
     console.error(
       `[track.confirm] discount email REJECTED by provider shop=${shop} from="${from}" replyTo="${replyTo}": ${result.error}`,
     );
+    return;
+  }
+
+  // Store the provider message id so Resend's open/click webhooks can be matched
+  // back to this signup. Without it the events arrive, match no JourneyJob, and
+  // are dropped as "unmatched".
+  if (result.providerMessageId && signupId) {
+    await prisma.popupSignup
+      .update({
+        where: { id: signupId },
+        data: { discountMessageId: result.providerMessageId },
+      })
+      .catch((err) =>
+        console.error("[track.confirm] could not store discount message id:", err.message),
+      );
   }
 }

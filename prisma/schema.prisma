@@ -547,9 +547,18 @@ model PopupSignup {
   discountCode String    @default("")
   confirmToken String    @default("")
   confirmedAt  DateTime?
+  // Provider message ids for the two transactional emails this row sends, so
+  // Resend open/click webhooks can be matched back. Without them the events
+  // arrived, matched no JourneyJob, and were discarded.
+  confirmMessageId  String   @default("")
+  discountMessageId String   @default("")
+  openedAt          DateTime?
+  clickedAt         DateTime?
   createdAt    DateTime  @default(now())
 
   @@index([shop, email])
+  @@index([confirmMessageId])
+  @@index([discountMessageId])
 }
 
 // Per-shop popup widget configuration
@@ -713,9 +722,18 @@ model JourneyJob {
   status            String    @default("pending")
   attempts          Int       @default(0)
   lastError         String    @default("")
+  // First failure for this job, so the transient retry horizon is a real
+  // wall-clock deadline rather than an attempt count. Null = never failed.
+  firstFailedAt     DateTime?
   resendMessageId   String    @default("")
   providerMessageId String    @default("")
   sentAt            DateTime?
+  // Provider-confirmed outcomes, distinct from sentAt. sentAt means "Resend
+  // accepted the call"; a message can still fail or bounce afterwards, and
+  // without these a failed send is indistinguishable from a delivered one in
+  // every report.
+  deliveredAt       DateTime?
+  failedAt          DateTime?
   openedAt          DateTime?
   clickedAt         DateTime?
   createdAt         DateTime  @default(now())
@@ -758,6 +776,9 @@ model PushJob {
   status       String    @default("pending") // pending | processing | done | failed | cancelled
   attempts     Int       @default(0)
   lastError    String    @default("")
+  // First failure for this job, so the transient retry horizon is a real
+  // wall-clock deadline rather than an attempt count. Null = never failed.
+  firstFailedAt     DateTime?
   sentAt       DateTime?
   // Set by /track/push-click, which the service worker calls from its
   // notificationclick handler. Before this column existed the UI reported
@@ -846,6 +867,9 @@ model WhatsappJob {
   status            String    @default("pending") // pending | processing | done | failed | cancelled
   attempts          Int       @default(0)
   lastError         String    @default("")
+  // First failure for this job, so the transient retry horizon is a real
+  // wall-clock deadline rather than an attempt count. Null = never failed.
+  firstFailedAt     DateTime?
   templateName      String    @default("")
   providerMessageId String    @default("") // Meta wamid — matched by the status webhook
   sentAt            DateTime?

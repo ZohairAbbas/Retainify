@@ -11,11 +11,26 @@
  * `svix` package (already a transitive dependency via the resend SDK).
  *
  * Behavior:
- *   email.opened    → JourneyJob.openedAt  = now (if null)
- *   email.clicked   → JourneyJob.clickedAt = now (if null)
+ *   email.delivered → JourneyJob.deliveredAt = now (if null)
+ *   email.failed    → JourneyJob.failedAt    = now (if null)
+ *   email.opened    → openedAt  = now (if null), JourneyJob or PopupSignup
+ *   email.clicked   → clickedAt = now (if null), JourneyJob or PopupSignup
  *   email.bounced   → EmailSuppression upsert with reason='bounce'
  *   email.complained → EmailSuppression upsert with reason='complaint'
  *   domain.updated  → ShopSettings.domainStatus/domainVerified synced from Resend
+ *
+ * ── Why delivered/failed are ingested ──────────────────────────────────────
+ * A JourneyJob reaching status "done" only ever meant Resend accepted the API
+ * call. Reading real sends back from the Resend API showed messages sitting at
+ * last_event=failed while our row said done, so "emails sent" was overstated in
+ * every report with no way to measure by how much. These two events are what
+ * make the number honest — they need enabling in the Resend dashboard too.
+ *
+ * ── Why PopupSignup is a fallback target ───────────────────────────────────
+ * The popup confirmation and discount-reveal emails are not journey sends and
+ * have no JourneyJob row. Their open/click events therefore matched nothing and
+ * were logged "unmatched" and discarded — 92 real engagement events lost before
+ * anyone looked. They carry their own message ids on PopupSignup instead.
  *
  * Unmatched messageId / domainId → log + 200 (Resend stops retrying).
  */
@@ -132,30 +147,74 @@ async function handleDomainUpdated(data) {
   );
 }
 
-async function handleEvent(eventType, messageId, data) {
-  // For open/click we update the JourneyJob row by resendMessageId.
-  if (eventType === "email.opened" || eventType === "email.clicked") {
-    const field = eventType === "email.opened" ? "openedAt" : "clickedAt";
+/** Stamp a timestamp field on whichever record owns this provider message id. */
+async function stampByMessageId(messageId, field, eventType) {
+  // updateMany with the null filter makes this idempotent — a second open for
+  // the same email must not overwrite the first-open timestamp.
+  const onJob = await prisma.journeyJob.updateMany({
+    where: { resendMessageId: messageId, [field]: null },
+    data: { [field]: new Date() },
+  });
+  if (onJob.count > 0) return true;
 
-    // updateMany with the null filter makes this idempotent — multiple opens
-    // for the same email won't overwrite the first-open timestamp.
-    const result = await prisma.journeyJob.updateMany({
+  // Already stamped? Then this is a repeat event, not an unmatched one.
+  const jobExists = await prisma.journeyJob.findFirst({
+    where: { resendMessageId: messageId },
+    select: { id: true },
+  });
+  if (jobExists) return true;
+
+  // Not a journey send — try the transactional emails, which carry their own
+  // message ids. Only opens and clicks are meaningful here; PopupSignup has no
+  // delivery columns because it is not a sending queue.
+  if (field === "openedAt" || field === "clickedAt") {
+    const onSignup = await prisma.popupSignup.updateMany({
+      where: {
+        OR: [{ confirmMessageId: messageId }, { discountMessageId: messageId }],
+        [field]: null,
+      },
+      data: { [field]: new Date() },
+    });
+    if (onSignup.count > 0) return true;
+
+    const signupExists = await prisma.popupSignup.findFirst({
+      where: { OR: [{ confirmMessageId: messageId }, { discountMessageId: messageId }] },
+      select: { id: true },
+    });
+    if (signupExists) return true;
+  }
+
+  console.log(`[resend-webhook] unmatched messageId=${messageId} event=${eventType} — ignored`);
+  return false;
+}
+
+async function handleEvent(eventType, messageId, data) {
+  // Delivery outcome. Without these, "done" (provider accepted the call) was
+  // the only signal we had, and it silently counted failures as sends.
+  if (eventType === "email.delivered" || eventType === "email.failed") {
+    const field = eventType === "email.delivered" ? "deliveredAt" : "failedAt";
+    const stamped = await prisma.journeyJob.updateMany({
       where: { resendMessageId: messageId, [field]: null },
       data: { [field]: new Date() },
     });
-
-    if (result.count === 0) {
-      // Either the messageId doesn't exist, or this field was already set.
-      // Distinguish by checking existence — if it exists we just no-op silently;
-      // if not, log it so we can debug stale events / cascade deletions.
-      const exists = await prisma.journeyJob.findFirst({
-        where: { resendMessageId: messageId },
-        select: { id: true },
-      });
-      if (!exists) {
-        console.log(`[resend-webhook] unmatched messageId=${messageId} event=${eventType} — ignored`);
-      }
+    // Logged either way. Without a line here the only way to tell ingestion
+    // from silent no-op was to query the database, which made "is this even
+    // working?" unanswerable from the logs — and these events are only ever
+    // emitted for mail sent after the topic was subscribed, so an empty result
+    // is usually just "nothing sent yet" rather than a fault.
+    if (stamped.count > 0) {
+      console.log(`[resend-webhook] ${eventType} recorded for messageId=${messageId}`);
+    } else {
+      console.log(
+        `[resend-webhook] ${eventType} messageId=${messageId} matched no journey send (transactional email, or already recorded)`,
+      );
     }
+    return;
+  }
+
+  if (eventType === "email.opened" || eventType === "email.clicked") {
+    const field = eventType === "email.opened" ? "openedAt" : "clickedAt";
+    await stampByMessageId(messageId, field, eventType);
     return;
   }
 

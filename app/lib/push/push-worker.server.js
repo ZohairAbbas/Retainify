@@ -4,12 +4,14 @@ import { isInQuietHours, quietHoursRetryDelay } from "../journey/quiet-hours.ser
 import { incrementUsage } from "../billing/entitlements.server.js";
 import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.server.js";
 import { settleEnrollmentIfFinished } from "../journey/journey-queue.server.js";
-import { stopShopSending, releaseClaimedJob } from "../journey/shop-work.server.js";
+import { checkStepSequence, CANCEL, WAIT, SEQUENCE_RECHECK_MS } from "../journey/sequence-gate.server.js";
+import { decideFailureOutcome, MAX_ATTEMPTS, isStale } from "../journey/failure-policy.server.js";
+import { stopShopSending, releaseClaimedJob, cancelStaleJob } from "../journey/shop-work.server.js";
 
 async function claimDuePushJobs(limit = 20) {
   const now = new Date();
   const candidates = await prisma.pushJob.findMany({
-    where: { status: "pending", scheduledFor: { lte: now }, attempts: { lt: 3 } },
+    where: { status: "pending", scheduledFor: { lte: now }, attempts: { lt: MAX_ATTEMPTS } },
     take: limit,
     orderBy: { scheduledFor: "asc" },
   });
@@ -45,7 +47,20 @@ export async function runPushWorker() {
     await releaseClaimedJob("pushJob", job.id);
   }
 
+  // Too old to be worth sending. A queue that stalls — a suspended provider
+  // key, a worker down for a weekend — resumes eventually, and without this the
+  // whole backlog goes out at once: welcome mail for signups from months ago.
+  const fresh = [];
   for (const job of jobs) {
+    if (isStale(job.scheduledFor)) {
+      await cancelStaleJob("pushJob", job);
+      console.warn(`[push-worker] job ${job.id} cancelled — past the staleness cutoff`);
+    } else {
+      fresh.push(job);
+    }
+  }
+
+  for (const job of fresh) {
     try {
       await processPushJob(job);
     } catch (err) {
@@ -83,6 +98,25 @@ async function processPushJob(job) {
     return;
   }
 
+  // A failed EMAIL step ahead of this one means the sequence it belongs to
+  // never reached the recipient, so this send is cancelled too. Push and
+  // WhatsApp failures do not gate anything themselves — no subscription or no
+  // opt-in is benign and must not kill the rest of the flow.
+  const sequence = await checkStepSequence(job.enrollmentId, step.stepNumber);
+  if (sequence.verdict === CANCEL) {
+    await prisma.pushJob.update({
+      where: { id: job.id },
+      data: { status: "cancelled", lastError: `sequence broken — ${sequence.reason}` },
+    });
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+    console.warn(`[push-worker] job ${job.id} cancelled — ${sequence.reason}`);
+    return;
+  }
+  if (sequence.verdict === WAIT) {
+    await releaseClaimedJob("pushJob", job.id, SEQUENCE_RECHECK_MS);
+    return;
+  }
+
   // Honour the email suppression list. Push has no opt-out channel of its own
   // beyond the browser permission, so an unsubscribe — the only "stop
   // contacting me" signal a shopper can give us — has to bind every channel we
@@ -101,10 +135,12 @@ async function processPushJob(job) {
   // Inside quiet hours — defer, with jitter so the overnight backlog doesn't
   // all become due in the same tick.
   if (isInQuietHours(settings.quietHoursStart, settings.quietHoursEnd, settings.storeTimezone)) {
-    await prisma.pushJob.update({
-      where: { id: job.id },
-      data: { status: "pending", scheduledFor: new Date(Date.now() + quietHoursRetryDelay()) },
-    });
+    // Hand the attempt back: a quiet-hours deferral is not a send attempt.
+    // Charging one meant a job hitting the window on three consecutive nights
+    // reached the attempt ceiling without ever being sent, and then sat pending
+    // and unclaimable forever — 1,264 jobs were lost this way before anyone
+    // noticed, because a stranded row looks perfectly healthy.
+    await releaseClaimedJob("pushJob", job.id, quietHoursRetryDelay());
     return;
   }
 
@@ -193,17 +229,32 @@ async function markPushJobDone(jobId, extras = {}) {
   await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
 }
 
-async function markPushJobFailed(jobId, error) {
+async function markPushJobFailed(jobId, error, errorClass) {
   const job = await prisma.pushJob.findUnique({ where: { id: jobId } });
   if (!job) return;
-  const newStatus = job.attempts >= 3 ? "failed" : "pending";
-  const backoffMs = Math.pow(2, job.attempts) * 5 * 60 * 1000;
-  const scheduledFor = newStatus === "pending" ? new Date(Date.now() + backoffMs) : job.scheduledFor;
+  const now = new Date();
+  const firstFailedAt = job.firstFailedAt || now;
+  const outcome = decideFailureOutcome({
+    errorClass,
+    attempts: job.attempts,
+    firstFailedAt: job.firstFailedAt,
+    now,
+  });
   await prisma.pushJob.update({
     where: { id: jobId },
-    data: { status: newStatus, lastError: String(error).slice(0, 500), scheduledFor },
+    data: {
+      status: outcome.status,
+      lastError: String(error).slice(0, 500),
+      firstFailedAt,
+      ...(outcome.consumesAttempt ? {} : { attempts: Math.max(0, job.attempts - 1) }),
+      scheduledFor:
+        outcome.status === "pending" ? new Date(now.getTime() + outcome.retryInMs) : job.scheduledFor,
+    },
   });
-  if (newStatus === "failed") {
+  console.warn(
+    `[push-worker] job ${jobId} ${outcome.status} (${errorClass || "unclassified"}) — ${outcome.note}`,
+  );
+  if (outcome.status === "failed") {
     await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
   }
 }

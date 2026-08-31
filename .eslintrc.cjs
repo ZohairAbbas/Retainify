@@ -102,6 +102,10 @@ module.exports = {
         "app/routes/**/*.{js,jsx,ts,tsx}",
         "app/root.{js,jsx,ts,tsx}",
         "app/entry.server.{js,jsx,ts,tsx}",
+        // Maintenance scripts are plain Node programs run with `node --env-file`.
+        // Without this they report `process is not defined` on every use, which
+        // is the same false-positive noise the override above exists to remove.
+        "scripts/**/*.{js,mjs,cjs}",
       ],
       env: {
         node: true,

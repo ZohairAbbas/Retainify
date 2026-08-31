@@ -19,6 +19,8 @@
 
 import crypto from "node:crypto";
 import prisma from "../../db.server.js";
+import { checkShopHealth, cancelReasonFor, SHOP_LIVE, SHOP_UNKNOWN } from "../shopify/shop-health.server.js";
+import { stopShopSending } from "../journey/shop-work.server.js";
 import { enrollContact, exitEnrollment } from "../journey/journey-queue.server.js";
 import { evaluateSegment } from "./evaluator.server.js";
 import { getSystemSegmentById, isSystemSegmentId } from "./systemSegments.server.js";
@@ -107,6 +109,25 @@ export async function runSegmentEnrollmentWorker() {
 
   for (const flow of flows) {
     try {
+      // Unlike the webhook-driven triggers, this one is a poller: it needs no
+      // event from Shopify, so a shop that has closed or uninstalled would keep
+      // being enrolled indefinitely. Nothing would be delivered — the send
+      // workers block that — but every tick would mint enrollments and jobs
+      // only to have them cancelled later.
+      //
+      // A dead shop's flows are paused outright, matching the uninstall webhook
+      // and the send workers: stopping the queue without stopping the source
+      // just refills it.
+      const health = await checkShopHealth(flow.shop);
+      if (health === SHOP_UNKNOWN) {
+        // Shopify unreachable — not evidence of anything. Try again next tick.
+        continue;
+      }
+      if (health !== SHOP_LIVE) {
+        await stopShopSending(flow.shop, cancelReasonFor(health));
+        console.warn(`[segment-enrollment] ${flow.shop} is ${health} — flows paused, queue cleared`);
+        continue;
+      }
       await processFlow(flow);
     } catch (e) {
       console.error(`[segment-enrollment] flow ${flow.id} failed:`, e);

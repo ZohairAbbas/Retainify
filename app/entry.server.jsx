@@ -11,6 +11,7 @@ import { runWhatsappWorker } from "./lib/whatsapp/whatsapp-worker.server.js";
 import { runSegmentEnrollmentWorker } from "./lib/segments/segmentEnrollmentWorker.server.js";
 import { runSegmentSnapshotWorker } from "./lib/segments/segmentSnapshotWorker.server.js";
 import { pruneExpiredSessions } from "./lib/auth/session.server.js";
+import { runStuckJobReaper } from "./lib/journey/stuck-jobs.server.js";
 
 // Poll all job queues every 60 seconds.
 if (typeof setInterval !== "undefined") {
@@ -25,6 +26,10 @@ if (typeof setInterval !== "undefined") {
     // blowing up DB load. See segmentEnrollmentWorker comment for details.
     runSegmentEnrollmentWorker().catch((err) => console.error("[segment-enrollment] poll error:", err));
     runSegmentSnapshotWorker().catch((err) => console.error("[segment-snapshot] poll error:", err));
+    // Recovers work abandoned mid-flight when the process died — every deploy
+    // is a chance to strand whatever was being sent at that moment, and a row
+    // stuck in "processing" is invisible to every claim query.
+    runStuckJobReaper().catch((err) => console.error("[stuck-jobs] poll error:", err));
   }, 60_000);
 
   // Housekeeping for the standalone auth tables. Hourly, not per-minute: an

@@ -589,6 +589,7 @@
       ".rt-tpl-brutal-sub{font-family:'Space Grotesk',sans-serif;font-weight:700;font-size:14px;line-height:1.3;margin:14px 0 22px;text-transform:uppercase;letter-spacing:.04em;max-width:380px}" +
       ".rt-tpl-brutal-form{display:flex;gap:0}" +
       ".rt-tpl-brutal-input{flex:1;padding:14px 16px;background:transparent;border:2px solid var(--br-ink);color:var(--br-ink);font-family:'Space Grotesk',sans-serif;font-size:14px;font-weight:700;outline:none;text-transform:uppercase;letter-spacing:.04em}" +
+      ".rt-tpl-brutal-input::placeholder{color:color-mix(in srgb,var(--br-ink) 40%,transparent)}" +
       ".rt-tpl-brutal-btn{background:var(--br-ink);color:var(--br-bg);border:2px solid var(--br-ink);font-family:'Archivo Black',sans-serif;font-size:13px;letter-spacing:.1em;padding:0 22px;cursor:pointer;text-transform:uppercase}" +
       ".rt-tpl-brutal-fine{font-size:10px;margin-top:12px;letter-spacing:.06em;opacity:.6;font-weight:500}" +
       ".rt-tpl-brutal-close{position:absolute;top:14px;right:14px;background:var(--br-bg);border:2px solid var(--br-ink);color:var(--br-ink);width:30px;height:30px;cursor:pointer;font-family:'Archivo Black',sans-serif;font-size:14px;display:flex;align-items:center;justify-content:center}" +
@@ -603,7 +604,7 @@
         '<h2 class="rt-tpl-brutal-h">' + escapeHtml(d.headline || "TAKE ") + '<span class="pct">' + escapeHtml(d.discount || 15) + '</span></h2>' +
         '<div class="rt-tpl-brutal-sub">' + escapeHtml(d.sub) + '</div>' +
         '<div class="rt-tpl-brutal-form">' +
-          '<input class="rt-tpl-brutal-input" type="email" data-rt-email placeholder="EMAIL@HERE.COM" autocomplete="email">' +
+          '<input class="rt-tpl-brutal-input" type="email" data-rt-email placeholder="' + escapeHtml(d.placeholder || "EMAIL@HERE.COM") + '" autocomplete="email">' +
           whatsappFieldsHtml(d) +
           '<button class="rt-tpl-brutal-btn" data-rt-submit type="button">' + escapeHtml(d.cta || "GET IT") + '</button>' +
         '</div>' +

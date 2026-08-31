@@ -7,6 +7,7 @@
  * leaves the other two draining, which is how a "stopped" shop keeps messaging.
  */
 import prisma from "../../db.server.js";
+import { settleEnrollmentIfFinished } from "./journey-queue.server.js";
 
 const QUEUES = [
   ["journeyJob", "email"],
@@ -129,5 +130,30 @@ export async function releaseClaimedJob(model, jobId, retryDelayMs = 60 * 1000) 
     });
   } catch (err) {
     console.error(`[shop-work] could not release ${model} ${jobId}:`, err.message);
+  }
+}
+
+/**
+ * Drop a job that is too far past its due time to be worth sending.
+ *
+ * Cancelled rather than left pending: a stale row that stays claimable is the
+ * stranding bug all over again, invisible until something un-freezes it. The
+ * enrollment is settled in the same breath so the accounting does not drift.
+ *
+ * @param {"journeyJob"|"pushJob"|"whatsappJob"} model
+ * @param {{ id: string, enrollmentId: string, scheduledFor: Date }} job
+ */
+export async function cancelStaleJob(model, job) {
+  try {
+    await prisma[model].update({
+      where: { id: job.id },
+      data: {
+        status: "cancelled",
+        lastError: `cancelled — ${Math.round((Date.now() - new Date(job.scheduledFor).getTime()) / 3600000)}h past its send time`,
+      },
+    });
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+  } catch (err) {
+    console.error(`[shop-work] could not cancel stale ${model} ${job.id}:`, err.message);
   }
 }

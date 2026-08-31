@@ -26,6 +26,17 @@
  * @property {boolean} ok
  * @property {string}  [providerMessageId]
  * @property {string}  [error]
+ * @property {"permanent"|"transient"|"ops"} [errorClass]
+ *                                - how the caller should treat the failure. Set
+ *                                  by the adapter, because only the adapter
+ *                                  understands its provider's error vocabulary.
+ *                                  Classifying here rather than by matching
+ *                                  message text in the worker means a provider
+ *                                  rewording its prose cannot silently turn a
+ *                                  retryable failure into a discarded send.
+ *                                  See lib/journey/failure-policy.server.js.
+ * @property {string}  [errorCode] - the provider's own code, kept for logging
+ *                                  and for diagnosing misclassification.
  */
 
 /**
