@@ -13,6 +13,17 @@ import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
 
+/** Whether a Meta component spec contains at least one URL button. */
+function hasUrlButton(components) {
+  if (!Array.isArray(components)) return false;
+  return components.some(
+    (c) =>
+      c?.type === "BUTTONS" &&
+      Array.isArray(c.buttons) &&
+      c.buttons.some((b) => b?.type === "URL"),
+  );
+}
+
 export const loader = async ({ request }) => {
   const ctx = await requireAccount(request);
   // Gate below: this whole page depends on a storefront.
@@ -26,7 +37,14 @@ export const loader = async ({ request }) => {
     prisma.whatsappTemplate.findMany({
       where: { shop },
       orderBy: [{ status: "asc" }, { name: "asc" }],
-      select: { id: true, name: true, language: true, category: true, status: true },
+      select: {
+        id: true, name: true, language: true, category: true, status: true,
+        // Present only on templates created here. Meta approves a button's URL
+        // as part of the template, so one authored in Business Manager links
+        // straight to the merchant and its taps never reach us.
+        buttonUrls: true,
+        components: true,
+      },
     }),
     prisma.popupSettings.findUnique({ where: { shop }, select: { config: true } }),
   ]);
@@ -50,7 +68,14 @@ export const loader = async ({ request }) => {
     popupOptIn: popup?.config?.whatsappOptIn === true,
     whatsappRequireOptIn: settings?.whatsappRequireOptIn ?? true,
     subCount,
-    templates,
+    // `untracked` means the template has a link button whose taps we can never
+    // see: it was authored in Meta Business Manager, so its URL goes straight to
+    // the merchant instead of through our redirect. Templates without any link
+    // button are not flagged — there is nothing to track either way.
+    templates: templates.map(({ buttonUrls, components, ...t }) => ({
+      ...t,
+      untracked: hasUrlButton(components) && !(buttonUrls && Object.keys(buttonUrls).length),
+    })),
     // eslint-disable-next-line no-undef
     metaAppId: process.env.META_APP_ID || "",
     // eslint-disable-next-line no-undef
@@ -498,12 +523,19 @@ function WhatsappPageInner() {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {templates.map((t) => (
-                  <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                    <div className="t-small">
+                  <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                    <div className="t-small" style={{ minWidth: 0 }}>
                       <strong style={{ color: "var(--ink-1)" }}>{t.name}</strong>
                       <span className="muted"> · {t.language} · {t.category}</span>
+                      {t.untracked && (
+                        <div className="t-micro muted" style={{ marginTop: 2 }}>
+                          Link clicks and revenue aren&rsquo;t measured — this template was
+                          made in Meta Business Manager. Recreate it here to track it.
+                        </div>
+                      )}
                     </div>
                     <span className="t-micro" style={{
+                      flexShrink: 0,
                       color: t.status === "APPROVED" ? "var(--node-whatsapp-ink)" : "var(--ink-3)",
                     }}>{t.status}</span>
                   </div>

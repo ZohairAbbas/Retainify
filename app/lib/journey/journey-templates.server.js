@@ -209,6 +209,26 @@ export async function createJourneyFromTemplate(shop, templateKey, overrides = {
     await prisma.journeyStep.createMany({
       data: rows.map((r) => ({ journeyId: journey.id, ...r })),
     });
+
+    // Chain the steps into the flow's graph. Templates are linear and stay that
+    // way; a merchant adds branches afterwards in the builder. stepKey is left
+    // to the column default — a template instance is a new flow with no history
+    // to inherit.
+    const live = await prisma.journeyStep.findMany({
+      where: { journeyId: journey.id, isArchived: false },
+      orderBy: [{ stepNumber: "asc" }, { id: "asc" }],
+      select: { id: true },
+    });
+    if (live.length > 1) {
+      await prisma.journeyEdge.createMany({
+        data: live.slice(0, -1).map((s, i) => ({
+          journeyId: journey.id,
+          fromStepId: s.id,
+          toStepId: live[i + 1].id,
+          branch: "next",
+        })),
+      });
+    }
   }
 
   return journey;

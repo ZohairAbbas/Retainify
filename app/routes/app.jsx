@@ -122,11 +122,6 @@ const NAV_ACTIVE = [
   { id: "settings",  label: "Settings",  href: "/app/settings",  icon: "Settings" },
 ];
 
-const NAV_SOON = [
-  { id: "coupons",   label: "Coupons" },
-  { id: "analytics", label: "Analytics" },
-];
-
 function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces }) {
   const [collapsed, setCollapsed] = useState(false);
 
@@ -203,28 +198,6 @@ function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces }
           );
         })}
       </div>
-
-      {/* Soon items */}
-      {!collapsed && (
-        <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid var(--hair-1)" }}>
-          <div className="t-micro muted" style={{ padding: "4px 10px 8px" }}>Coming soon</div>
-          {NAV_SOON.map((n) => (
-            <span
-              key={n.id}
-              className="rt-subnav-item"
-              style={{ color: "var(--ink-4)", cursor: "default" }}
-            >
-              <span>{n.label}</span>
-              <span
-                className="pill soon"
-                style={{ marginLeft: "auto", height: 16, fontSize: 9, padding: "0 5px" }}
-              >
-                Soon
-              </span>
-            </span>
-          ))}
-        </div>
-      )}
 
       {/* Account block. Only for a direct login — inside the Shopify admin the
           identity and the store switcher already live in Shopify's own chrome,

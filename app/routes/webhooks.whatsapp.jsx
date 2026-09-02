@@ -177,10 +177,69 @@ async function handleInbound(message, phoneNumberId) {
   }
 
   // STOP keyword → opt out.
-  const text = (message?.text?.body || "").trim().toLowerCase();
+  //
+  // Read from the button as well as the message body. A quick-reply press
+  // carries no text.body at all — its label lives on `button.text` (or
+  // `interactive.button_reply.title`) — so an "Unsubscribe" button, which is
+  // Meta's own documented example and a standard component of marketing
+  // templates, was being silently ignored and the contact stayed subscribed.
+  const text = optOutCandidate(message);
   if (shop && text && STOP_KEYWORDS.has(text)) {
     await recordOptOut({ shop, phoneNumber: from, reason: "opt_out" }).catch(() => {});
   }
+
+  await recordQuickReply(message);
+}
+
+/** The lower-cased text an opt-out could arrive as, whichever shape carried it. */
+function optOutCandidate(message) {
+  const candidates = [
+    message?.text?.body,
+    message?.button?.payload,
+    message?.button?.text,
+    message?.interactive?.button_reply?.id,
+    message?.interactive?.button_reply?.title,
+  ];
+  for (const c of candidates) {
+    const v = String(c || "").trim().toLowerCase();
+    if (v && STOP_KEYWORDS.has(v)) return v;
+  }
+  return "";
+}
+
+/**
+ * A Quick Reply button press on one of our template messages.
+ *
+ * Meta emits no click event for template buttons — URL taps surface only as
+ * aggregate counts in Template Analytics, with no wamid and no recipient. A
+ * quick reply is the exception: it comes through as an ordinary inbound
+ * message whose `context.id` is the wamid of the message being answered, which
+ * is exactly what WhatsappJob.providerMessageId holds. So this resolves to one
+ * send and one recipient.
+ *
+ * Two shapes carry it — `type: "button"` for a template's quick-reply buttons,
+ * `type: "interactive"` with `interactive.button_reply` for interactive
+ * messages. Both are accepted; anything else (plain text, media) is not a
+ * button press and falls through.
+ *
+ * Idempotent on a null repliedAt, like every other stamp in this file: a
+ * redelivered webhook must not move the original timestamp.
+ */
+async function recordQuickReply(message) {
+  const type = message?.type || "";
+  const isButton =
+    type === "button" || (type === "interactive" && message?.interactive?.type === "button_reply");
+  if (!isButton) return;
+
+  const wamid = message?.context?.id || "";
+  if (!wamid) return;
+
+  await prisma.whatsappJob
+    .updateMany({
+      where: { providerMessageId: wamid, repliedAt: null },
+      data: { repliedAt: new Date() },
+    })
+    .catch((e) => console.error("[wa-webhook] quick-reply stamp failed:", e.message));
 }
 
 async function handleTemplateEvent(field, value) {

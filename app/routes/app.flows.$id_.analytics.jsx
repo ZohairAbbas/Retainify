@@ -287,8 +287,24 @@ export default function CampaignAnalytics() {
             )}
             {overview.whatsapp.sent > 0 && (
               <>
-                <Stat label="WhatsApp sent" value={fmt(overview.whatsapp.sent)} sub={`${fmt(overview.whatsapp.delivered)} delivered`} />
+                <Stat label="WhatsApp sent" value={fmt(overview.whatsapp.sent)} sub={`${fmt(overview.whatsapp.failed)} failed`} />
+                <Stat
+                  label="WhatsApp delivery rate"
+                  value={pct(overview.whatsapp.deliveryRate)}
+                  sub={`${fmt(overview.whatsapp.delivered)} delivered`}
+                />
                 <Stat label="WhatsApp read rate" value={pct(overview.whatsapp.readRate)} sub={`${fmt(overview.whatsapp.read)} read`} />
+                {/* Quick Reply presses — the only per-recipient engagement
+                    WhatsApp reports. Shown only when the templates in this flow
+                    actually use reply buttons, so a flow without them doesn't
+                    carry a permanent zero. */}
+                {overview.whatsapp.replied > 0 && (
+                  <Stat
+                    label="WhatsApp replies"
+                    value={fmt(overview.whatsapp.replied)}
+                    sub="Quick Reply buttons pressed"
+                  />
+                )}
               </>
             )}
           </section>
@@ -326,15 +342,18 @@ export default function CampaignAnalytics() {
       {/* Per-step */}
       <div className="t-micro muted" style={{ marginBottom: 12 }}>Step by step</div>
       <div className="tscroll" style={{ overflowX: "auto", marginBottom: 32 }}>
-        <div className="rt-table rt-table--steps" style={{ minWidth: 900 }}>
+        <div className="rt-table rt-table--steps" style={{ minWidth: 1180 }}>
           <div className="rt-thead">
             <div>Step</div>
             <div>Channel</div>
             <div className="rt-tnum">Sent</div>
+            <div className="rt-tnum">Delivered</div>
             <div className="rt-tnum">Opened</div>
+            <div className="rt-tnum">Read</div>
             <div className="rt-tnum">Clicked</div>
             <div className="rt-tnum">Open rate</div>
             <div className="rt-tnum">Click rate</div>
+            <div className="rt-tnum">Failed</div>
             <div className="rt-tnum">Orders</div>
             <div className="rt-tnum">Revenue</div>
           </div>
@@ -354,18 +373,31 @@ export default function CampaignAnalytics() {
               </div>
               <div>{CHANNEL_LABEL[s.channel] || s.channel}</div>
               <div className="rt-tnum t-mono">{fmt(s.sent)}</div>
+              {/* Null means the channel has no such concept, or — for email
+                  before delivery events were subscribed — that it was never
+                  measurable. Both render as a dash rather than a zero. */}
+              <div className="rt-tnum t-mono">
+                {s.delivered === null ? "—" : fmt(s.delivered)}
+              </div>
               <div className="rt-tnum t-mono">
                 {s.channel === "email" ? fmt(s.opened) : "—"}
               </div>
               <div className="rt-tnum t-mono">
-                {s.channel === "whatsapp" ? "—" : fmt(s.clicked)}
+                {s.read === null ? "—" : fmt(s.read)}
+              </div>
+              {/* WhatsApp clicks exist only where the template carries our
+                  redirect. A dash means the tap is invisible to us, which is
+                  not the same as nobody tapping. */}
+              <div className="rt-tnum t-mono">
+                {s.clickTracked === false ? "—" : fmt(s.clicked)}
               </div>
               <div className="rt-tnum t-mono">
                 {s.channel === "email" && s.sent ? pct(s.openRate) : "—"}
               </div>
               <div className="rt-tnum t-mono">
-                {s.channel !== "whatsapp" && s.sent ? pct(s.clickRate) : "—"}
+                {s.clickTracked !== false && s.sent ? pct(s.clickRate) : "—"}
               </div>
+              <div className="rt-tnum t-mono">{fmt(s.failed)}</div>
               {/* WhatsApp records no click, so it can never carry credit under
                   a click-based model — a dash, not a zero. */}
               <div className="rt-tnum t-mono">

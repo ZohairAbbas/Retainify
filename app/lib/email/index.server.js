@@ -113,25 +113,31 @@ export function resolveFrom({ settings, provider }) {
  * Whether clicks on this send will actually be measurable.
  *
  * Click tracking is a property of the sending DOMAIN, not of our code: the
- * provider rewrites links and reports the click back. Domains we create for a
- * merchant are created with it on (see resend-domains.server.js), so a verified
- * domain tracks. The shared fallback domain currently does not, which is why
- * every send in the system before 2026-09-01 has a null clickedAt regardless of
- * what recipients actually did.
+ * provider rewrites links and injects the open pixel AT SEND TIME, then reports
+ * events back. Domains we create for a merchant are created with it on (see
+ * resend-domains.server.js), so a verified domain tracks.
+ *
+ * The shared fallback domain's tracking was broken until 2026-09-02, which is
+ * why every send before then has a null clickedAt regardless of what recipients
+ * actually did. That mail is permanently unmeasurable, and not for want of
+ * access: the pixel and the rewritten links are part of the message that was
+ * delivered, so an email sent without them cannot be instrumented afterwards by
+ * anyone, us or the provider. Repairing the domain fixes future sends only.
  *
  * Revenue attribution keys on clicks, so this predicate is what separates "no
  * revenue" from "no measurement" in the reports. Same `domainVerified` gate
  * resolveFrom uses above — the two must agree, because the domain it picks is
  * the domain this describes.
  *
- * Flip SHARED_DOMAIN_TRACKS_CLICKS once the shared domain's tracking is fixed;
- * sends from that moment on record true and start reporting revenue, and no
- * historical row is disturbed.
+ * Flipped true on 2026-09-02, when the shared domain's tracking was repaired.
+ * Sends from that moment on record true and start reporting revenue; no
+ * historical row is disturbed, and the mail sent while it was broken keeps
+ * reporting "not tracked" rather than a false zero — see below.
  *
  * @param {{ settings?: object|null }} args
  * @returns {boolean}
  */
-const SHARED_DOMAIN_TRACKS_CLICKS = false;
+const SHARED_DOMAIN_TRACKS_CLICKS = true;
 
 export function sendingDomainTracksClicks({ settings }) {
   return settings?.domainVerified ? true : SHARED_DOMAIN_TRACKS_CLICKS;

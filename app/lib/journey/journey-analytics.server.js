@@ -20,10 +20,10 @@
  * steps, so asking for stats by live step id returned zeros for every flow
  * edited after it had sent.
  *
- * Counting against all of a flow's steps and rolling up by
- * (stepNumber, nodeType) — the identity a step keeps across a save — puts the
- * history back on the node the merchant is looking at. Same rule the campaign
- * report's step table uses, so the canvas and the report agree.
+ * Counting against all of a flow's steps and rolling up by stepKey — the
+ * identity a step keeps across a save — puts the history back on the node the
+ * merchant is looking at. Same rule the campaign report's step table uses, so
+ * the canvas and the report agree.
  */
 import prisma from "../../db.server.js";
 
@@ -50,7 +50,7 @@ export async function getJourneyStepStats(journeyId, days = 30) {
 
   const steps = await prisma.journeyStep.findMany({
     where: { journeyId, nodeType: "email" },
-    select: { id: true, stepNumber: true, isArchived: true },
+    select: { id: true, stepKey: true, isArchived: true },
   });
   if (!steps.length) return {};
 
@@ -64,14 +64,15 @@ export async function getJourneyStepStats(journeyId, days = 30) {
        AND j."sentAt" >= ${since}
      GROUP BY j."stepId"`;
 
-  // Roll up by position, so an archived step's history lands on whichever live
-  // row replaced it.
-  const byNumber = {};
-  const numberOf = Object.fromEntries(steps.map((s) => [s.id, s.stepNumber]));
+  // Roll up by stepKey, so an archived step's history lands on whichever live
+  // row replaced it. Was stepNumber — see the campaign report for why a
+  // position stopped working as an identity.
+  const byKey = {};
+  const keyOf = Object.fromEntries(steps.map((s) => [s.id, s.stepKey]));
   for (const r of rows) {
-    const n = numberOf[r.stepId];
-    if (n === undefined) continue;
-    const acc = (byNumber[n] ||= { sent: 0, opened: 0, clicked: 0 });
+    const k = keyOf[r.stepId];
+    if (k === undefined) continue;
+    const acc = (byKey[k] ||= { sent: 0, opened: 0, clicked: 0 });
     acc.sent += Number(r.sent) || 0;
     acc.opened += Number(r.opened) || 0;
     acc.clicked += Number(r.clicked) || 0;
@@ -80,7 +81,7 @@ export async function getJourneyStepStats(journeyId, days = 30) {
   const out = {};
   for (const step of steps) {
     if (step.isArchived) continue;
-    const s = byNumber[step.stepNumber] || { sent: 0, opened: 0, clicked: 0 };
+    const s = byKey[step.stepKey] || { sent: 0, opened: 0, clicked: 0 };
     out[step.id] = {
       sent: s.sent,
       openRate: round(s.sent ? (s.opened / s.sent) * 100 : 0, 1),

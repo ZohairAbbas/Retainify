@@ -1,0 +1,18 @@
+-- Quick Reply button presses on WhatsApp template messages.
+--
+-- WhatsApp is the one paid channel that reports less than the free ones, and
+-- part of the reason is that Meta gives no per-message click event. URL button
+-- taps appear only in Template Analytics, as aggregate counts per template with
+-- no wamid and no recipient -- unusable for attributing anything to a person or
+-- an order.
+--
+-- A Quick Reply is different: it arrives as an ordinary inbound message whose
+-- context.id is the wamid of the template message it answers, which matches
+-- WhatsappJob.providerMessageId exactly. It is therefore the only per-recipient
+-- engagement signal the channel offers, and we were discarding it -- the
+-- inbound handler only looked for STOP keywords.
+--
+-- Deliberately NOT a revenue signal: a quick reply carries no URL, so the
+-- recipient never leaves WhatsApp and no order can follow from the tap itself.
+-- Attributing revenue to WhatsApp needs our own redirect on the URL button.
+ALTER TABLE "WhatsappJob" ADD COLUMN "repliedAt" TIMESTAMP(3);

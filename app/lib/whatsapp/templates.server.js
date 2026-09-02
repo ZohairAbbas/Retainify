@@ -14,6 +14,20 @@ const VALID_CATEGORIES = new Set(["MARKETING", "UTILITY", "AUTHENTICATION"]);
 // Meta template names: lowercase letters, digits, underscores only.
 const NAME_RE = /^[a-z0-9_]+$/;
 
+/**
+ * Public base for the WhatsApp click redirect, e.g. https://app.example.com/w
+ *
+ * Meta only ever sees this host: a template's URL button is submitted as
+ * `<base>/{{1}}` and approved once, and the per-send value fills the variable.
+ * Empty when the app has no public URL, which createTemplate treats as a hard
+ * error for any template carrying a link — a button pointing at a relative path
+ * would be dead on a phone.
+ */
+function clickRedirectBase() {
+  const raw = (process.env.SHOPIFY_APP_URL || process.env.APP_PUBLIC_URL || "").trim();
+  return raw ? `${raw.replace(/\/+$/, "")}/w` : "";
+}
+
 /** Count the highest positional variable {{n}} used in a body string. */
 function countBodyVars(text) {
   const nums = [...String(text || "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1]));
@@ -100,15 +114,45 @@ export async function createTemplate(shop, input) {
   components.push(bodyComponent);
 
   // Optional buttons: URL (with a link) or QUICK_REPLY (no link).
+  //
+  // A URL button is submitted pointing at OUR redirect, never at the merchant's
+  // link. Meta reports no per-recipient click for template buttons, so routing
+  // the tap through us is the only way WhatsApp can earn revenue attribution —
+  // the same technique push already uses.
+  //
+  // The redirect carries a variable suffix, which Meta approves once as part of
+  // the template; the per-send value fills it and never needs review. Doing
+  // this at creation is what keeps AN-5 free of a re-approval cycle: rewriting
+  // an already-approved button URL would send every template back through it.
   const buttons = Array.isArray(input.buttons) ? input.buttons : [];
-  const builtButtons = buttons
-    .filter((b) => b && String(b.text || "").trim())
-    .map((b) => {
-      if (b.type === "URL" && String(b.url || "").trim()) {
-        return { type: "URL", text: String(b.text).trim(), url: String(b.url).trim() };
-      }
-      return { type: "QUICK_REPLY", text: String(b.text).trim() };
-    });
+  const hasUrlButton = buttons.some(
+    (b) => b && b.type === "URL" && String(b.url || "").trim() && String(b.text || "").trim(),
+  );
+  if (hasUrlButton && !clickRedirectBase()) {
+    return {
+      ok: false,
+      error:
+        "This server has no public URL configured, so link tracking can't be set up. Set SHOPIFY_APP_URL and try again.",
+    };
+  }
+  const buttonUrls = {};
+  const builtButtons = [];
+  for (const b of buttons) {
+    if (!b || !String(b.text || "").trim()) continue;
+    const index = builtButtons.length;
+    if (b.type === "URL" && String(b.url || "").trim()) {
+      buttonUrls[index] = String(b.url).trim();
+      builtButtons.push({
+        type: "URL",
+        text: String(b.text).trim(),
+        url: `${clickRedirectBase()}/{{1}}`,
+        // Meta requires a filled-in sample of the whole URL for review.
+        example: [`${clickRedirectBase()}/sample`],
+      });
+    } else {
+      builtButtons.push({ type: "QUICK_REPLY", text: String(b.text).trim() });
+    }
+  }
   if (builtButtons.length) {
     components.push({ type: "BUTTONS", buttons: builtButtons });
   }
@@ -145,6 +189,7 @@ export async function createTemplate(shop, input) {
       status,
       bodyText,
       components,
+      buttonUrls: Object.keys(buttonUrls).length ? buttonUrls : undefined,
       lastSyncedAt: new Date(),
     },
     update: {
@@ -153,6 +198,7 @@ export async function createTemplate(shop, input) {
       status,
       bodyText,
       components,
+      buttonUrls: Object.keys(buttonUrls).length ? buttonUrls : undefined,
       lastSyncedAt: new Date(),
     },
   });

@@ -182,11 +182,36 @@ export const action = async ({ request }) => {
             createdAt: _createdAt,
             updatedAt: _updatedAt,
             isArchived: _isArchived,
+            // Omitted so the copy's steps get their own. stepKey is the
+            // identity a step's send history hangs off; carrying it over would
+            // make a brand new flow claim the original's numbers, and later
+            // make the two indistinguishable in any report that keys on it.
+            // This is the one field the spread must NOT carry.
+            stepKey: _stepKey,
             ...fields
           } = s;
           return { ...fields, journeyId: copy.id, isArchived: false };
         }),
       });
+
+      // The copy is a straight line, same as its source. Built here rather than
+      // left for the merchant's first save, so a duplicated flow is a complete
+      // flow the moment it exists.
+      const live = await prisma.journeyStep.findMany({
+        where: { journeyId: copy.id, isArchived: false },
+        orderBy: [{ stepNumber: "asc" }, { id: "asc" }],
+        select: { id: true },
+      });
+      if (live.length > 1) {
+        await prisma.journeyEdge.createMany({
+          data: live.slice(0, -1).map((s, i) => ({
+            journeyId: copy.id,
+            fromStepId: s.id,
+            toStepId: live[i + 1].id,
+            branch: "next",
+          })),
+        });
+      }
     }
     return { ok: true, duplicated: true, journeyId: copy.id };
   }

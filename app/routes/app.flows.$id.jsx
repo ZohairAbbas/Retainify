@@ -160,14 +160,19 @@ function normalizeEntryFilters(tree) {
 function expandCanvasNodes(steps) {
   const nodes = [{ kind: "trigger", id: "trigger" }];
   for (const s of steps) {
+    // stepKey rides along on every node and goes straight back to saveDraft
+    // untouched. It is the only thing tying a step to its own send history
+    // across a save — `id` is regenerated every time — so a node that loses it
+    // comes back as a brand new step with an empty report.
     if (s.nodeType === "delay") {
-      nodes.push({ kind: "delay", id: s.id, hours: s.delayHours });
+      nodes.push({ kind: "delay", id: s.id, stepKey: s.stepKey, hours: s.delayHours });
     } else if (s.nodeType === "exit") {
-      nodes.push({ kind: "exit", id: s.id });
+      nodes.push({ kind: "exit", id: s.id, stepKey: s.stepKey });
     } else if (s.nodeType === "push") {
       nodes.push({
         kind: "push",
         id: s.id,
+        stepKey: s.stepKey,
         pushTitle: s.pushTitle,
         pushBody: s.pushBody,
         pushIconUrl: s.pushIconUrl,
@@ -179,6 +184,7 @@ function expandCanvasNodes(steps) {
       nodes.push({
         kind: "whatsapp",
         id: s.id,
+        stepKey: s.stepKey,
         waTemplateName: s.waTemplateName,
         waLanguage: s.waLanguage,
         waVariables: s.waVariables || {},
@@ -190,6 +196,7 @@ function expandCanvasNodes(steps) {
       nodes.push({
         kind: "email",
         id: s.id,
+        stepKey: s.stepKey,
         stepNumber: s.stepNumber,
         emailName: s.emailName,
         subject: s.subject,
@@ -331,11 +338,16 @@ async function persistDraft({ id, journey, fd }) {
     const stepsForSave = nodes
       .filter((n) => n.kind !== "trigger")
       .map((n) => {
+        // Sent back exactly as it arrived, or omitted for a node the merchant
+        // just added so the database mints one. Never regenerate it here: a
+        // step whose key changes is a new step as far as every report is
+        // concerned, and its history simply stops being counted.
+        const stepKey = n.stepKey ? { stepKey: n.stepKey } : {};
         if (n.kind === "delay") {
-          return { nodeType: "delay", delayHours: Number(n.hours) || 0 };
+          return { ...stepKey, nodeType: "delay", delayHours: Number(n.hours) || 0 };
         }
         if (n.kind === "exit") {
-          return { nodeType: "exit" };
+          return { ...stepKey, nodeType: "exit" };
         }
         // Note: push and WhatsApp steps deliberately send no delayHours.
         // Timing for every sendable step is derived from the Wait nodes above
@@ -346,6 +358,7 @@ async function persistDraft({ id, journey, fd }) {
         // timing model.
         if (n.kind === "push") {
           return {
+            ...stepKey,
             nodeType: "push",
             isEnabled: n.isEnabled !== false,
             pushTitle: n.pushTitle || "",
@@ -356,6 +369,7 @@ async function persistDraft({ id, journey, fd }) {
         }
         if (n.kind === "whatsapp") {
           return {
+            ...stepKey,
             nodeType: "whatsapp",
             isEnabled: n.isEnabled !== false,
             waTemplateName: n.waTemplateName || "",
@@ -365,6 +379,7 @@ async function persistDraft({ id, journey, fd }) {
           };
         }
         return {
+          ...stepKey,
           nodeType: "email",
           subject: n.subject || "",
           previewText: n.previewText || "",
@@ -507,7 +522,11 @@ export default function FlowBuilder() {
     setNodes((arr) => {
       const idx = arr.findIndex((n) => n.id === id);
       if (idx === -1) return arr;
-      const copy = { ...arr[idx], id: `tmp-${Date.now()}` };
+      // The copy is a NEW step and must not inherit stepKey — that key is what
+      // ties a step to its send history, and two steps carrying the same one
+      // would have their numbers silently added together in every report.
+      const { stepKey: _dropped, ...source } = arr[idx];
+      const copy = { ...source, id: `tmp-${Date.now()}` };
       const next = [...arr];
       next.splice(idx + 1, 0, copy);
       return next;

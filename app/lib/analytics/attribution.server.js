@@ -65,10 +65,14 @@ const EXCLUDED_STATUSES = ["refunded", "voided"];
  *
  * Email clicks are gated on clickTracked: a click cannot be recorded on an
  * untracked send, but the flag also keeps a stray event from a misconfigured
- * period out of the touch set entirely. Push needs no such gate — the click
- * beacon is ours (track.push-click.jsx), carries the job id in the payload, and
- * has always worked. WhatsApp is absent by necessity: WhatsappJob records
- * sentAt, deliveredAt and readAt, and a read is not a click.
+ * period out of the touch set entirely. Push and WhatsApp need no such gate —
+ * both clicks are recorded by our own redirects (track.push-click.jsx and
+ * w.$token.jsx), so a row exists only when the tap actually reached us.
+ *
+ * WhatsApp participates only for templates created in Retainify, whose URL
+ * buttons carry that redirect. One synced from Meta links straight to the
+ * merchant, so no tap is ever observed and it contributes nothing here — the
+ * WhatsApp settings page says so rather than leaving it looking broken.
  *
  * Emails are lowered on both sides. Order.email is normalised on write by
  * orders.server.js, but JourneyEnrollment.contactEmail is not, and matching
@@ -115,6 +119,15 @@ const ATTRIBUTED_ORDERS = `
            AND p."clickedAt" IS NOT NULL
            AND p."clickedAt" <= o."processedAt"
            AND p."clickedAt" >  o."processedAt" - ($3 || ' days')::interval
+        UNION ALL
+        SELECT e."journeyId", w."stepId", w."clickedAt"
+          FROM "JourneyEnrollment" e
+          JOIN "WhatsappJob" w ON w."enrollmentId" = e.id
+         WHERE e.shop = o.shop
+           AND lower(e."contactEmail") = lower(o.email)
+           AND w."clickedAt" IS NOT NULL
+           AND w."clickedAt" <= o."processedAt"
+           AND w."clickedAt" >  o."processedAt" - ($3 || ' days')::interval
       ) u
       ORDER BY u.at DESC
       LIMIT 1

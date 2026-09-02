@@ -94,6 +94,9 @@ export async function getCampaignOverview(shop, journeyId, days = 30) {
     waSent,
     waDelivered,
     waRead,
+    waReplied,
+    waFailed,
+    waClicked,
   ] = await Promise.all([
     prisma.journeyEnrollment.count({ where: { journeyId, enrolledAt: { gte: since } } }),
     prisma.journeyEnrollment.count({
@@ -117,6 +120,13 @@ export async function getCampaignOverview(shop, journeyId, days = 30) {
     prisma.whatsappJob.count({ where: { ...stepScope, sentAt: { gte: since, not: null } } }),
     prisma.whatsappJob.count({ where: { ...stepScope, deliveredAt: { gte: since, not: null } } }),
     prisma.whatsappJob.count({ where: { ...stepScope, readAt: { gte: since, not: null } } }),
+    // The one per-recipient engagement signal WhatsApp offers — see
+    // recordQuickReply in webhooks.whatsapp.jsx for why clicks are not one.
+    prisma.whatsappJob.count({ where: { ...stepScope, repliedAt: { gte: since, not: null } } }),
+    prisma.whatsappJob.count({ where: { ...stepScope, failedAt: { gte: since, not: null } } }),
+    // Recorded by our own redirect, so a row exists only for templates created
+    // in Retainify — see w.$token.jsx.
+    prisma.whatsappJob.count({ where: { ...stepScope, clickedAt: { gte: since, not: null } } }),
   ]);
 
   const [unsubscribed, revenue] = await Promise.all([
@@ -168,7 +178,12 @@ export async function getCampaignOverview(shop, journeyId, days = 30) {
       sent: waSent,
       delivered: waDelivered,
       read: waRead,
+      replied: waReplied,
+      failed: waFailed,
+      clicked: waClicked,
       readRate: rate(waRead, waSent),
+      deliveryRate: rate(waDelivered, waSent),
+      clickRate: rate(waClicked, waSent),
     },
     unsubscribed,
     unsubscribeRate: rate(unsubscribed, emailSent),
@@ -216,10 +231,16 @@ async function countUnsubscribesAfterSend(shop, journeyId, since) {
  * the archive flag, reported the true totals. The same page contradicted
  * itself, and the merchant had no way to tell which half was lying.
  *
- * Jobs are counted against ALL steps of the flow and rolled up by
- * (stepNumber, nodeType), which is exactly what the recreated row preserves.
- * Reordering steps will follow the position rather than the content, which is
- * how the table is read anyway ("Email 1"), and is far better than a zero.
+ * Jobs are counted against ALL steps of the flow and rolled up by stepKey,
+ * which the canvas round-trips so a recreated row carries it.
+ *
+ * This used to be (stepNumber, nodeType) — a position, which is a workable
+ * identity only while a flow is a straight line. One consequence of the change
+ * is worth knowing: reordering two steps now moves their history with them,
+ * where before the history stayed with the position. The new behaviour is the
+ * one merchants expect ("that's the offer email, and it has always performed
+ * like that"), but it does mean a reordered flow's table reads differently
+ * than it did before branching shipped.
  *
  * A group whose history has no live step left — the merchant deleted that step
  * — still gets a row, marked removed. Without it the table would not reconcile
@@ -235,12 +256,14 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
     select: {
       id: true,
       stepNumber: true,
+      stepKey: true,
       nodeType: true,
       isArchived: true,
       emailName: true,
       subject: true,
       pushTitle: true,
       waTemplateName: true,
+      waLanguage: true,
       delayHours: true,
       isEnabled: true,
     },
@@ -251,25 +274,37 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
   // Every step, live or archived — jobs hang off whichever row was current when
   // they were created.
   const ids = allSteps.map((s) => s.id);
-  /** Identity a step keeps across a save: its position and its channel. */
-  const groupKey = (s) => `${s.stepNumber}:${s.nodeType}`;
+  /**
+   * Identity a step keeps across a save.
+   *
+   * This was `${s.stepNumber}:${s.nodeType}` — the pair a recreated row happens
+   * to preserve. It worked only because a flow was a straight line, where a
+   * position IS an identity. Once a flow can branch, two steps on opposite
+   * sides of a split sit at different positions in the same flow and the same
+   * position means nothing, so history is keyed on the step's own stable key
+   * instead. Backfilled per (journeyId, stepNumber, nodeType) group, so every
+   * roll-up that was correct under the old key stays correct under this one.
+   */
+  const groupKey = (s) => s.stepKey;
   const groupOf = Object.fromEntries(allSteps.map((s) => [s.id, groupKey(s)]));
 
   // One grouped query per channel rather than three counts per step.
   const [emailRows, pushRows, waRows] = await Promise.all([
     prisma.$queryRaw`
       SELECT j."stepId" AS "stepId",
-             COUNT(*) FILTER (WHERE j."sentAt"    IS NOT NULL) AS sent,
-             COUNT(*) FILTER (WHERE j."openedAt"  IS NOT NULL) AS opened,
-             COUNT(*) FILTER (WHERE j."clickedAt" IS NOT NULL) AS clicked,
-             COUNT(*) FILTER (WHERE j."status" = 'failed')     AS failed
+             COUNT(*) FILTER (WHERE j."sentAt"      IS NOT NULL) AS sent,
+             COUNT(*) FILTER (WHERE j."deliveredAt" IS NOT NULL) AS delivered,
+             COUNT(*) FILTER (WHERE j."openedAt"    IS NOT NULL) AS opened,
+             COUNT(*) FILTER (WHERE j."clickedAt"   IS NOT NULL) AS clicked,
+             COUNT(*) FILTER (WHERE j."status" = 'failed')       AS failed
         FROM "JourneyJob" j
        WHERE j."stepId" = ANY(${ids}) AND j."sentAt" >= ${since}
        GROUP BY j."stepId"`,
     prisma.$queryRaw`
       SELECT p."stepId" AS "stepId",
              COUNT(*) FILTER (WHERE p."sentAt"    IS NOT NULL) AS sent,
-             COUNT(*) FILTER (WHERE p."clickedAt" IS NOT NULL) AS clicked
+             COUNT(*) FILTER (WHERE p."clickedAt" IS NOT NULL) AS clicked,
+             COUNT(*) FILTER (WHERE p."status" = 'failed')     AS failed
         FROM "PushJob" p
        WHERE p."stepId" = ANY(${ids}) AND p."sentAt" >= ${since}
        GROUP BY p."stepId"`,
@@ -277,7 +312,10 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
       SELECT w."stepId" AS "stepId",
              COUNT(*) FILTER (WHERE w."sentAt"      IS NOT NULL) AS sent,
              COUNT(*) FILTER (WHERE w."deliveredAt" IS NOT NULL) AS delivered,
-             COUNT(*) FILTER (WHERE w."readAt"      IS NOT NULL) AS read
+             COUNT(*) FILTER (WHERE w."readAt"      IS NOT NULL) AS read,
+             COUNT(*) FILTER (WHERE w."repliedAt"   IS NOT NULL) AS replied,
+             COUNT(*) FILTER (WHERE w."clickedAt"   IS NOT NULL) AS clicked,
+             COUNT(*) FILTER (WHERE w."failedAt"    IS NOT NULL) AS failed
         FROM "WhatsappJob" w
        WHERE w."stepId" = ANY(${ids}) AND w."sentAt" >= ${since}
        GROUP BY w."stepId"`,
@@ -301,6 +339,11 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
   // Which message earned the money, not just that the flow did. Empty when the
   // window had no click tracking — the report states that once, at the top.
   const attribution = await getStepAttribution(shop, journeyId, since);
+
+  // WhatsApp steps whose template was created here, and so carries our redirect
+  // in its URL buttons. Only those can ever record a click; one synced from
+  // Meta links straight to the merchant and the tap never reaches us.
+  const trackedWaSteps = await trackedWhatsappSteps(shop, allSteps);
   const revenueByGroup = {};
   for (const [stepId, v] of attribution) {
     const g = groupOf[stepId];
@@ -336,11 +379,29 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
       sent,
       opened: s.opened || 0,
       clicked: s.clicked || 0,
-      delivered: s.delivered ?? null,
-      read: s.read || 0,
+      // Email delivery is honest-or-absent, exactly as the overview treats it:
+      // every send before the delivery topics were subscribed has deliveredAt
+      // null because no event was emitted, not because the mail bounced.
+      // WhatsApp has no such gap — Meta has always reported delivery.
+      delivered:
+        step.nodeType === "email"
+          ? deliveryTrackingCoversWindow(since)
+            ? s.delivered || 0
+            : null
+          : step.nodeType === "whatsapp"
+            ? s.delivered || 0
+            : null,
+      read: step.nodeType === "whatsapp" ? s.read || 0 : null,
+      replied: step.nodeType === "whatsapp" ? s.replied || 0 : null,
       failed: s.failed || 0,
       openRate: rate(s.opened || 0, sent),
       clickRate: rate(s.clicked || 0, sent),
+      readRate: step.nodeType === "whatsapp" ? rate(s.read || 0, sent) : null,
+      // WhatsApp clicks exist only for templates created here, whose buttons
+      // carry our redirect. Null for a synced template means "we never see the
+      // tap", which is different from "nobody tapped" — the settings page
+      // explains it, and the column shows a dash rather than a zero.
+      clickTracked: step.nodeType !== "whatsapp" || (s.clicked || 0) > 0 || trackedWaSteps.has(step.id),
       // Null rather than 0 when nothing was attributed to this step, so the
       // table can show a dash. A step that genuinely earned nothing and a step
       // in an unmeasurable window must not render identically to one that did.
@@ -365,6 +426,36 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
   }
 
   return [...rows, ...orphans].sort((a, b) => a.stepNumber - b.stepNumber);
+}
+
+/**
+ * WhatsApp steps whose template carries our click redirect.
+ *
+ * A template created in Retainify has buttonUrls set — its URL buttons point at
+ * /w/:token, so a tap comes back to us and can be attributed. A template synced
+ * from Meta has buttonUrls null: its links go straight to the merchant, we
+ * never observe the tap, and reporting zero clicks for it would read as "nobody
+ * tapped" rather than "we cannot see taps".
+ *
+ * @returns {Promise<Set<string>>} step ids whose clicks are observable
+ */
+async function trackedWhatsappSteps(shop, steps) {
+  const waSteps = steps.filter((s) => s.nodeType === "whatsapp");
+  if (!waSteps.length) return new Set();
+
+  const templates = await prisma.whatsappTemplate.findMany({
+    where: { shop, name: { in: [...new Set(waSteps.map((s) => s.waTemplateName).filter(Boolean))] } },
+    select: { name: true, language: true, buttonUrls: true },
+  });
+  const tracked = new Set(
+    templates.filter((t) => t.buttonUrls && Object.keys(t.buttonUrls).length).map((t) => `${t.name}:${t.language}`),
+  );
+
+  return new Set(
+    waSteps
+      .filter((s) => tracked.has(`${s.waTemplateName}:${s.waLanguage || "en_US"}`))
+      .map((s) => s.id),
+  );
 }
 
 /** Postgres returns bigints for COUNT — coerce everything to Number. */

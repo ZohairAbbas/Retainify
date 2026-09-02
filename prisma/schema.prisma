@@ -383,20 +383,20 @@ model ContactView {
 // searchable and attributable — the Files API cannot tell us which uploads came
 // from this app — and it gives alt text somewhere to live.
 model MediaAsset {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   shop       String
   url        String // Shopify CDN URL, the shareable link
-  shopifyGid String   @default("") // Files API id, for later deletion
-  filename   String   @default("")
-  mimeType   String   @default("")
-  byteSize   Int      @default(0)
+  shopifyGid String    @default("") // Files API id, for later deletion
+  filename   String    @default("")
+  mimeType   String    @default("")
+  byteSize   Int       @default(0)
   width      Int? // images only
   height     Int?
-  alt        String   @default("")
+  alt        String    @default("")
   // Where it came from, so the library can show "used in emails" vs one-off
   // uploads: email_block | email_logo | library | popup
-  source     String   @default("library")
-  createdAt  DateTime @default(now())
+  source     String    @default("library")
+  createdAt  DateTime  @default(now())
   // Soft delete. Removing an asset hides it from the library but must not break
   // the image in an email that has already been delivered — an inbox copy is
   // not re-renderable, so the URL has to keep resolving forever.
@@ -540,21 +540,21 @@ model EmailSuppression {
 
 // Popup signup capture
 model PopupSignup {
-  id           String    @id @default(cuid())
-  shop         String
-  email        String
-  source       String    @default("exit_intent_popup")
-  discountCode String    @default("")
-  confirmToken String    @default("")
-  confirmedAt  DateTime?
+  id                String    @id @default(cuid())
+  shop              String
+  email             String
+  source            String    @default("exit_intent_popup")
+  discountCode      String    @default("")
+  confirmToken      String    @default("")
+  confirmedAt       DateTime?
   // Provider message ids for the two transactional emails this row sends, so
   // Resend open/click webhooks can be matched back. Without them the events
   // arrived, matched no JourneyJob, and were discarded.
-  confirmMessageId  String   @default("")
-  discountMessageId String   @default("")
+  confirmMessageId  String    @default("")
+  discountMessageId String    @default("")
   openedAt          DateTime?
   clickedAt         DateTime?
-  createdAt    DateTime  @default(now())
+  createdAt         DateTime  @default(now())
 
   @@index([shop, email])
   @@index([confirmMessageId])
@@ -626,6 +626,7 @@ model Journey {
   updatedAt          DateTime  @updatedAt
 
   steps       JourneyStep[]
+  edges       JourneyEdge[]
   enrollments JourneyEnrollment[]
 
   @@index([shop, trigger])
@@ -640,7 +641,19 @@ model JourneyStep {
   id             String   @id @default(cuid())
   journeyId      String
   stepNumber     Int
-  nodeType       String   @default("email") // email | delay | exit | push | whatsapp
+  // The identity a step keeps across a save. saveDraft deletes and recreates
+  // every step, so `id` changes on every edit and cannot key anything durable:
+  // the reports worked around that by rolling history up on
+  // (stepNumber, nodeType), which stops being unique the moment a flow
+  // branches. The canvas round-trips this value, so a recreated row is the
+  // same step as far as analytics — and the branch graph — are concerned.
+  stepKey        String   @default(cuid())
+  nodeType       String   @default("email") // email | delay | exit | push | whatsapp | split
+  // Branch condition for nodeType "split". Same rule-tree shape as
+  // Journey.entryFilters and Segment.filterTree, evaluated by the same
+  // evaluator, so a rule means what it means everywhere else. Null on every
+  // other node type.
+  splitCondition Json?
   positionY      Int      @default(0)
   delayHours     Float    @default(1)
   subject        String   @default("")
@@ -681,6 +694,58 @@ model JourneyStep {
   whatsappJobs WhatsappJob[]
 
   @@index([journeyId, stepNumber])
+  @@index([journeyId, stepKey])
+}
+
+// One edge of a flow's step graph.
+//
+// A flow used to be a list: steps in stepNumber order, one path, no divergence.
+// This is what makes it a tree. `branch` is "next" for an ordinary step and
+// "yes"/"no" for the two sides of a split.
+//
+// Branches never merge back — each side runs to its own exit — so a step has at
+// most one incoming edge, and the unique constraint below enforces the other
+// half of that rule: one target per branch out of any given step.
+//
+// Edges are rebuilt wholesale by saveDraft alongside the steps themselves, and
+// only ever reference live steps. An archived step keeps its jobs alive but is
+// out of the graph, exactly as it is out of the canvas.
+model JourneyEdge {
+  id         String @id @default(cuid())
+  journeyId  String
+  fromStepId String
+  toStepId   String
+  branch     String @default("next") // next | yes | no
+
+  journey Journey @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+
+  @@unique([fromStepId, branch])
+  @@index([journeyId])
+  @@index([fromStepId])
+}
+
+// Which way one enrollment went at one split.
+//
+// Without this there is no branch report and no way to answer "why did this
+// person get that email" — the jobs that exist hint at the route taken, but say
+// nothing about a split whose chosen side had no sendable step, and cannot
+// distinguish "not evaluated yet" from "evaluated false".
+//
+// stepKey rather than stepId alone, so the report survives the merchant editing
+// the flow.
+model JourneyPathEvent {
+  id           String   @id @default(cuid())
+  enrollmentId String
+  stepId       String
+  stepKey      String
+  branch       String // which edge was taken
+  matched      Boolean
+  evaluatedAt  DateTime @default(now())
+
+  enrollment JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
+
+  @@index([enrollmentId])
+  @@index([stepKey, branch])
 }
 
 // Pre-configured flow templates (seed data)
@@ -709,13 +774,33 @@ model JourneyEnrollment {
   completedAt  DateTime?
   exitReason   String    @default("")
 
-  journey      Journey       @relation(fields: [journeyId], references: [id], onDelete: Cascade)
+  // ── Scheduling ─────────────────────────────────────────────────────────
+  // "eager": every job for the whole flow was created at enrollment, each on
+  // its own absolute schedule. That is how this app has always worked, and it
+  // cannot express a branch — you cannot pre-schedule a path nobody has chosen.
+  //
+  // "lazy": the next node is scheduled only when the current one settles.
+  // currentStepId is where this contact stands in the graph; nextRunAt is when
+  // the advance worker should look at them again (set while parked on a Wait,
+  // null while waiting on an outstanding job).
+  //
+  // Both modes run side by side until the eager backlog drains. Enrollments
+  // created before branching shipped keep their pre-created jobs and finish
+  // exactly as they would have.
+  schedulingMode String    @default("eager") // eager | lazy
+  currentStepId  String?
+  nextRunAt      DateTime?
+
+  journey      Journey            @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   jobs         JourneyJob[]
   pushJobs     PushJob[]
   whatsappJobs WhatsappJob[]
+  pathEvents   JourneyPathEvent[]
 
   @@index([shop, contactEmail])
   @@index([journeyId])
+  // Drives the advance worker's "which enrollments are due" claim.
+  @@index([schedulingMode, nextRunAt])
 }
 
 // Scheduled send per step per enrollment
@@ -785,25 +870,25 @@ model PushSubscription {
 
 // Scheduled push notification per push step per enrollment
 model PushJob {
-  id           String    @id @default(cuid())
-  shop         String
-  enrollmentId String
-  stepId       String
-  scheduledFor DateTime
-  status       String    @default("pending") // pending | processing | done | failed | cancelled
-  attempts     Int       @default(0)
-  lastError    String    @default("")
+  id            String    @id @default(cuid())
+  shop          String
+  enrollmentId  String
+  stepId        String
+  scheduledFor  DateTime
+  status        String    @default("pending") // pending | processing | done | failed | cancelled
+  attempts      Int       @default(0)
+  lastError     String    @default("")
   // First failure for this job, so the transient retry horizon is a real
   // wall-clock deadline rather than an attempt count. Null = never failed.
-  firstFailedAt     DateTime?
-  sentAt       DateTime?
+  firstFailedAt DateTime?
+  sentAt        DateTime?
   // Set by /track/push-click, which the service worker calls from its
   // notificationclick handler. Before this column existed the UI reported
   // "push clicks" as COUNT(status = 'done') — i.e. the number of pushes SENT —
   // which rendered a 100% click-through rate for every contact.
-  clickedAt    DateTime?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  clickedAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   enrollment JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
   step       JourneyStep       @relation(fields: [stepId], references: [id], onDelete: Cascade)
@@ -848,6 +933,11 @@ model WhatsappTemplate {
   status         String    @default("PENDING") // PENDING | APPROVED | REJECTED | DISABLED
   bodyText       String    @default("")
   components     Json? // raw Meta component spec, used to map variables
+  // The merchant's real destinations for this template's URL buttons, indexed
+  // by button position. Meta only ever sees our redirect, so these can change
+  // without re-approval — and a template synced from Meta rather than created
+  // here has none, which is how the UI knows it cannot be attributed.
+  buttonUrls     Json?
   lastSyncedAt   DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -895,6 +985,17 @@ model WhatsappJob {
   deliveredAt       DateTime?
   readAt            DateTime?
   failedAt          DateTime?
+  // A Quick Reply button press. Meta reports no click for URL buttons — those
+  // are aggregate-only in Template Analytics, with no wamid — but a quick reply
+  // arrives as an inbound message carrying context.id, the wamid of the message
+  // it answers. That resolves to exactly one send, which makes it the only
+  // per-recipient engagement signal WhatsApp offers. Not a revenue signal: a
+  // quick reply carries no URL and never leaves WhatsApp.
+  repliedAt         DateTime?
+  // A tap on a URL button, recorded by our own /w/:token redirect rather than
+  // by Meta — which reports button taps only as template-level aggregates with
+  // no recipient. This is what lets WhatsApp earn revenue attribution at all.
+  clickedAt         DateTime?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -904,6 +1005,9 @@ model WhatsappJob {
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
   @@index([providerMessageId])
+  // Attribution reads these the same way it reads JourneyJob and PushJob.
+  @@index([shop, clickedAt])
+  @@index([enrollmentId, clickedAt])
 }
 
 // Suppression list for WhatsApp — parallel to EmailSuppression.

@@ -188,7 +188,23 @@ async function processWhatsappJob(job) {
   // Build template components from the step's variable map + enrollment payload.
   let payload = {};
   try { payload = JSON.parse(enrollment.payload); } catch { /* empty */ }
-  const components = buildComponents(step, payload, enrollment);
+
+  // Templates created in Retainify carry our redirect in their URL buttons, and
+  // buttonUrls records which button positions those are. A template synced from
+  // Meta has none — its links point straight at the merchant, so there is
+  // nothing to fill and no click to record.
+  const template = await prisma.whatsappTemplate.findUnique({
+    where: {
+      shop_name_language: {
+        shop: job.shop,
+        name: step.waTemplateName,
+        language: step.waLanguage || "en_US",
+      },
+    },
+    select: { buttonUrls: true },
+  });
+
+  const components = buildComponents(step, payload, enrollment, job, template);
 
   const result = await sendWhatsapp(
     {
@@ -246,7 +262,7 @@ async function processWhatsappJob(job) {
  * first, then fall back to a literal. Keeps it simple: BODY text params only;
  * header media uses step.waMediaUrl.
  */
-function buildComponents(step, payload, enrollment) {
+function buildComponents(step, payload, enrollment, job, template) {
   const components = [];
 
   if (step.waMediaUrl) {
@@ -270,7 +286,41 @@ function buildComponents(step, payload, enrollment) {
     }
   }
 
+  // Fill each tracked URL button's variable with a token naming this exact job
+  // and button. That token is the whole reason WhatsApp can attribute revenue:
+  // Meta never tells us who tapped a button, so the tap has to come back
+  // through us. See app/routes/w.$token.jsx.
+  for (const index of trackedButtonIndexes(template)) {
+    components.push({
+      type: "button",
+      sub_type: "url",
+      index: String(index),
+      parameters: [{ type: "text", text: clickToken(job.id, index) }],
+    });
+  }
+
   return components;
+}
+
+/** Button positions whose URL points at our redirect, ascending. */
+function trackedButtonIndexes(template) {
+  const urls = template?.buttonUrls;
+  if (!urls || typeof urls !== "object") return [];
+  return Object.keys(urls)
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n >= 0)
+    .sort((a, b) => a - b);
+}
+
+/**
+ * The value that fills a URL button's variable.
+ *
+ * `<jobId>-<buttonIndex>` — a cuid contains no hyphen, so the split is
+ * unambiguous, and the index is what tells the redirect which destination of a
+ * multi-button template to send the shopper to.
+ */
+export function clickToken(jobId, index) {
+  return `${jobId}-${index}`;
 }
 
 function resolveVar(ref, payload, enrollment) {

@@ -106,7 +106,15 @@ export async function archiveJourney(journeyId) {
 /**
  * Save canvas draft: replace all steps in a transaction, bump draftVersion.
  * `steps` is an array of { stepNumber, nodeType, delayHours, subject, previewText,
- *   emailName, templateStyle, discountPct, isEnabled }.
+ *   emailName, templateStyle, discountPct, isEnabled, stepKey }.
+ *
+ * ── stepKey ────────────────────────────────────────────────────────────────
+ * Every step here is deleted and recreated, so JourneyStep.id is not an
+ * identity — it changes on every save, and the reports lose whatever they
+ * keyed on it. `stepKey` is the identity that survives: the canvas sends back
+ * the key it loaded, and a step the merchant just added has none, so Prisma's
+ * default mints one. Never generate a key for a step that arrived with one, or
+ * that step silently detaches from its own send history.
  */
 export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, entryFilters, steps, triggerSegmentKey, trigger }) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
@@ -118,9 +126,15 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
   const rows = [];
   let positionY = 0;
   for (const s of steps || []) {
+    // Present for a step that already existed, absent for one the merchant just
+    // dropped on the canvas. Spread rather than assigned, so "absent" reaches
+    // Prisma as absent and its @default(cuid()) mints a fresh key — writing
+    // `stepKey: s.stepKey` would send null and fail the NOT NULL column.
+    const keepKey = s.stepKey ? { stepKey: s.stepKey } : {};
     if (s.nodeType === "delay") {
       cumulativeHours += Number(s.delayHours) || 0;
       rows.push({
+        ...keepKey,
         nodeType: "delay",
         delayHours: Number(s.delayHours) || 0,
         positionY: positionY++,
@@ -134,6 +148,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
       });
     } else if (s.nodeType === "exit") {
       rows.push({
+        ...keepKey,
         nodeType: "exit",
         delayHours: 0,
         positionY: positionY++,
@@ -147,6 +162,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
       });
     } else if (s.nodeType === "push") {
       rows.push({
+        ...keepKey,
         nodeType: "push",
         delayHours: cumulativeHours,
         positionY: positionY++,
@@ -164,6 +180,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
       });
     } else if (s.nodeType === "whatsapp") {
       rows.push({
+        ...keepKey,
         nodeType: "whatsapp",
         delayHours: cumulativeHours,
         positionY: positionY++,
@@ -185,6 +202,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         ? defaultEmailBlocks(s.subject)
         : s.emailBlocks;
       rows.push({
+        ...keepKey,
         nodeType: "email",
         delayHours: cumulativeHours,
         positionY: positionY++,
@@ -220,18 +238,52 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
   });
   const archiveIds = stepsWithJobs.map((s) => s.id);
 
-  await prisma.$transaction([
-    prisma.journeyStep.deleteMany({
+  // Interactive rather than the array form, because the edges below need the
+  // ids of the steps created two statements earlier. Same statements, same
+  // order, same atomicity — a save that fails partway must not leave a flow
+  // with steps but no graph.
+  await prisma.$transaction(async (tx) => {
+    await tx.journeyStep.deleteMany({
       where: { journeyId, isArchived: false, id: { notIn: archiveIds } },
-    }),
-    prisma.journeyStep.updateMany({
+    });
+    await tx.journeyStep.updateMany({
       where: { id: { in: archiveIds } },
       data: { isArchived: true },
-    }),
-    prisma.journeyStep.createMany({
+    });
+    await tx.journeyStep.createMany({
       data: rows.map((r) => ({ journeyId, ...r })),
-    }),
-    prisma.journey.update({
+    });
+
+    // ── Rebuild the step graph ───────────────────────────────────────────
+    // Every live step was just deleted and recreated with a new id, so the
+    // existing edges point at rows that no longer exist. JourneyEdge cascades
+    // on Journey, not on JourneyStep — deliberately, since a step can be
+    // archived rather than deleted — which means nothing cleans these up for
+    // us and a stale edge would outlive its step silently.
+    //
+    // Phase 1 writes the same straight line the flow already is; the canvas
+    // has no way to express a branch yet. What matters here is that the graph
+    // is rebuilt on every save from the moment the column exists, so it is
+    // never out of step with the rows it describes.
+    await tx.journeyEdge.deleteMany({ where: { journeyId } });
+
+    const live = await tx.journeyStep.findMany({
+      where: { journeyId, isArchived: false },
+      orderBy: [{ stepNumber: "asc" }, { id: "asc" }],
+      select: { id: true },
+    });
+    if (live.length > 1) {
+      await tx.journeyEdge.createMany({
+        data: live.slice(0, -1).map((s, i) => ({
+          journeyId,
+          fromStepId: s.id,
+          toStepId: live[i + 1].id,
+          branch: "next",
+        })),
+      });
+    }
+
+    await tx.journey.update({
       where: { id: journeyId },
       data: {
         name: name ?? journey.name,
@@ -258,8 +310,8 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         } : {}),
         draftVersion: journey.draftVersion + 1,
       },
-    }),
-  ]);
+    });
+  });
 
   return prisma.journey.findUnique({
     where: { id: journeyId },
