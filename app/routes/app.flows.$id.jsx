@@ -177,7 +177,6 @@ function expandCanvasNodes(steps) {
         pushBody: s.pushBody,
         pushIconUrl: s.pushIconUrl,
         pushClickUrl: s.pushClickUrl,
-        delayHours: s.delayHours,
         isEnabled: s.isEnabled,
       });
     } else if (s.nodeType === "whatsapp") {
@@ -189,7 +188,6 @@ function expandCanvasNodes(steps) {
         waLanguage: s.waLanguage,
         waVariables: s.waVariables || {},
         waMediaUrl: s.waMediaUrl,
-        delayHours: s.delayHours,
         isEnabled: s.isEnabled,
       });
     } else {
@@ -349,12 +347,16 @@ async function persistDraft({ id, journey, fd }) {
         if (n.kind === "exit") {
           return { ...stepKey, nodeType: "exit" };
         }
-        // Note: push and WhatsApp steps deliberately send no delayHours.
-        // Timing for every sendable step is derived from the Wait nodes above
-        // it (saveDraft accumulates them), exactly as it is for email. The old
-        // per-step "Timing" control in the inspector wrote a value that
+        // Note: a Wait node is the only thing that carries delayHours at all.
+        // Timing for a sendable step is not stored anywhere — it is whatever
+        // the Wait nodes above it add up to, which on a branched flow depends
+        // on the path taken and so cannot be a property of the step. The
+        // report computes it with delayFromRoot(); the scheduler never needs
+        // it, because it serves each Wait as it reaches it.
+        //
+        // The old per-step "Timing" control in the inspector wrote a value that
         // saveDraft then overwrote, so it accepted input and silently discarded
-        // it; the control has been removed rather than given a second, competing
+        // it; the control was removed rather than given a second, competing
         // timing model.
         if (n.kind === "push") {
           return {
@@ -545,7 +547,6 @@ export default function FlowBuilder() {
         pushBody: "",
         pushIconUrl: "",
         pushClickUrl: "",
-        delayHours: 1,
         isEnabled: true,
       };
     } else if (kind === "whatsapp") {
@@ -556,7 +557,6 @@ export default function FlowBuilder() {
         waLanguage: "",
         waVariables: {},
         waMediaUrl: "",
-        delayHours: 1,
         isEnabled: true,
       };
     } else {

@@ -120,9 +120,27 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
 
-  // Accumulate delay-from-trigger across delay nodes so each email step
-  // gets the correct cumulative `delayHours` (matches Phase 2 worker semantics).
-  let cumulativeHours = 0;
+  // ── delayHours is raw, not cumulative ──────────────────────────────────
+  // This used to accumulate the Wait nodes above each sendable step and write
+  // the running total onto it, so a send step carried "hours since the
+  // trigger". The eager scheduler read that number directly to set an absolute
+  // scheduledFor at enrollment.
+  //
+  // Neither half survives branching. A cumulative figure is a property of a
+  // PATH, not of a step — on a tree it is right for one branch and wrong for
+  // the other — and the lazy scheduler never wants it anyway, because it
+  // serves each Wait as it reaches it, measured from the previous step
+  // settling. So a Wait stores what it waits for, a send stores nothing, and
+  // anything that wants "how far into the flow is this" computes it from the
+  // graph (delayFromRoot).
+  //
+  // Safe for the eager enrollments still in flight: their jobs already hold an
+  // absolute scheduledFor and nothing re-reads delayHours to reschedule them.
+  //
+  // Steps are numbered in the order they arrive, which is the order the canvas
+  // lays them out — depth-first, Yes branch before No, once it can produce a
+  // tree. That keeps "a lower number is upstream" true along any single path,
+  // which is what the eager sequence gate assumes.
   const rows = [];
   let positionY = 0;
   for (const s of steps || []) {
@@ -132,7 +150,6 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
     // `stepKey: s.stepKey` would send null and fail the NOT NULL column.
     const keepKey = s.stepKey ? { stepKey: s.stepKey } : {};
     if (s.nodeType === "delay") {
-      cumulativeHours += Number(s.delayHours) || 0;
       rows.push({
         ...keepKey,
         nodeType: "delay",
@@ -164,7 +181,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
       rows.push({
         ...keepKey,
         nodeType: "push",
-        delayHours: cumulativeHours,
+        delayHours: 0,
         positionY: positionY++,
         stepNumber: positionY,
         subject: "",
@@ -182,7 +199,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
       rows.push({
         ...keepKey,
         nodeType: "whatsapp",
-        delayHours: cumulativeHours,
+        delayHours: 0,
         positionY: positionY++,
         stepNumber: positionY,
         subject: "",
@@ -204,7 +221,7 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
       rows.push({
         ...keepKey,
         nodeType: "email",
-        delayHours: cumulativeHours,
+        delayHours: 0,
         positionY: positionY++,
         stepNumber: positionY,
         subject: s.subject || "",

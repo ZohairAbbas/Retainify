@@ -98,7 +98,7 @@ async function processJourneyJob(job) {
 
   // A flow is a narrative: this step assumes the ones before it landed. Checked
   // before any rendering or discount minting so a blocked step costs nothing.
-  const sequence = await checkStepSequence(enrollment.id, step.stepNumber);
+  const sequence = await checkStepSequence(enrollment, step);
   if (sequence.verdict === CANCEL) {
     await prisma.journeyJob.update({
       where: { id: job.id },

@@ -221,6 +221,36 @@ export function sendableAncestors(graph, stepId, types = ["email"]) {
 }
 
 /**
+ * Hours from the trigger to this step, along the one path that reaches it.
+ *
+ * ── Why this is computed rather than stored ────────────────────────────────
+ * JourneyStep.delayHours used to hold this figure on every sendable step:
+ * saveDraft accumulated the Wait nodes above a step and wrote the running
+ * total onto it, so a step "knew" how long after the trigger it went out.
+ *
+ * That only works on a straight line. On a tree the answer depends on which
+ * branch a contact took, so it is a property of a path and not of a step, and
+ * a stored number would be right for one branch and wrong for the other.
+ * delayHours now holds only what a Wait node itself waits for, and anything
+ * wanting "how far into the flow is this" asks here.
+ *
+ * Reporting only. The scheduler never uses it — under lazy scheduling each
+ * Wait is served as it is reached, measured from the previous step settling.
+ *
+ * @param {Graph} graph
+ * @param {string} stepId
+ * @returns {number} hours
+ */
+export function delayFromRoot(graph, stepId) {
+  let total = 0;
+  for (const id of ancestorsOf(graph, stepId)) {
+    const step = graph.steps.get(id);
+    if (step?.nodeType === "delay") total += Number(step.delayHours) || 0;
+  }
+  return total;
+}
+
+/**
  * How many splits sit between the root and this step, inclusive of one here.
  *
  * @param {Graph} graph

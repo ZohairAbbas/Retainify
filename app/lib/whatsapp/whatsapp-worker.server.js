@@ -114,7 +114,7 @@ async function processWhatsappJob(job) {
   // never reached the recipient, so this send is cancelled too. Push and
   // WhatsApp failures do not gate anything themselves — no subscription or no
   // opt-in is benign and must not kill the rest of the flow.
-  const sequence = await checkStepSequence(job.enrollmentId, step.stepNumber);
+  const sequence = await checkStepSequence(enrollment, step);
   if (sequence.verdict === CANCEL) {
     await prisma.whatsappJob.update({
       where: { id: job.id },

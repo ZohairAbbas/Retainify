@@ -174,13 +174,13 @@ export async function createJourneyFromTemplate(shop, templateKey, overrides = {
     },
   });
 
-  // Persist steps with cumulative delay accumulation (mirrors saveDraft)
-  let cumulative = 0;
+  // Raw delays, mirroring saveDraft: a Wait stores what it waits for and a
+  // send stores nothing. See the note there for why a cumulative figure is a
+  // property of a path rather than of a step.
   const rows = [];
   let pos = 0;
   for (const s of tpl.definition.steps || []) {
     if (s.nodeType === "delay") {
-      cumulative += Number(s.delayHours) || 0;
       rows.push({
         nodeType: "delay",
         delayHours: Number(s.delayHours) || 0,
@@ -192,7 +192,7 @@ export async function createJourneyFromTemplate(shop, templateKey, overrides = {
     } else {
       rows.push({
         nodeType: "email",
-        delayHours: cumulative,
+        delayHours: 0,
         positionY: pos++,
         stepNumber: pos,
         subject: s.subject || "",

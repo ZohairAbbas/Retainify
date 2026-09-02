@@ -22,6 +22,7 @@
  */
 import prisma from "../../db.server.js";
 import { getFlowAttribution, getStepAttribution } from "./attribution.server.js";
+import { loadGraph, delayFromRoot } from "../journey/graph.server.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -271,6 +272,16 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
   if (!allSteps.length) return [];
 
   const steps = allSteps.filter((s) => !s.isArchived);
+
+  // "How long after the trigger does this go out" used to be a column on the
+  // step. It cannot be: on a branched flow the answer depends on which side of
+  // a split a contact took, so it belongs to a path rather than to a step.
+  // delayHours now holds only what a Wait node waits for, and this walks the
+  // graph to add up the Waits above each step. Archived steps are not in the
+  // graph, so an orphan row reports null rather than a misleading zero.
+  const graph = await loadGraph(journeyId);
+  const timingOf = (step) =>
+    graph.steps.has(step.id) ? delayFromRoot(graph, step.id) : null;
   // Every step, live or archived — jobs hang off whichever row was current when
   // they were created.
   const ids = allSteps.map((s) => s.id);
@@ -373,7 +384,7 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
       // A removed step is not "disabled" — it is gone from the flow, and only
       // its history keeps it on this table.
       removed,
-      delayHours: step.delayHours,
+      delayHours: timingOf(step),
       label,
       subject: step.subject || "",
       sent,
