@@ -30,6 +30,8 @@ import {
   listCampaignRecipients,
   resolveRange,
 } from "../lib/analytics/campaign.server.js";
+import { ATTRIBUTION_WINDOW_DAYS } from "../lib/analytics/attribution.server.js";
+
 
 const PAGE_SIZE = 100;
 
@@ -70,6 +72,9 @@ export const loader = async ({ request, params }) => {
     days,
     filter,
     ranges: RANGE_OPTIONS,
+    // Through the loader rather than imported into the component: the module is
+    // .server.js and is stripped from the client bundle.
+    attributionWindowDays: ATTRIBUTION_WINDOW_DAYS,
   };
 };
 
@@ -77,12 +82,21 @@ export const loader = async ({ request, params }) => {
 const fmt = (n) => new Intl.NumberFormat("en-US").format(Number(n) || 0);
 const pct = (n) => `${(Number(n) || 0).toFixed(1)}%`;
 
-function money(n) {
+/**
+ * Format money in the currency the orders were actually taken in.
+ *
+ * The currency was hardcoded to USD, which for a store selling in PKR rendered
+ * every figure with the wrong symbol and off by a factor of roughly 280.
+ * Falls back to plain digits when we have no code rather than guessing one.
+ */
+function money(n, currency) {
+  const value = Number(n) || 0;
+  if (!currency) return new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 }).format(value);
   return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "USD",
+    currency,
     maximumFractionDigits: 0,
-  }).format(Number(n) || 0);
+  }).format(value);
 }
 
 function when(value) {
@@ -117,6 +131,7 @@ export default function CampaignAnalytics() {
     days,
     filter,
     ranges,
+    attributionWindowDays,
   } = useLoaderData();
   const [params, setParams] = useSearchParams();
   const location = useLocation();
@@ -280,25 +295,38 @@ export default function CampaignAnalytics() {
         </>
       )}
 
-      {/* Revenue — only cart flows can attribute it */}
-      {overview.revenue && (
-        <>
-          <div className="t-micro muted" style={{ marginBottom: 12 }}>Attributed revenue</div>
-          <section className="rt-stats" style={{ marginBottom: 24 }}>
+      {/* Revenue — every trigger, credited to the last click before the order */}
+      <div className="t-micro muted" style={{ marginBottom: 12 }}>Attributed revenue</div>
+      <section className="rt-stats" style={{ marginBottom: 24 }}>
+        {overview.revenue.tracked ? (
+          <>
             <Stat
-              label="Recovered revenue"
-              value={money(overview.revenue.amount)}
-              sub={`${fmt(overview.revenue.orders)} recovered ${overview.revenue.orders === 1 ? "cart" : "carts"}`}
+              label="Revenue"
+              value={money(overview.revenue.revenue, overview.revenue.currency)}
+              sub={`${fmt(overview.revenue.orders)} ${overview.revenue.orders === 1 ? "order" : "orders"} within ${attributionWindowDays} days of a click`}
               tone="var(--brand-700)"
             />
-          </section>
-        </>
-      )}
+            {overview.revenue.mixed && (
+              <Stat
+                label="Multiple currencies"
+                value={overview.revenue.currency}
+                sub="Orders in other currencies are not included in this total"
+              />
+            )}
+          </>
+        ) : (
+          <Stat
+            label="Revenue"
+            value="Not tracked"
+            sub="This flow's messages went out before click tracking was active, so revenue can't be measured for this period."
+          />
+        )}
+      </section>
 
       {/* Per-step */}
       <div className="t-micro muted" style={{ marginBottom: 12 }}>Step by step</div>
       <div className="tscroll" style={{ overflowX: "auto", marginBottom: 32 }}>
-        <div className="rt-table" style={{ minWidth: 720 }}>
+        <div className="rt-table rt-table--steps" style={{ minWidth: 900 }}>
           <div className="rt-thead">
             <div>Step</div>
             <div>Channel</div>
@@ -307,6 +335,8 @@ export default function CampaignAnalytics() {
             <div className="rt-tnum">Clicked</div>
             <div className="rt-tnum">Open rate</div>
             <div className="rt-tnum">Click rate</div>
+            <div className="rt-tnum">Orders</div>
+            <div className="rt-tnum">Revenue</div>
           </div>
           {steps.length === 0 && (
             <div className="rt-empty-row">This flow has no sendable steps yet.</div>
@@ -316,7 +346,11 @@ export default function CampaignAnalytics() {
               <div>
                 <div className="rt-flow-name">{s.label}</div>
                 {s.subject && <div className="rt-flow-meta">{s.subject}</div>}
-                {!s.isEnabled && <div className="rt-flow-meta">Disabled</div>}
+                {s.removed ? (
+                  <div className="rt-flow-meta">Removed from the flow · past sends</div>
+                ) : (
+                  !s.isEnabled && <div className="rt-flow-meta">Disabled</div>
+                )}
               </div>
               <div>{CHANNEL_LABEL[s.channel] || s.channel}</div>
               <div className="rt-tnum t-mono">{fmt(s.sent)}</div>
@@ -331,6 +365,16 @@ export default function CampaignAnalytics() {
               </div>
               <div className="rt-tnum t-mono">
                 {s.channel !== "whatsapp" && s.sent ? pct(s.clickRate) : "—"}
+              </div>
+              {/* WhatsApp records no click, so it can never carry credit under
+                  a click-based model — a dash, not a zero. */}
+              <div className="rt-tnum t-mono">
+                {s.channel === "whatsapp" || s.orders === null ? "—" : fmt(s.orders)}
+              </div>
+              <div className="rt-tnum t-mono">
+                {s.channel === "whatsapp" || s.revenue === null
+                  ? "—"
+                  : money(s.revenue, s.currency)}
               </div>
             </div>
           ))}

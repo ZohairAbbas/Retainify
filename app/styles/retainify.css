@@ -118,6 +118,19 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-trow { border-bottom: 1px solid var(--hair-1); cursor: pointer; transition: background var(--t-fast) var(--ease); position: relative; }
 .rt-trow:last-child { border-bottom: 0; }
 .rt-trow:hover { background: var(--paper-2); }
+
+/* Column-count modifiers. The base template above is seven columns, which every
+   table matched until revenue attribution added money columns. These override
+   the template only — padding, gap and alignment stay shared. Both live inside
+   an overflow-x container, so the wider templates scroll rather than crush. */
+.rt-table--steps .rt-thead, .rt-table--steps .rt-trow {
+  /* Step, Channel, Sent, Opened, Clicked, Open rate, Click rate, Orders, Revenue */
+  grid-template-columns: 2.2fr 0.9fr 0.8fr 0.8fr 0.8fr 0.9fr 0.9fr 0.8fr 1.1fr;
+}
+.rt-table--flows .rt-thead, .rt-table--flows .rt-trow {
+  /* Flow, Status, Updated, Sent, Open rate, Click rate, Revenue, menu */
+  grid-template-columns: 2.2fr 1fr 1fr 0.8fr 0.9fr 0.9fr 1.1fr 48px;
+}
 .rt-tcell-name { display: flex; align-items: center; gap: 12px; }
 .rt-flow-name { font-weight: 600; color: var(--ink-1); font-size: 14px; margin-bottom: 2px; }
 .rt-flow-meta { font-size: 12px; color: var(--ink-3); }

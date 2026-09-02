@@ -2,6 +2,7 @@ import { useState, useRef, Fragment } from "react";
 import { useLoaderData, useNavigate, useLocation, useFetcher, redirect } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
+import { getFlowAttributionBatch } from "../lib/analytics/attribution.server.js";
 import prisma from "../db.server.js";
 import {
   seedJourneyTemplates,
@@ -35,10 +36,13 @@ export const loader = async ({ request }) => {
   // One grouped query for the whole table. This was three counts per journey,
   // so a shop with a dozen flows issued three dozen round trips to render a
   // list that shows three numbers per row.
+  // `sent` means sentAt — the provider accepted the call. It was aliased and
+  // labelled "delivered", which is a different and smaller number that
+  // campaign.server.js tracks separately from deliveredAt.
   const statRows = journeys.length
     ? await prisma.$queryRaw`
         SELECT s."journeyId" AS "journeyId",
-               COUNT(*) FILTER (WHERE j."sentAt"    IS NOT NULL) AS delivered,
+               COUNT(*) FILTER (WHERE j."sentAt"    IS NOT NULL) AS sent,
                COUNT(*) FILTER (WHERE j."openedAt"  IS NOT NULL) AS opened,
                COUNT(*) FILTER (WHERE j."clickedAt" IS NOT NULL) AS clicked
           FROM "JourneyJob" j
@@ -52,18 +56,28 @@ export const loader = async ({ request }) => {
       r.journeyId,
       {
         id: r.journeyId,
-        delivered: Number(r.delivered) || 0,
+        sent: Number(r.sent) || 0,
         opened: Number(r.opened) || 0,
         clicked: Number(r.clicked) || 0,
       },
     ]),
   );
 
+  // One query for the whole table, same reason the counters above are grouped.
+  const revenueByFlow = await getFlowAttributionBatch(
+    shop,
+    journeys.map((j) => j.id),
+    since,
+  );
+
   return {
     journeys: journeys.map((j) => ({
       ...j,
       emailStepCount: j.steps.filter((s) => s.nodeType === "email").length,
-      stats: statsById[j.id] || { delivered: 0, opened: 0, clicked: 0 },
+      stats: statsById[j.id] || { sent: 0, opened: 0, clicked: 0 },
+      // Absent rather than zero when nothing was attributed — the column shows
+      // a dash, so an unmeasured flow doesn't claim to have earned nothing.
+      revenue: revenueByFlow.get(j.id) || null,
     })),
     // A direct workspace has no carts and no orders, so a template built on
     // those triggers would enrol nobody. Filtered here rather than in the UI so
@@ -223,6 +237,20 @@ export default function Flows() {
   );
 }
 
+/**
+ * Money in the currency the orders were taken in, compacted so a revenue column
+ * stays narrow next to the rate columns. No currency code means no orders were
+ * attributed, and callers show a dash instead of calling this.
+ */
+function fmtMoney(n, currency) {
+  const value = Number(n) || 0;
+  return new Intl.NumberFormat("en-US", {
+    ...(currency ? { style: "currency", currency } : {}),
+    notation: value >= 10000 ? "compact" : "standard",
+    maximumFractionDigits: value >= 10000 ? 1 : 0,
+  }).format(value);
+}
+
 function FlowsListEmpty({ onCreate }) {
   return (
     <div className="rt-empty">
@@ -281,7 +309,20 @@ function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArc
   const [query, setQuery] = useState("");
   const [openMenu, setOpenMenu] = useState(null);
 
-  const totalDelivered = journeys.reduce((a, j) => a + j.stats.delivered, 0);
+  const totalSent = journeys.reduce((a, j) => a + j.stats.sent, 0);
+
+  // Flows attributing in a single currency can be summed; a shop selling in
+  // several cannot without FX rates we don't capture, so the tile steps aside
+  // rather than adding unlike amounts together.
+  const attributed = journeys.map((j) => j.revenue).filter(Boolean);
+  const currencies = new Set(attributed.map((r) => r.currency).filter(Boolean));
+  const totalRevenue =
+    currencies.size === 1
+      ? {
+          revenue: attributed.reduce((a, r) => a + r.revenue, 0),
+          currency: [...currencies][0],
+        }
+      : null;
 
   const statusCounts = {
     all: journeys.length,
@@ -321,8 +362,14 @@ function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArc
           <div className="rt-stat-value">{statusCounts.active}</div>
         </div>
         <div className="rt-stat">
-          <div className="t-micro muted">Delivered · last 30 days</div>
-          <div className="rt-stat-value">{totalDelivered.toLocaleString()}</div>
+          <div className="t-micro muted">Sent · last 30 days</div>
+          <div className="rt-stat-value">{totalSent.toLocaleString()}</div>
+        </div>
+        <div className="rt-stat">
+          <div className="t-micro muted">Revenue · last 30 days</div>
+          <div className="rt-stat-value">
+            {totalRevenue ? fmtMoney(totalRevenue.revenue, totalRevenue.currency) : "—"}
+          </div>
         </div>
         <div className="rt-stat">
           <div className="t-micro muted">Total flows</div>
@@ -358,14 +405,15 @@ function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArc
         </div>
       </div>
 
-      <div className="rt-table">
+      <div className="rt-table rt-table--flows">
         <div className="rt-thead">
           <div>Flow</div>
           <div>Status</div>
           <div>Updated</div>
-          <div className="rt-tnum">Delivered</div>
+          <div className="rt-tnum">Sent</div>
           <div className="rt-tnum">Open rate</div>
           <div className="rt-tnum">Click rate</div>
+          <div className="rt-tnum">Revenue</div>
           <div />
         </div>
 
@@ -374,11 +422,11 @@ function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArc
           const TrigIcon = Icons[trig.icon];
           const pillClass = STATUS_PILL[j.status] || "draft";
           const pillLabel = pillClass === "active" ? "Active" : pillClass.charAt(0).toUpperCase() + pillClass.slice(1);
-          const openRate = j.stats.delivered
-            ? ((j.stats.opened / j.stats.delivered) * 100).toFixed(1) + "%"
+          const openRate = j.stats.sent
+            ? ((j.stats.opened / j.stats.sent) * 100).toFixed(1) + "%"
             : "—";
-          const clickRate = j.stats.delivered
-            ? ((j.stats.clicked / j.stats.delivered) * 100).toFixed(1) + "%"
+          const clickRate = j.stats.sent
+            ? ((j.stats.clicked / j.stats.sent) * 100).toFixed(1) + "%"
             : "—";
 
           return (
@@ -401,9 +449,12 @@ function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArc
               </div>
               <div><span className={`pill ${pillClass}`}>{pillLabel}</span></div>
               <div className="rt-tdate">{timeAgo(j.updatedAt)}</div>
-              <div className="rt-tnum t-mono">{j.stats.delivered.toLocaleString()}</div>
+              <div className="rt-tnum t-mono">{j.stats.sent.toLocaleString()}</div>
               <div className="rt-tnum t-mono">{openRate}</div>
               <div className="rt-tnum t-mono">{clickRate}</div>
+              <div className="rt-tnum t-mono">
+                {j.revenue ? fmtMoney(j.revenue.revenue, j.revenue.currency) : "—"}
+              </div>
               <div className="rt-tactions" onClick={(e) => e.stopPropagation()}>
                 <RowMenu
                   open={openMenu === j.id}

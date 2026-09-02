@@ -7,14 +7,17 @@ import { saveDraft, publishJourney, pauseJourney, unpublishToDraft, archiveJourn
 import { validateFlowForPublish } from "../lib/journey/flow-validation.server.js";
 import { sendTestEmail } from "../lib/email/test-send.server.js";
 import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
-import { getStepStats } from "../lib/journey/journey-analytics.server.js";
+import { getJourneyStepStats } from "../lib/journey/journey-analytics.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
-import { evaluateSegment } from "../lib/segments/evaluator.server.js";
+import { flowFilterFieldsFor, OPERATORS } from "../lib/segments/fields.server.js";
+import { listTagsForShop } from "../lib/contacts/tags.server.js";
+import { evaluateSegment, validateFilterTree } from "../lib/segments/evaluator.server.js";
 import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
+import { GroupBlock } from "../components/segments/FilterTree.jsx";
+import { emptyGroup } from "../components/segments/constants.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
-import SoonPill from "../components/contacts/SoonPill.jsx";
 import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
@@ -53,16 +56,13 @@ export const loader = async ({ request, params }) => {
 
   const canvasNodes = expandCanvasNodes(journey.steps);
 
-  const emailSteps = journey.steps.filter((s) => s.nodeType === "email");
-
   // Segment trigger metadata: choices for the dropdown, plus a current-match
   // count when the flow already points at a segment. The count is the same
   // number the segment detail page shows.
-  const [stepStats, segmentChoices] = await Promise.all([
-    Promise.all(emailSteps.map((step) => getStepStats(step.id, 30))),
+  const [stats, segmentChoices] = await Promise.all([
+    getJourneyStepStats(journey.id, 30),
     listSegmentChoices(shop),
   ]);
-  const stats = Object.fromEntries(emailSteps.map((s, i) => [s.id, stepStats[i]]));
 
   let triggerSegmentCount = null;
   if (journey.trigger === "segment_entered" && journey.triggerSegmentKey) {
@@ -93,6 +93,12 @@ export const loader = async ({ request, params }) => {
     },
     canvasNodes,
     settings: settings ?? {},
+    // Entry-filter builder inputs. Fields are the supported-only set — see
+    // flowFilterFieldsFor for why gated fields are hidden here but shown in
+    // the segment builder.
+    filterFields: flowFilterFieldsFor(ctx.isShopify),
+    filterOperators: OPERATORS,
+    filterTags: await listTagsForShop(shop),
     // Prefills the "Send test" recipient. The logged-in staff address is the
     // right default; reply-to is the next best guess for an inbox the merchant
     // actually reads.
@@ -116,6 +122,39 @@ export const loader = async ({ request, params }) => {
 
 function safeJson(s, fb) {
   try { return JSON.parse(s); } catch { return fb; }
+}
+
+/**
+ * A filter tree with no rules imposes no restriction, so it is stored as null
+ * rather than an empty group. That keeps "has filters" a simple null check
+ * everywhere downstream instead of a structural inspection, and means clearing
+ * the last rule leaves the flow exactly as it was before any were added.
+ *
+ * Shared by the server (before writing) and the client (dirty comparison, so
+ * that adding a rule and removing it again isn't left looking unsaved).
+ */
+function prunedFilters(tree) {
+  if (!tree || tree.type !== "group") return null;
+  if (!Array.isArray(tree.children) || tree.children.length === 0) return null;
+  return tree;
+}
+
+/**
+ * Prepare an entry-filter tree for storage, rejecting one we could not later
+ * evaluate.
+ *
+ * The builder can only produce valid fields, so this guards against a
+ * hand-crafted POST rather than ordinary use. It matters because of the
+ * fail-closed rule in entry-filters.server.js: a tree naming an unknown field
+ * throws at enrollment, and a throw there stops the flow sending to anyone.
+ * A rejected save is visible and recoverable; a flow that silently stopped
+ * sending is neither.
+ */
+function normalizeEntryFilters(tree) {
+  const pruned = prunedFilters(tree);
+  if (!pruned) return null;
+  validateFilterTree(pruned);
+  return pruned;
 }
 
 function expandCanvasNodes(steps) {
@@ -194,7 +233,16 @@ export const action = async ({ request, params }) => {
     const hasDraftPayload = fd.get("nodes") !== null;
 
     if (hasDraftPayload) {
-      await persistDraft({ id, journey, fd });
+      try {
+        await persistDraft({ id, journey, fd });
+      } catch (err) {
+        // Entry-filter validation is the first thing here that can reject a
+        // draft. Surfacing it as a failed save keeps the merchant's canvas
+        // intact; letting it throw would drop them on an error boundary and
+        // lose the edit.
+        console.error("[flows] draft save rejected:", err.message);
+        return { ok: false, saveError: "Those flow filters aren't valid. Remove the last one you added and try again." };
+      }
     }
 
     if (!isPublish) return { ok: true, saved: true };
@@ -264,6 +312,11 @@ async function persistDraft({ id, journey, fd }) {
     const name = String(fd.get("name") || journey.name);
     const entryFrequency = String(fd.get("entryFrequency") || journey.entryFrequency);
     const exitCriteria = JSON.parse(String(fd.get("exitCriteria") || "[]"));
+    // Absent field leaves filters untouched; an empty tree clears them. The
+    // client always sends this, so absence means an older cached bundle.
+    const rawFilters = fd.get("entryFilters");
+    const entryFilters =
+      rawFilters === null ? undefined : normalizeEntryFilters(JSON.parse(String(rawFilters)));
     // Only pass triggerSegmentKey if the client sent one explicitly. Empty
     // string from a cleared dropdown becomes null; absent field leaves it
     // alone (so non-segment flows aren't disturbed).
@@ -326,11 +379,11 @@ async function persistDraft({ id, journey, fd }) {
         };
       });
 
-    await saveDraft(id, { name, entryFrequency, exitCriteria, steps: stepsForSave, triggerSegmentKey, trigger });
+    await saveDraft(id, { name, entryFrequency, exitCriteria, entryFilters, steps: stepsForSave, triggerSegmentKey, trigger });
 }
 
 export default function FlowBuilder() {
-  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [], testEmailDefault = "", sendingFromAddress = "", isShopify = true } = useLoaderData();
+  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [], testEmailDefault = "", sendingFromAddress = "", isShopify = true, filterFields = [], filterOperators = {}, filterTags = [] } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -340,6 +393,11 @@ export default function FlowBuilder() {
   const [entryFrequency, setEntryFrequency] = useState(journey.entryFrequency || "no_reentry");
   const [exitCriteria, setExitCriteria] = useState(journey.exitCriteria || []);
   const [triggerSegmentKey, setTriggerSegmentKey] = useState(journey.triggerSegmentKey || "");
+  // Entry filters. Stored as null when empty, but the builder always wants a
+  // root group to render into, so the two forms are converted at the edges.
+  const [entryFilters, setEntryFilters] = useState(
+    journey.entryFilters?.children ? journey.entryFilters : emptyGroup("all"),
+  );
   // Local trigger draft so the TriggerPicker can change it inline. Persisted
   // on save-draft alongside other flow fields.
   const [triggerDraft, setTriggerDraft] = useState(journey.trigger || "customer_created");
@@ -367,9 +425,13 @@ export default function FlowBuilder() {
       JSON.stringify(exitCriteria) !== JSON.stringify(journey.exitCriteria || []) ||
       JSON.stringify(nodes) !== JSON.stringify(initialNodes) ||
       triggerDraft !== (journey.trigger || "customer_created") ||
+      // Compare through the same null-when-empty normalisation the server
+      // applies, so adding a rule and removing it again isn't "dirty".
+      JSON.stringify(prunedFilters(entryFilters)) !==
+        JSON.stringify(prunedFilters(journey.entryFilters)) ||
       (triggerDraft === "segment_entered" && triggerSegmentKey !== (journey.triggerSegmentKey || ""))
     );
-  }, [name, entryFrequency, exitCriteria, nodes, journey, initialNodes, triggerSegmentKey, triggerDraft]);
+  }, [name, entryFrequency, exitCriteria, entryFilters, nodes, journey, initialNodes, triggerSegmentKey, triggerDraft]);
 
   const selected = nodes.find((n) => n.id === selectedId);
 
@@ -403,6 +465,11 @@ export default function FlowBuilder() {
     if (fetcher.data?.published) {
       setShowPublishModal(false);
       setToast(publishToastMessage(fetcher.data.segmentBaseline));
+    }
+    // A rejected save reports itself whether or not a navigation was pending —
+    // otherwise the Save button simply stops saying "Saved" with no reason why.
+    if (fetcher.data?.saveError) {
+      setToast({ tone: "info", text: fetcher.data.saveError });
     }
   }, [fetcher.data]);
 
@@ -502,6 +569,7 @@ export default function FlowBuilder() {
     fd.set("name", name);
     fd.set("entryFrequency", entryFrequency);
     fd.set("exitCriteria", JSON.stringify(exitCriteria));
+    fd.set("entryFilters", JSON.stringify(entryFilters));
     fd.set("nodes", JSON.stringify(nodes));
     if (triggerDraft !== (journey.trigger || "customer_created")) {
       fd.set("trigger", triggerDraft);
@@ -725,6 +793,11 @@ export default function FlowBuilder() {
             setEntryFrequency={setEntryFrequency}
             exitCriteria={exitCriteria}
             setExitCriteria={setExitCriteria}
+            entryFilters={entryFilters}
+            setEntryFilters={setEntryFilters}
+            filterFields={filterFields}
+            filterOperators={filterOperators}
+            filterTags={filterTags}
             triggerSegmentKey={triggerSegmentKey}
             setTriggerSegmentKey={setTriggerSegmentKey}
             triggerDraft={triggerDraft}
@@ -1059,8 +1132,8 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
         {showAnalytics && stats && (
           <div className="rt-node-stats">
             <div>
-              <div className="t-micro muted">Delivered</div>
-              <div className="t-mono rt-stat-num">{stats.delivered ?? 0}</div>
+              <div className="t-micro muted">Sent</div>
+              <div className="t-mono rt-stat-num">{stats.sent ?? 0}</div>
             </div>
             <div>
               <div className="t-micro muted">Opens</div>
@@ -1181,7 +1254,11 @@ function InsertMenu({ open, onClose, onAdd }) {
   );
 }
 
-function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
+function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, entryFilters, setEntryFilters, filterFields = [], filterOperators = {}, filterTags = [], triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
+  const filterFieldsById = useMemo(
+    () => Object.fromEntries(filterFields.map((f) => [f.id, f])),
+    [filterFields],
+  );
   if (!node) {
     return (
       <div className="rt-ins">
@@ -1258,22 +1335,26 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
           )}
         </div>
 
-        <div className="rt-ins-section">
-          <div className="t-micro muted">
-            Flow filters <SoonPill />
+        {/* Entry filters. Hidden for broadcasts, which already pick their
+            audience explicitly — see the matching guard in enrollContact. */}
+        {activeTrigger !== "broadcast" && (
+          <div className="rt-ins-section">
+            <div className="t-micro muted">Flow filters</div>
+            <div className="t-small muted" style={{ margin: "6px 0 12px" }}>
+              Only enter when these conditions are met. Checked once, when the
+              contact enters.
+            </div>
+            <GroupBlock
+              node={entryFilters}
+              fields={filterFields}
+              fieldsById={filterFieldsById}
+              operators={filterOperators}
+              tags={filterTags}
+              onChange={setEntryFilters}
+              canRemove={false}
+            />
           </div>
-          <div className="t-small muted" style={{ margin: "6px 0 12px" }}>
-            Only enter when these conditions are met.
-          </div>
-          <button
-            type="button"
-            className="rt-add-filter"
-            disabled
-            title="Flow filters are coming soon"
-          >
-            <Icons.Plus size={13} /> Add filter
-          </button>
-        </div>
+        )}
 
         <div className="rt-ins-section">
           <div className="t-micro muted">Entry frequency</div>

@@ -87,6 +87,24 @@ export function fieldsFor(isShopify) {
   return isShopify ? FIELDS : FIELDS.filter((f) => !COMMERCE_GROUPS.has(f.group));
 }
 
+/**
+ * The fields a flow entry filter can use — supported ones only.
+ *
+ * Segments show gated fields with a "Soon" pill, and the evaluator treats them
+ * as no-ops that match everyone. That is a defensible choice there: the count
+ * is a little wrong and visibly marked as such.
+ *
+ * It is not defensible here. A flow filter decides who gets mail, so a rule
+ * that silently matches everyone does the opposite of what the merchant asked
+ * — "only customers with an open rate above 20%" would send to the whole list.
+ * Better to not offer the field than to offer one that quietly inverts itself.
+ *
+ * @param {boolean} isShopify
+ */
+export function flowFilterFieldsFor(isShopify) {
+  return fieldsFor(isShopify).filter((f) => f.supported);
+}
+
 /** Segment starter templates a workspace can actually use. */
 export function templatesFor(isShopify) {
   if (isShopify) return TEMPLATES;

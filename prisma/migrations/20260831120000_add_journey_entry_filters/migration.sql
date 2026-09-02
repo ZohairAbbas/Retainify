@@ -1,0 +1,16 @@
+-- Entry conditions for a flow, layered on top of its trigger.
+--
+-- The flow builder has always shown an "Only enter when these conditions are
+-- met" panel with the add-filter button disabled, so entry was all-or-nothing
+-- on the trigger alone. A merchant wanting "win back, but only customers who
+-- spent over $500" had to build a segment and switch the flow to the segment
+-- trigger -- a workaround they had to discover unaided.
+--
+-- Shape is Segment.filterTree exactly: a root group of rules and nested
+-- groups, evaluated by the same evalTreeForContact(). Reusing the structure is
+-- the point -- a rule means the same thing in both places, and neither can
+-- drift from the other.
+--
+-- Nullable with no default: NULL means "no entry conditions", the correct and
+-- unchanged behaviour for every flow that exists today.
+ALTER TABLE "Journey" ADD COLUMN "entryFilters" JSONB;

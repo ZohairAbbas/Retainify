@@ -78,9 +78,23 @@ function fmtPct(n) {
   return `${n.toFixed(1)}%`;
 }
 
-function fmtRevenue(n) {
-  if (n >= 1000) return `$${(n / 1000).toFixed(1)}K`;
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 0 }).format(n);
+/**
+ * Money in the currency the orders were actually taken in.
+ *
+ * Both the symbol and the compact form were hardcoded to USD, so a store
+ * selling in PKR saw its totals rendered as dollars — a figure off by roughly
+ * 280× to anyone who trusts the symbol. The compact form now uses the real
+ * currency's own formatting rather than prepending "$".
+ */
+function fmtRevenue(n, currency) {
+  const value = Number(n) || 0;
+  const opts = currency
+    ? { style: "currency", currency, maximumFractionDigits: value >= 1000 ? 1 : 0 }
+    : { maximumFractionDigits: 0 };
+  if (value >= 1000) {
+    return `${new Intl.NumberFormat("en-US", { ...opts, notation: "compact" }).format(value)}`;
+  }
+  return new Intl.NumberFormat("en-US", opts).format(value);
 }
 
 function HeroStat({ label, value, sub }) {
@@ -223,20 +237,33 @@ export default function Dashboard() {
               : "No cart recovery flow yet"
           }
         />
+        {/* Attributed across every flow, not just cart rescue. "Not tracked"
+            when the window's sends predate click tracking — never a zero, which
+            would read as "your flows earned nothing". */}
         <HeroStat
-          label="Revenue recovered"
-          value={stats.hasCartJourneys ? fmtRevenue(stats.recoveredRevenue) : "—"}
-          sub={stats.hasCartJourneys ? `${fmt(stats.recoveredCount)} carts` : "No cart recovery flow yet"}
+          label="Revenue"
+          value={
+            stats.revenue.tracked
+              ? fmtRevenue(stats.revenue.revenue, stats.revenue.currency)
+              : "Not tracked"
+          }
+          sub={
+            stats.revenue.tracked
+              ? `${fmt(stats.revenue.orders)} attributed ${stats.revenue.orders === 1 ? "order" : "orders"}`
+              : "Click tracking wasn't active for these sends"
+          }
         />
         <HeroStat
           label="Emails sent"
           value={fmt(stats.sent)}
           sub={`Open ${fmtPct(stats.openRate)} · Click ${fmtPct(stats.clickRate)}`}
         />
+        {/* Subscribers is the whole list; suppressions are windowed like every
+            other figure here. Saying so stops the pair reading as a churn rate. */}
         <HeroStat
           label="Subscribers"
           value={fmt(stats.subscribers)}
-          sub={`${fmt(stats.suppressions)} unsubscribed`}
+          sub={`${fmt(stats.suppressions)} unsubscribed in ${days} days`}
         />
       </section>
 

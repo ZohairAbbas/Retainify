@@ -4,9 +4,7 @@
  * The app previously had no campaign report at all. The only analytics surface
  * was a toggle in the flow builder that overlaid three numbers on email nodes,
  * and only for published flows in canvas view — so a paused or draft flow, or
- * anyone in form view, had no way to see performance. getJourneyStats() and
- * getShopFlowStats() existed in journey-analytics.server.js but were never
- * called from anywhere.
+ * anyone in form view, had no way to see performance.
  *
  * Everything here is scoped to one journey and a time window, and covers all
  * three channels rather than email alone.
@@ -17,11 +15,13 @@
  *     recipients of this flow whose suppression was created AFTER their send.
  *     That over-counts someone who would have unsubscribed anyway and
  *     under-counts nothing.
- *   - Revenue: only cart-recovery flows can attribute it, because AbandonedCart
- *     is the only table carrying money. Every other trigger reports null rather
- *     than a fabricated zero.
+ *   - Revenue: attributed by attribution.server.js, which credits an order to
+ *     the last click within its window. Available for every trigger. Returns
+ *     null — never zero — for windows whose sends had no click tracking, so an
+ *     unmeasurable period reads as unmeasured rather than as no revenue.
  */
 import prisma from "../../db.server.js";
+import { getFlowAttribution, getStepAttribution } from "./attribution.server.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -121,7 +121,10 @@ export async function getCampaignOverview(shop, journeyId, days = 30) {
 
   const [unsubscribed, revenue] = await Promise.all([
     countUnsubscribesAfterSend(shop, journeyId, since),
-    journey.trigger === "cart_abandoned" ? attributedRevenue(shop, journeyId, since) : null,
+    // Every trigger now, not just cart rescue. The old query could only read
+    // AbandonedCart, so a welcome or win-back flow reported nothing however
+    // much it earned.
+    getFlowAttribution(shop, journeyId, since),
   ]);
 
   return {
@@ -200,49 +203,40 @@ async function countUnsubscribesAfterSend(shop, journeyId, since) {
 }
 
 /**
- * Revenue from carts recovered after a rescue email from THIS flow landed.
- * Same 1-hour bracket the dashboard uses, so the two agree.
- */
-async function attributedRevenue(shop, journeyId, since) {
-  const rows = await prisma.$queryRaw`
-    SELECT COALESCE(SUM(c."recoveredRevenue"), 0)::float8 AS revenue,
-           COUNT(*)::int AS orders
-      FROM "AbandonedCart" c
-     WHERE c.shop = ${shop}
-       AND c."recoveredAt" >= ${since}
-       AND c."recoveredRevenue" IS NOT NULL
-       AND EXISTS (
-         SELECT 1
-           FROM "JourneyJob" j
-           JOIN "JourneyEnrollment" e ON e.id = j."enrollmentId"
-           JOIN "JourneyStep" s ON s.id = j."stepId"
-          WHERE s."journeyId" = ${journeyId}
-            AND e.shop = c.shop
-            AND lower(e."contactEmail") = lower(c."customerEmail")
-            AND j."sentAt" IS NOT NULL
-            AND j."sentAt" > c."abandonedAt" + INTERVAL '1 hour'
-            AND j."sentAt" < c."recoveredAt"
-       )
-  `;
-  return {
-    amount: Number(rows?.[0]?.revenue ?? 0),
-    orders: Number(rows?.[0]?.orders ?? 0),
-  };
-}
-
-/**
  * Per-step performance across all three channels, in canvas order.
+ *
+ * ── Why this reads archived steps ───────────────────────────────────────────
+ * Saving a flow deletes and recreates its steps (journey-lifecycle.server.js).
+ * A step that already has jobs cannot be deleted without cascading them away,
+ * so it is archived and a fresh row takes its place. The send history stays
+ * attached to the archived predecessor.
+ *
+ * Reading only live steps therefore showed zeros for every flow edited after it
+ * had sent — while the overview above, which scopes by journeyId and ignores
+ * the archive flag, reported the true totals. The same page contradicted
+ * itself, and the merchant had no way to tell which half was lying.
+ *
+ * Jobs are counted against ALL steps of the flow and rolled up by
+ * (stepNumber, nodeType), which is exactly what the recreated row preserves.
+ * Reordering steps will follow the position rather than the content, which is
+ * how the table is read anyway ("Email 1"), and is far better than a zero.
+ *
+ * A group whose history has no live step left — the merchant deleted that step
+ * — still gets a row, marked removed. Without it the table would not reconcile
+ * with the totals above it.
  */
 export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
   const since = sinceDate(days);
 
-  const steps = await prisma.journeyStep.findMany({
-    where: { journeyId, isArchived: false, nodeType: { in: ["email", "push", "whatsapp"] } },
+  const SENDABLE = ["email", "push", "whatsapp"];
+  const allSteps = await prisma.journeyStep.findMany({
+    where: { journeyId, nodeType: { in: SENDABLE } },
     orderBy: { stepNumber: "asc" },
     select: {
       id: true,
       stepNumber: true,
       nodeType: true,
+      isArchived: true,
       emailName: true,
       subject: true,
       pushTitle: true,
@@ -251,9 +245,15 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
       isEnabled: true,
     },
   });
-  if (!steps.length) return [];
+  if (!allSteps.length) return [];
 
-  const ids = steps.map((s) => s.id);
+  const steps = allSteps.filter((s) => !s.isArchived);
+  // Every step, live or archived — jobs hang off whichever row was current when
+  // they were created.
+  const ids = allSteps.map((s) => s.id);
+  /** Identity a step keeps across a save: its position and its channel. */
+  const groupKey = (s) => `${s.stepNumber}:${s.nodeType}`;
+  const groupOf = Object.fromEntries(allSteps.map((s) => [s.id, groupKey(s)]));
 
   // One grouped query per channel rather than three counts per step.
   const [emailRows, pushRows, waRows] = await Promise.all([
@@ -283,26 +283,55 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
        GROUP BY w."stepId"`,
   ]);
 
-  const byId = {};
-  for (const r of emailRows) byId[r.stepId] = { ...byId[r.stepId], ...numeric(r) };
-  for (const r of pushRows) byId[r.stepId] = { ...byId[r.stepId], ...numeric(r) };
-  for (const r of waRows) byId[r.stepId] = { ...byId[r.stepId], ...numeric(r) };
+  // Counters roll up by group, so an archived step's history lands on whichever
+  // live row replaced it.
+  const byGroup = {};
+  const add = (rows) => {
+    for (const r of rows) {
+      const g = groupOf[r.stepId];
+      if (!g) continue;
+      const acc = (byGroup[g] ||= {});
+      for (const [k, v] of Object.entries(numeric(r))) acc[k] = (acc[k] || 0) + v;
+    }
+  };
+  add(emailRows);
+  add(pushRows);
+  add(waRows);
 
-  return steps.map((step) => {
-    const s = byId[step.id] || {};
+  // Which message earned the money, not just that the flow did. Empty when the
+  // window had no click tracking — the report states that once, at the top.
+  const attribution = await getStepAttribution(shop, journeyId, since);
+  const revenueByGroup = {};
+  for (const [stepId, v] of attribution) {
+    const g = groupOf[stepId];
+    if (!g) continue;
+    const acc = (revenueByGroup[g] ||= { revenue: 0, orders: 0, currency: "" });
+    acc.revenue += v.revenue;
+    acc.orders += v.orders;
+    acc.currency = acc.currency || v.currency;
+  }
+
+  const row = (step, { removed = false } = {}) => {
+    const g = groupKey(step);
+    const s = byGroup[g] || {};
     const sent = s.sent || 0;
+    const money = revenueByGroup[g];
+    const label =
+      step.nodeType === "email"
+        ? step.emailName || step.subject || `Email ${step.stepNumber}`
+        : step.nodeType === "push"
+          ? step.pushTitle || `Push ${step.stepNumber}`
+          : step.waTemplateName || `WhatsApp ${step.stepNumber}`;
     return {
       stepId: step.id,
       stepNumber: step.stepNumber,
       channel: step.nodeType,
       isEnabled: step.isEnabled,
+      // A removed step is not "disabled" — it is gone from the flow, and only
+      // its history keeps it on this table.
+      removed,
       delayHours: step.delayHours,
-      label:
-        step.nodeType === "email"
-          ? step.emailName || step.subject || `Email ${step.stepNumber}`
-          : step.nodeType === "push"
-            ? step.pushTitle || `Push ${step.stepNumber}`
-            : step.waTemplateName || `WhatsApp ${step.stepNumber}`,
+      label,
       subject: step.subject || "",
       sent,
       opened: s.opened || 0,
@@ -312,8 +341,30 @@ export async function getCampaignStepBreakdown(shop, journeyId, days = 30) {
       failed: s.failed || 0,
       openRate: rate(s.opened || 0, sent),
       clickRate: rate(s.clicked || 0, sent),
+      // Null rather than 0 when nothing was attributed to this step, so the
+      // table can show a dash. A step that genuinely earned nothing and a step
+      // in an unmeasurable window must not render identically to one that did.
+      revenue: money?.revenue ?? null,
+      orders: money?.orders ?? null,
+      currency: money?.currency || "",
     };
-  });
+  };
+
+  const rows = steps.map((step) => row(step));
+
+  // Groups that still carry history but have no live step left. Without these
+  // the table's numbers would not add up to the totals above it.
+  const liveGroups = new Set(steps.map(groupKey));
+  const orphans = [];
+  const seen = new Set();
+  for (const step of allSteps) {
+    const g = groupKey(step);
+    if (liveGroups.has(g) || seen.has(g) || !byGroup[g]?.sent) continue;
+    seen.add(g);
+    orphans.push(row(step, { removed: true }));
+  }
+
+  return [...rows, ...orphans].sort((a, b) => a.stepNumber - b.stepNumber);
 }
 
 /** Postgres returns bigints for COUNT — coerce everything to Number. */

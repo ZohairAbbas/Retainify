@@ -12,6 +12,7 @@
  * participates in that funnel.
  */
 import prisma from "../../db.server.js";
+import { getShopAttribution } from "./attribution.server.js";
 
 function sinceDate(days) {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -21,11 +22,11 @@ function sinceDate(days) {
  * Ids of every live flow for a shop, optionally narrowed to one trigger or to a
  * single campaign (the dashboard's flow selector).
  */
-async function journeyIds(shop, { trigger, journeyId } = {}) {
+async function journeyIds(shop, { trigger, journeyId, includeArchived = false } = {}) {
   const journeys = await prisma.journey.findMany({
     where: {
       shop,
-      archivedAt: null,
+      ...(includeArchived ? {} : { archivedAt: null }),
       ...(trigger ? { trigger } : {}),
       ...(journeyId ? { id: journeyId } : {}),
     },
@@ -59,15 +60,27 @@ export async function listCampaignChoices(shop) {
  * enrollments where a rescue email actually shipped, so fast-completing
  * checkouts (enrolled at email-entry, completed seconds later before any
  * delay elapsed) don't pollute the rate.
+ *
+ * Both sides of that rate are scoped to the SAME set of flows, and that set
+ * includes archived ones. Previously the numerator matched a recovery to any
+ * flow's send while the denominator counted only live cart flows, so archiving
+ * a flow deleted its enrollments from the denominator while its sends kept
+ * feeding the numerator — the reference store rendered "0 attempted, 16
+ * recovered" in a funnel that reads left to right. A flow's history is still
+ * history after it is archived, so both sides now include it.
  */
 export async function getCartRescueStats(shop, days = 30, { journeyId = null } = {}) {
   const since = sinceDate(days);
 
   // `journeyId` scopes the whole card to one campaign, driving the dashboard's
   // flow selector. Null means every live flow.
+  //
+  // Messaging counters cover live flows only — they describe what is running
+  // now. The cart funnel covers archived flows too, because a rate whose two
+  // halves disagree about which flows exist is worse than useless.
   const [allJourneyIds, cartJourneyIds] = await Promise.all([
     journeyIds(shop, { journeyId }),
-    journeyIds(shop, { trigger: "cart_abandoned", journeyId }),
+    journeyIds(shop, { trigger: "cart_abandoned", journeyId, includeArchived: true }),
   ]);
 
   const hasAny = allJourneyIds.length > 0;
@@ -127,10 +140,20 @@ export async function getCartRescueStats(shop, days = 30, { journeyId = null } =
               FROM "JourneyJob" j
               JOIN "JourneyEnrollment" e ON e.id = j."enrollmentId"
               WHERE e.shop = c.shop
-                AND e."contactEmail" = c."customerEmail"
+                -- Same flow set as the denominator above. Without this the two
+                -- halves of the recovery rate counted different populations.
+                AND e."journeyId" = ANY(${cartJourneyIds})
+                -- Lowered on both sides: AbandonedCart.customerEmail and
+                -- JourneyEnrollment.contactEmail are neither normalised on
+                -- write, and a case difference silently dropped real matches
+                -- here while the flow report (which lowers) still found them.
+                AND lower(e."contactEmail") = lower(c."customerEmail")
                 AND j."sentAt" IS NOT NULL
                 AND j."sentAt" > c."abandonedAt" + INTERVAL '1 hour'
                 AND j."sentAt" < c."recoveredAt"
+                -- Upper bound. This bracket had no ceiling, so a cart recovered
+                -- a month after the last email was still credited to it in full.
+                AND j."sentAt" > c."recoveredAt" - INTERVAL '7 days'
             )
         `
       : [],
@@ -146,9 +169,15 @@ export async function getCartRescueStats(shop, days = 30, { journeyId = null } =
   ]);
 
   const recoveredCount = recoveredRows.length;
-  const recoveredRevenue = recoveredRows.reduce((sum, r) => sum + (r.recoveredRevenue ?? 0), 0);
   // Denominator comes back as [{ count: N }] from raw SQL.
   const abandonedCount = Array.isArray(abandoned) ? Number(abandoned[0]?.count ?? 0) : Number(abandoned || 0);
+
+  // Revenue across EVERY flow, credited to the last click before each order.
+  // Replaces the cart-only recovered-revenue figure, which reported nothing for
+  // welcome, win-back, post-purchase and broadcast flows however much they
+  // earned — and which double-counted, because a cart could match sends from
+  // several flows at once.
+  const revenue = await getShopAttribution(shop, since, { journeyId });
 
   return {
     sent,
@@ -158,7 +187,7 @@ export async function getCartRescueStats(shop, days = 30, { journeyId = null } =
     pushClicked,
     whatsappSent,
     recoveredCount,
-    recoveredRevenue,
+    revenue,
     abandoned: abandonedCount,
     pendingJobs,
     subscribers,

@@ -1,12 +1,18 @@
 import prisma from "../../db.server.js";
 import { decideFailureOutcome, MAX_ATTEMPTS } from "./failure-policy.server.js";
+import { passesEntryFilters } from "./entry-filters.server.js";
 
 /**
  * Enroll a contact in a journey — creates one JourneyJob per sendable step.
- * Honors Journey.status (only "published") and Journey.entryFrequency:
+ * Honors Journey.status (only "published"), Journey.entryFilters, and
+ * Journey.entryFrequency:
  *   - "no_reentry"        → skip if any prior enrollment exists for this contact
  *   - "delayed_<hours>"   → skip if an enrollment exists within the window
  *   - "immediate"         → always create a new enrollment
+ *
+ * Every trigger path in the app funnels through here — order and checkout
+ * webhooks, the segment enrollment worker, the broadcast dispatcher — so this
+ * is the one place entry conditions need to be checked.
  */
 export async function enrollContact(journeyId, contactEmail, contactName, payloadObj) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
@@ -56,6 +62,27 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
     if (recent) {
       console.warn(`[enroll] ${contactEmail} enrolled in ${journeyId} <30s ago — skipping duplicate webhook`);
       return recent;
+    }
+  }
+
+  // Entry conditions. Checked after the frequency rules above because those
+  // cost one indexed lookup while this costs a contact read plus its stats —
+  // no reason to compute them for someone we were going to skip anyway.
+  //
+  // Broadcasts are exempt by design: their audience is already chosen
+  // explicitly when the send is set up, and a second filtering mechanism on
+  // top of it would leave the merchant guessing which one decided a given
+  // recipient. The guard is on the trigger rather than the UI alone, so a flow
+  // switched to broadcast can't carry stale filters from its previous trigger.
+  if (journey.trigger !== "broadcast") {
+    const { pass, reason } = await passesEntryFilters(
+      journey.shop,
+      journey.entryFilters,
+      contactEmail,
+    );
+    if (!pass) {
+      console.warn(`[enroll] ${contactEmail} not enrolled in ${journeyId} — ${reason}`);
+      return null;
     }
   }
 

@@ -6,7 +6,13 @@ import prisma from "../../db.server.js";
 // Shared with the push and WhatsApp workers — the email path used to carry its
 // own copy of isInQuietHours, which is how three send paths drift apart.
 import { isInQuietHours, quietHoursRetryDelay } from "./quiet-hours.server.js";
-import { sendEmail, resolveFrom, resolveProvider, resolveStoreUrl } from "../email/index.server.js";
+import {
+  sendEmail,
+  resolveFrom,
+  resolveProvider,
+  resolveStoreUrl,
+  sendingDomainTracksClicks,
+} from "../email/index.server.js";
 import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml } from "../email/visual-renderer.server.js";
 import { buildTextPart } from "../email/text.server.js";
 import { buildUnsubscribeUrl, listUnsubscribeHeaders } from "../tracking/links.server.js";
@@ -270,6 +276,10 @@ async function processJourneyJob(job) {
     sentAt,
     resendMessageId: messageId,
     providerMessageId: messageId,
+    // Recorded per send, not read back from settings at report time: a shop
+    // that verifies its domain next month must not retroactively claim that
+    // today's untracked sends were measured.
+    clickTracked: sendingDomainTracksClicks({ settings }),
   });
 }
 

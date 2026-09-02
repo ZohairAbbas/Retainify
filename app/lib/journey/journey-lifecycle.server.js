@@ -108,7 +108,7 @@ export async function archiveJourney(journeyId) {
  * `steps` is an array of { stepNumber, nodeType, delayHours, subject, previewText,
  *   emailName, templateStyle, discountPct, isEnabled }.
  */
-export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, steps, triggerSegmentKey, trigger }) {
+export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, entryFilters, steps, triggerSegmentKey, trigger }) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
 
@@ -237,6 +237,10 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         name: name ?? journey.name,
         entryFrequency: entryFrequency ?? journey.entryFrequency,
         exitCriteria: exitCriteria ? JSON.stringify(exitCriteria) : journey.exitCriteria,
+        // Entry conditions. undefined leaves them alone; null clears them.
+        // Unlike the fields above there is no "falsy means unchanged" here —
+        // clearing every filter has to be savable, and an empty tree is falsy.
+        ...(entryFilters !== undefined ? { entryFilters } : {}),
         // Allow rebinding a segment-trigger flow to a different segment from
         // the inspector. Pass undefined to leave it alone; null clears it.
         ...(triggerSegmentKey !== undefined ? {

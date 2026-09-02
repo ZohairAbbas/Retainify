@@ -110,6 +110,34 @@ export function resolveFrom({ settings, provider }) {
 }
 
 /**
+ * Whether clicks on this send will actually be measurable.
+ *
+ * Click tracking is a property of the sending DOMAIN, not of our code: the
+ * provider rewrites links and reports the click back. Domains we create for a
+ * merchant are created with it on (see resend-domains.server.js), so a verified
+ * domain tracks. The shared fallback domain currently does not, which is why
+ * every send in the system before 2026-09-01 has a null clickedAt regardless of
+ * what recipients actually did.
+ *
+ * Revenue attribution keys on clicks, so this predicate is what separates "no
+ * revenue" from "no measurement" in the reports. Same `domainVerified` gate
+ * resolveFrom uses above — the two must agree, because the domain it picks is
+ * the domain this describes.
+ *
+ * Flip SHARED_DOMAIN_TRACKS_CLICKS once the shared domain's tracking is fixed;
+ * sends from that moment on record true and start reporting revenue, and no
+ * historical row is disturbed.
+ *
+ * @param {{ settings?: object|null }} args
+ * @returns {boolean}
+ */
+const SHARED_DOMAIN_TRACKS_CLICKS = false;
+
+export function sendingDomainTracksClicks({ settings }) {
+  return settings?.domainVerified ? true : SHARED_DOMAIN_TRACKS_CLICKS;
+}
+
+/**
  * The workspace's public website — the {store_url} merge tag, and the fallback
  * href for any email button left without a URL.
  *

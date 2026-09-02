@@ -593,6 +593,12 @@ model Journey {
   draftVersion       Int       @default(0)
   entryFrequency     String    @default("no_reentry") // immediate | delayed_<hours> | no_reentry
   exitCriteria       String    @default("[]") // JSON array of event keys
+  // Entry conditions layered on top of the trigger: the contact must match
+  // this rule tree at the moment of enrollment or they are not enrolled at
+  // all. Same structure and same evaluator as Segment.filterTree, so a rule
+  // means exactly what it means in the segment builder. Null = no conditions,
+  // which is every flow that existed before this column.
+  entryFilters       Json?
   source             String    @default("flows") // flows | automations | cart_rescue_legacy
   archivedAt         DateTime?
   // Segments trigger metadata. triggerSegmentKey holds Segment.id (cuid) or
@@ -736,6 +742,12 @@ model JourneyJob {
   failedAt          DateTime?
   openedAt          DateTime?
   clickedAt         DateTime?
+  // Whether the domain this send left on had click tracking active. Revenue
+  // attribution keys on clicks, so a null clickedAt is ambiguous without this:
+  // it means either "nobody clicked" or "clicks were never measurable". The
+  // difference is the whole report — one says the flow earned nothing, the
+  // other says we cannot tell. Stamped at send time from the sending domain.
+  clickTracked      Boolean   @default(false)
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
@@ -746,6 +758,11 @@ model JourneyJob {
   @@index([shop, enrollmentId])
   @@index([resendMessageId])
   @@index([providerMessageId])
+  @@index([shop, clickedAt])
+  // Attribution walks one buyer's clicks per order. Without this the planner
+  // drives from the click window instead and the query goes quadratic — 1.1s on
+  // a store with 3,355 sends, 31ms with it.
+  @@index([enrollmentId, clickedAt])
 }
 
 // Browser push subscriptions — one row per browser per shop
@@ -794,6 +811,8 @@ model PushJob {
   @@index([status, scheduledFor])
   @@index([shop, enrollmentId])
   @@index([shop, clickedAt])
+  // Same reason as JourneyJob: attribution walks one buyer's clicks per order.
+  @@index([enrollmentId, clickedAt])
 }
 
 // Per-shop WhatsApp Business Account, connected via Meta Embedded Signup.
