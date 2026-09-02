@@ -81,15 +81,6 @@ UPDATE "Contact" c
        ) sub
  WHERE c."shop" = sub.shop AND c."email" = sub.email;
 
--- Cursor for the reconciliation sweep. The migration above has just made every
--- shop's columns exact, so leaving this NULL is right: the first sweep starts
--- from the JourneyJob activity window rather than replaying all of history.
-ALTER TABLE "ShopSettings" ADD COLUMN "lastEngagementRollupAt" TIMESTAMP(3);
-
--- The sweep selects jobs by shop and updatedAt. Without this it seq-scans
--- JourneyJob once per shop per pass.
-CREATE INDEX "JourneyJob_shop_updatedAt_idx" ON "JourneyJob"("shop", "updatedAt");
-
 CREATE INDEX "Contact_shop_openRate_idx"          ON "Contact"("shop", "openRate");
 CREATE INDEX "Contact_shop_clickRate_idx"         ON "Contact"("shop", "clickRate");
 CREATE INDEX "Contact_shop_lastEmailOpenedAt_idx" ON "Contact"("shop", "lastEmailOpenedAt");

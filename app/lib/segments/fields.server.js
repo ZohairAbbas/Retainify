@@ -101,20 +101,39 @@ export function fieldsFor(isShopify) {
 /**
  * The fields a flow entry filter can use — supported ones only.
  *
- * Segments show gated fields with a "Soon" pill, and the evaluator treats them
- * as no-ops that match everyone. That is a defensible choice there: the count
- * is a little wrong and visibly marked as such.
+ * Nothing is gated today, so this currently returns the same list as
+ * fieldsFor(). The filter stays because the asymmetry it encodes is permanent.
+ *
+ * Segments show a gated field with a "Soon" pill, and the evaluator treats it
+ * as a no-op that matches everyone. That is defensible there: the count is a
+ * little wrong and visibly marked as such.
  *
  * It is not defensible here. A flow filter decides who gets mail, so a rule
  * that silently matches everyone does the opposite of what the merchant asked
  * — "only customers with an open rate above 20%" would send to the whole list.
- * Better to not offer the field than to offer one that quietly inverts itself.
+ * Better to not offer a field than to offer one that quietly inverts itself.
  *
  * @param {boolean} isShopify
  */
 export function flowFilterFieldsFor(isShopify) {
   return fieldsFor(isShopify).filter((f) => f.supported);
 }
+
+// ── A note on splits ───────────────────────────────────────────────────────
+// A split's field list is this catalog PLUS flow-scoped fields ("opened the
+// welcome email", "clicked step 2").
+//
+// Those cannot live in FIELDS. Everything here is per-contact and lifetime,
+// while a split asks about one particular step of one particular run of one
+// particular flow — a question this vocabulary cannot express. They are
+// generated per split, from the steps actually above it, by
+// flowFieldsForSplit() in lib/journey/split-conditions.server.js and evaluated
+// there too.
+//
+// They must NOT be routed through evalTreeForContact: it treats an
+// unrecognised field as a no-op returning true, which for a split would send
+// the entire audience down the Yes branch. Same trap as the paragraph above,
+// with a bigger blast radius.
 
 /** Segment starter templates a workspace can actually use. */
 export function templatesFor(isShopify) {

@@ -237,8 +237,8 @@ async function splitFlow() {
           nodeType: "split",
           splitCondition: {
             type: "group",
-            op: "and",
-            children: [{ field: "totalSpent", op: "gt", value: 999999 }],
+            match: "all",
+            children: [{ type: "rule", field: "totalSpent", op: "gt", value: 999999 }],
           },
         },
       });
