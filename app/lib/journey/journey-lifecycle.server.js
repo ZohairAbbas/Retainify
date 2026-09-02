@@ -116,7 +116,7 @@ export async function archiveJourney(journeyId) {
  * default mints one. Never generate a key for a step that arrived with one, or
  * that step silently detaches from its own send history.
  */
-export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, entryFilters, steps, triggerSegmentKey, trigger }) {
+export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, entryFilters, steps, edges, triggerSegmentKey, trigger }) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
 
@@ -173,6 +173,25 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         subject: "",
         previewText: "",
         emailName: "",
+        templateStyle: "classic",
+        discountPct: 0,
+        isEnabled: true,
+      });
+    } else if (s.nodeType === "split") {
+      rows.push({
+        ...keepKey,
+        nodeType: "split",
+        // Stored as sent. Null rather than {} for an unset condition, so
+        // isEmptyCondition and the publish check agree that nothing has been
+        // configured yet — an empty object would read as a group with no
+        // children, which is the shape that matches everybody.
+        splitCondition: s.splitCondition ?? null,
+        delayHours: 0,
+        positionY: positionY++,
+        stepNumber: positionY,
+        subject: "",
+        previewText: "",
+        emailName: s.emailName || "",
         templateStyle: "classic",
         discountPct: 0,
         isEnabled: true,
@@ -278,10 +297,14 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
     // archived rather than deleted — which means nothing cleans these up for
     // us and a stale edge would outlive its step silently.
     //
-    // Phase 1 writes the same straight line the flow already is; the canvas
-    // has no way to express a branch yet. What matters here is that the graph
-    // is rebuilt on every save from the moment the column exists, so it is
-    // never out of step with the rows it describes.
+    // Edges arrive as INDEX pairs into `steps`, not as ids. The ids do not
+    // exist yet at the moment the canvas serialises the tree, and inventing
+    // client-side ones would mean mapping them back here — a second identity
+    // scheme alongside stepKey, for no gain. Positions are unambiguous because
+    // the rows below are read back in exactly the order they were written.
+    //
+    // A flow with no edges supplied is a straight line: templates, duplicated
+    // flows, and any caller that predates branching.
     await tx.journeyEdge.deleteMany({ where: { journeyId } });
 
     const live = await tx.journeyStep.findMany({
@@ -289,15 +312,41 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
       orderBy: [{ stepNumber: "asc" }, { id: "asc" }],
       select: { id: true },
     });
-    if (live.length > 1) {
-      await tx.journeyEdge.createMany({
-        data: live.slice(0, -1).map((s, i) => ({
+
+    const edgeRows = [];
+    if (Array.isArray(edges) && edges.length) {
+      for (const e of edges) {
+        const from = live[e.from];
+        const to = live[e.to];
+        // A pair that does not resolve is a serialisation bug, and writing a
+        // partial graph would strand contacts mid-flow. Better to lose the
+        // edge loudly than to persist a tree that lies about its own shape —
+        // validateGraph blocks publishing whatever this leaves behind.
+        if (!from || !to) {
+          console.error(
+            `[saveDraft] journey ${journeyId} — edge ${e.from}→${e.to} (${e.branch}) does not resolve against ${live.length} steps; dropped`,
+          );
+          continue;
+        }
+        edgeRows.push({
           journeyId,
-          fromStepId: s.id,
+          fromStepId: from.id,
+          toStepId: to.id,
+          branch: e.branch === "yes" || e.branch === "no" ? e.branch : "next",
+        });
+      }
+    } else if (live.length > 1) {
+      for (let i = 0; i < live.length - 1; i++) {
+        edgeRows.push({
+          journeyId,
+          fromStepId: live[i].id,
           toStepId: live[i + 1].id,
           branch: "next",
-        })),
-      });
+        });
+      }
+    }
+    if (edgeRows.length) {
+      await tx.journeyEdge.createMany({ data: edgeRows });
     }
 
     await tx.journey.update({

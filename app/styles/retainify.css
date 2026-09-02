@@ -390,6 +390,112 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 /* Exit node */
 .rt-node-exit { width: 220px; background: var(--paper-2); }
 
+/* ── Branching ──────────────────────────────────────────────────────────────
+   A split's two sides sit next to each other, each drawn by the same column
+   component as the trunk. Aligned to the top rather than stretched, so two
+   branches of different lengths do not pull each other's cards out of shape.
+   The fork rule is one element rather than a border on each side, so the join
+   reads as a single line whatever the branches contain. */
+.rt-split-fork {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 48px;
+  position: relative;
+  padding-top: 22px;
+}
+.rt-split-fork::before {
+  /* The horizontal rule joining the two branches back up to the split. */
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 25%;
+  right: 25%;
+  height: 1.5px;
+  background: var(--hair-3);
+}
+.rt-split-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  position: relative;
+}
+.rt-split-side::before {
+  /* The short drop from the join rule into this branch. */
+  content: "";
+  position: absolute;
+  top: -22px;
+  left: 50%;
+  width: 1.5px;
+  height: 22px;
+  background: var(--hair-3);
+}
+.rt-split-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--hair-2);
+  background: var(--paper-1);
+  color: var(--ink-3);
+  margin-bottom: 4px;
+}
+.rt-split-yes > .rt-split-label { border-color: var(--node-split-ink); color: var(--node-split-ink); }
+.rt-node-split { width: 260px; }
+/* A split with no condition sends its entire audience down No. Said on the
+   card rather than only in the inspector, because the canvas is where a
+   merchant scans for what is unfinished. */
+.rt-node-warn { color: var(--danger-ink, #B02A20); }
+
+/* Inspector note — the "checked on arrival" caveat beside a split condition. */
+.rt-ins-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: var(--r-3);
+  background: var(--paper-2);
+  border: 1px solid var(--hair-2);
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+.rt-ins-note svg { flex: none; margin-top: 2px; }
+
+/* Delete-a-split chooser. Each option states what it discards, so the choice
+   is never blind — the builder has no undo. */
+.rt-splitdel-options { display: flex; flex-direction: column; gap: 8px; }
+.rt-splitdel-option {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-align: left;
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-3);
+  background: var(--paper-1);
+  cursor: pointer;
+}
+.rt-splitdel-option:hover { border-color: var(--ink-1); background: var(--paper-2); }
+.rt-splitdel-option:focus-visible { outline: 2px solid var(--node-split-ink); outline-offset: 2px; }
+.rt-splitdel-label { font-weight: 600; font-size: 13px; color: var(--ink-1); }
+.rt-splitdel-sub { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
+
+/* Form view marks which side of a split a step sits on; the canvas draws two
+   columns, this view has no room to. */
+.rt-form-branch {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+  margin-bottom: 10px;
+}
+.rt-form-branch-yes { color: var(--node-split-ink); }
+
 /* Email preview */
 .rt-node-preview { background: var(--paper-pure); border: 1px solid var(--hair-1); border-radius: var(--r-2); padding: 14px; }
 .rt-email-preview { font-family: Georgia, serif; color: #222; }

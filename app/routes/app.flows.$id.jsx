@@ -18,6 +18,25 @@ import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import { GroupBlock } from "../components/segments/FilterTree.jsx";
 import { emptyGroup } from "../components/segments/constants.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
+import {
+  TRIGGER_ID,
+  NEXT,
+  YES,
+  NO,
+  MAX_SPLIT_DEPTH,
+  childOf,
+  walk as walkTree,
+  splitDepth,
+  insertNode as insertTreeNode,
+  insertSplit,
+  removeNode as removeTreeNode,
+  removeSplit,
+  splitBranchSizes,
+  nodesFromSteps,
+  serializeTree,
+  newStepKey,
+  ancestorEmailNodes,
+} from "../lib/journey/canvas-tree.js";
 import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
@@ -40,7 +59,12 @@ export const loader = async ({ request, params }) => {
   const [journey, settings, whatsappTemplates] = await Promise.all([
     prisma.journey.findFirst({
       where: { id, shop },
-      include: { steps: { where: { isArchived: false }, orderBy: { positionY: "asc" } } },
+      include: {
+        steps: { where: { isArchived: false }, orderBy: { positionY: "asc" } },
+        // The shape of the flow. Without these the canvas can only draw a
+        // stack of steps and has no way to know which branch each sits on.
+        edges: true,
+      },
     }),
     prisma.shopSettings.findUnique({ where: { shop } }),
     prisma.whatsappTemplate.findMany({
@@ -54,7 +78,7 @@ export const loader = async ({ request, params }) => {
     throw new Response("Not found", { status: 404 });
   }
 
-  const canvasNodes = expandCanvasNodes(journey.steps);
+  const canvasNodes = expandCanvasNodes(journey.steps, journey.edges);
 
   // Segment trigger metadata: choices for the dropdown, plus a current-match
   // count when the flow already points at a segment. The count is the same
@@ -157,62 +181,82 @@ function normalizeEntryFilters(tree) {
   return pruned;
 }
 
-function expandCanvasNodes(steps) {
-  const nodes = [{ kind: "trigger", id: "trigger" }];
-  for (const s of steps) {
-    // stepKey rides along on every node and goes straight back to saveDraft
-    // untouched. It is the only thing tying a step to its own send history
-    // across a save — `id` is regenerated every time — so a node that loses it
-    // comes back as a brand new step with an empty report.
-    if (s.nodeType === "delay") {
-      nodes.push({ kind: "delay", id: s.id, stepKey: s.stepKey, hours: s.delayHours });
-    } else if (s.nodeType === "exit") {
-      nodes.push({ kind: "exit", id: s.id, stepKey: s.stepKey });
-    } else if (s.nodeType === "push") {
-      nodes.push({
-        kind: "push",
-        id: s.id,
-        stepKey: s.stepKey,
-        pushTitle: s.pushTitle,
-        pushBody: s.pushBody,
-        pushIconUrl: s.pushIconUrl,
-        pushClickUrl: s.pushClickUrl,
-        isEnabled: s.isEnabled,
-      });
-    } else if (s.nodeType === "whatsapp") {
-      nodes.push({
-        kind: "whatsapp",
-        id: s.id,
-        stepKey: s.stepKey,
-        waTemplateName: s.waTemplateName,
-        waLanguage: s.waLanguage,
-        waVariables: s.waVariables || {},
-        waMediaUrl: s.waMediaUrl,
-        isEnabled: s.isEnabled,
-      });
-    } else {
-      nodes.push({
-        kind: "email",
-        id: s.id,
-        stepKey: s.stepKey,
-        stepNumber: s.stepNumber,
-        emailName: s.emailName,
-        subject: s.subject,
-        previewText: s.previewText,
-        templateStyle: s.templateStyle,
-        discountPct: s.discountPct,
-        isEnabled: s.isEnabled,
-        emailMode: s.emailMode || "blocks",
-        emailHtml: s.emailHtml || "",
-        emailBlocks: safeJson(s.emailBlocks, []),
-        emailBrand: safeJson(s.emailBrand, {}),
-      });
-    }
+/**
+ * One JourneyStep row → one canvas node.
+ *
+ * stepKey rides along on every node and goes straight back to saveDraft
+ * untouched. It is the only thing tying a step to its own send history across
+ * a save — `id` is regenerated every time — so a node that loses it comes back
+ * as a brand new step with an empty report.
+ */
+function stepToNode(s) {
+  const base = { id: s.id, stepKey: s.stepKey, stepNumber: s.stepNumber };
+  if (s.nodeType === "delay") return { ...base, kind: "delay", hours: s.delayHours };
+  if (s.nodeType === "exit") return { ...base, kind: "exit" };
+  if (s.nodeType === "split") {
+    return { ...base, kind: "split", emailName: s.emailName, splitCondition: s.splitCondition || null };
   }
+  if (s.nodeType === "push") {
+    return {
+      ...base,
+      kind: "push",
+      pushTitle: s.pushTitle,
+      pushBody: s.pushBody,
+      pushIconUrl: s.pushIconUrl,
+      pushClickUrl: s.pushClickUrl,
+      isEnabled: s.isEnabled,
+    };
+  }
+  if (s.nodeType === "whatsapp") {
+    return {
+      ...base,
+      kind: "whatsapp",
+      waTemplateName: s.waTemplateName,
+      waLanguage: s.waLanguage,
+      waVariables: s.waVariables || {},
+      waMediaUrl: s.waMediaUrl,
+      isEnabled: s.isEnabled,
+    };
+  }
+  return {
+    ...base,
+    kind: "email",
+    emailName: s.emailName,
+    subject: s.subject,
+    previewText: s.previewText,
+    templateStyle: s.templateStyle,
+    discountPct: s.discountPct,
+    isEnabled: s.isEnabled,
+    emailMode: s.emailMode || "blocks",
+    emailHtml: s.emailHtml || "",
+    emailBlocks: safeJson(s.emailBlocks, []),
+    emailBrand: safeJson(s.emailBrand, {}),
+  };
+}
+
+/**
+ * Build the canvas tree from the flow's steps and edges.
+ *
+ * The trigger is a node so it can be drawn and selected, but it carries no
+ * parentId and is never a step — the tree walk starts from it by name.
+ */
+function expandCanvasNodes(steps, edges) {
+  const nodes = nodesFromSteps(steps, edges, stepToNode);
+  const withTrigger = [{ kind: "trigger", id: TRIGGER_ID }, ...nodes];
+
+  // A flow with nowhere to end. Appended to the end of the main line rather
+  // than anywhere clever: a branched flow gets its exits when each branch is
+  // built, so this only ever fires on a fresh or straight-line flow.
   if (!nodes.some((n) => n.kind === "exit")) {
-    nodes.push({ kind: "exit", id: "exit-pending" });
+    const chain = walkTree(withTrigger);
+    const last = chain[chain.length - 1];
+    return insertTreeNode(withTrigger, {
+      parentId: last ? last.id : TRIGGER_ID,
+      branch: NEXT,
+      node: { kind: "exit", id: "exit-pending" },
+    });
   }
-  return nodes;
+  return withTrigger;
 }
 
 export const action = async ({ request, params }) => {
@@ -333,9 +377,9 @@ async function persistDraft({ id, journey, fd }) {
     const rawTrigger = fd.get("trigger");
     const trigger = rawTrigger === null ? undefined : String(rawTrigger);
 
-    const stepsForSave = nodes
-      .filter((n) => n.kind !== "trigger")
-      .map((n) => {
+    // The tree, flattened to preorder steps plus index edges. Order matters:
+    // stepNumber is assigned from it, and the edges are positions into it.
+    const { steps: stepsForSave, edges } = serializeTree(nodes, (n) => {
         // Sent back exactly as it arrived, or omitted for a node the merchant
         // just added so the database mints one. Never regenerate it here: a
         // step whose key changes is a new step as far as every report is
@@ -346,6 +390,14 @@ async function persistDraft({ id, journey, fd }) {
         }
         if (n.kind === "exit") {
           return { ...stepKey, nodeType: "exit" };
+        }
+        if (n.kind === "split") {
+          return {
+            ...stepKey,
+            nodeType: "split",
+            emailName: n.emailName || "",
+            splitCondition: n.splitCondition ?? null,
+          };
         }
         // Note: a Wait node is the only thing that carries delayHours at all.
         // Timing for a sendable step is not stored anywhere — it is whatever
@@ -394,9 +446,9 @@ async function persistDraft({ id, journey, fd }) {
           emailBlocks: JSON.stringify(n.emailBlocks || []),
           emailBrand: JSON.stringify(n.emailBrand || {}),
         };
-      });
+    });
 
-    await saveDraft(id, { name, entryFrequency, exitCriteria, entryFilters, steps: stepsForSave, triggerSegmentKey, trigger });
+    await saveDraft(id, { name, entryFrequency, exitCriteria, entryFilters, steps: stepsForSave, edges, triggerSegmentKey, trigger });
 }
 
 export default function FlowBuilder() {
@@ -516,33 +568,73 @@ export default function FlowBuilder() {
   }
 
   function deleteNode(id) {
-    setNodes((arr) => arr.filter((n) => n.id !== id));
-    if (selectedId === id) setSelectedId("trigger");
+    const node = nodes.find((n) => n.id === id);
+    if (!node) return;
+    // A split has two children and no single answer for what to reconnect, so
+    // the merchant chooses which side survives. The canvas has no undo, which
+    // is exactly why there is no silent default here.
+    if (node.kind === "split") {
+      setDialog({ kind: "delete-split", id, sizes: splitBranchSizes(nodes, id) });
+      return;
+    }
+    setNodes((arr) => removeTreeNode(arr, id));
+    if (selectedId === id) setSelectedId(TRIGGER_ID);
+  }
+
+  function applySplitDelete(id, keep) {
+    const going = new Set(
+      removeSplit(nodes, id, keep).map((n) => n.id),
+    );
+    setNodes((arr) => removeSplit(arr, id, keep));
+    if (!going.has(selectedId)) setSelectedId(TRIGGER_ID);
+    setDialog(null);
   }
 
   function duplicateNode(id) {
     setNodes((arr) => {
-      const idx = arr.findIndex((n) => n.id === id);
-      if (idx === -1) return arr;
+      const node = arr.find((n) => n.id === id);
+      // Splits are not duplicable: copying one raises questions about what
+      // happens to its two subtrees that nobody has asked for yet. NodeCard
+      // hides the control; this is the guard behind it.
+      if (!node || node.kind === "split") return arr;
       // The copy is a NEW step and must not inherit stepKey — that key is what
       // ties a step to its send history, and two steps carrying the same one
       // would have their numbers silently added together in every report.
-      const { stepKey: _dropped, ...source } = arr[idx];
-      const copy = { ...source, id: `tmp-${Date.now()}` };
-      const next = [...arr];
-      next.splice(idx + 1, 0, copy);
-      return next;
+      const { stepKey: _dropped, id: _id, parentId: _p, branch: _b, ...source } = node;
+      return insertTreeNode(arr, {
+        parentId: node.id,
+        branch: NEXT,
+        node: { ...source, id: `tmp-${Date.now()}`, stepKey: newStepKey() },
+      });
     });
   }
 
-  function insertNode(afterIndex, kind) {
+  function insertNode(parentId, branch, kind) {
+    if (kind === "split") {
+      let created = null;
+      setNodes((arr) =>
+        insertSplit(arr, {
+          parentId,
+          branch,
+          makeId: () => {
+            const id = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            created = created || id;
+            return id;
+          },
+        }),
+      );
+      setOpenMenuId(null);
+      if (created) setSelectedId(created);
+      return;
+    }
     let newNode;
     if (kind === "delay") {
-      newNode = { kind: "delay", id: `tmp-${Date.now()}`, hours: 24 };
+      newNode = { kind: "delay", id: `tmp-${Date.now()}`, stepKey: newStepKey(), hours: 24 };
     } else if (kind === "push") {
       newNode = {
         kind: "push",
         id: `tmp-${Date.now()}`,
+        stepKey: newStepKey(),
         pushTitle: "",
         pushBody: "",
         pushIconUrl: "",
@@ -553,6 +645,7 @@ export default function FlowBuilder() {
       newNode = {
         kind: "whatsapp",
         id: `tmp-${Date.now()}`,
+        stepKey: newStepKey(),
         waTemplateName: "",
         waLanguage: "",
         waVariables: {},
@@ -563,6 +656,7 @@ export default function FlowBuilder() {
       newNode = {
           kind: "email",
           id: `tmp-${Date.now()}`,
+          stepKey: newStepKey(),
           stepNumber: 0,
           emailName: "New email",
           subject: "",
@@ -572,11 +666,7 @@ export default function FlowBuilder() {
           isEnabled: true,
         };
     }
-    setNodes((arr) => {
-      const next = [...arr];
-      next.splice(afterIndex + 1, 0, newNode);
-      return next;
-    });
+    setNodes((arr) => insertTreeNode(arr, { parentId, branch, node: newNode }));
     setOpenMenuId(null);
     setSelectedId(newNode.id);
   }
@@ -620,6 +710,52 @@ export default function FlowBuilder() {
     fd.set("intent", "pause");
     fetcher.submit(fd, { method: "post" });
   }
+
+  const triggerNode = useMemo(
+    () => nodes.find((n) => n.kind === "trigger") || { kind: "trigger", id: TRIGGER_ID },
+    [nodes],
+  );
+
+  /**
+   * Whether a split may be offered at a given point.
+   *
+   * Broadcasts are excluded outright: a broadcast is one message to an audience
+   * already chosen at setup, and a mid-send branch would be a second targeting
+   * mechanism leaving the merchant guessing which one decided a recipient. The
+   * same reasoning entry filters use, and publish validation enforces it on the
+   * trigger rather than trusting this menu.
+   */
+  const allowSplit = (parentId) =>
+    triggerDraft !== "broadcast" && splitDepth(nodes, parentId) < MAX_SPLIT_DEPTH;
+
+  /**
+   * The fields the selected split may ask about: every contact field, plus one
+   * per metric for each enabled email step ABOVE it.
+   *
+   * Upstream only, and computed from the canvas rather than the server, so the
+   * list updates as the merchant builds. A rule about a step further down could
+   * never be true when the split runs, so offering one would hand them a
+   * condition that silently always takes No. Field ids match the server's
+   * `flow.<metric>:<stepKey>` exactly — split-conditions.server.js parses them.
+   */
+  const splitFields = useMemo(() => {
+    if (!selected || selected.kind !== "split") return filterFields;
+    const upstream = ancestorEmailNodes(nodes, selected.id);
+    const flow = [];
+    for (const step of upstream) {
+      const name = step.emailName || step.subject || `Step ${step.stepNumber ?? ""}`.trim();
+      for (const [metric, label] of [["opened", "Opened"], ["clicked", "Clicked"], ["sent", "Was sent"]]) {
+        flow.push({
+          id: `flow.${metric}:${step.stepKey}`,
+          label: `${label}: ${name}`,
+          group: "In this flow",
+          type: "boolean",
+          supported: true,
+        });
+      }
+    }
+    return [...flow, ...filterFields];
+  }, [selected, nodes, filterFields]);
 
   const pillClass = STATUS_PILL[journey.status] || "draft";
   const pillLabel = pillClass === "active" ? "Active" : pillClass.charAt(0).toUpperCase() + pillClass.slice(1);
@@ -766,29 +902,33 @@ export default function FlowBuilder() {
           {viewMode === "canvas" ? (
             <div className="rt-canvas-pad">
               <div className="rt-canvas-col">
-                {nodes.map((node, idx) => (
-                  <Fragment key={node.id}>
-                    <NodeCard
-                      node={node}
-                      journey={journey}
-                      selected={node.id === selectedId}
-                      onSelect={() => setSelectedId(node.id)}
-                      onDuplicate={() => duplicateNode(node.id)}
-                      onDelete={() => deleteNode(node.id)}
-                      stats={stats?.[node.id]}
-                      showPreview={showPreview}
-                      showAnalytics={showAnalytics}
-                    />
-                    {node.kind !== "exit" && (
-                      <Connector
-                        id={`conn-${idx}`}
-                        openMenuId={openMenuId}
-                        setOpenMenuId={setOpenMenuId}
-                        onInsert={(kind) => insertNode(idx, kind)}
-                      />
-                    )}
-                  </Fragment>
-                ))}
+                <NodeCard
+                  node={triggerNode}
+                  journey={journey}
+                  selected={selectedId === TRIGGER_ID}
+                  onSelect={() => setSelectedId(TRIGGER_ID)}
+                  onDuplicate={() => {}}
+                  onDelete={() => {}}
+                  showPreview={showPreview}
+                  showAnalytics={showAnalytics}
+                />
+                <BranchColumn
+                  nodes={nodes}
+                  parentId={TRIGGER_ID}
+                  branch={NEXT}
+                  journey={journey}
+                  selectedId={selectedId}
+                  setSelectedId={setSelectedId}
+                  onDuplicate={duplicateNode}
+                  onDelete={deleteNode}
+                  onInsert={insertNode}
+                  openMenuId={openMenuId}
+                  setOpenMenuId={setOpenMenuId}
+                  stats={stats}
+                  showPreview={showPreview}
+                  showAnalytics={showAnalytics}
+                  allowSplit={allowSplit}
+                />
               </div>
             </div>
           ) : (
@@ -815,6 +955,7 @@ export default function FlowBuilder() {
             entryFilters={entryFilters}
             setEntryFilters={setEntryFilters}
             filterFields={filterFields}
+            splitFields={splitFields}
             filterOperators={filterOperators}
             filterTags={filterTags}
             triggerSegmentKey={triggerSegmentKey}
@@ -854,6 +995,14 @@ export default function FlowBuilder() {
             fetcher.submit({ intent: "unpublish" }, { method: "post" });
             setDialog(null);
           }}
+        />
+      )}
+
+      {dialog?.kind === "delete-split" && (
+        <DeleteSplitModal
+          sizes={dialog.sizes}
+          onCancel={() => setDialog(null)}
+          onConfirm={(keep) => applySplitDelete(dialog.id, keep)}
         />
       )}
 
@@ -907,6 +1056,69 @@ export default function FlowBuilder() {
           loading={saving}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * Removing a split: which side survives?
+ *
+ * Three outcomes rather than a default, because the branches cannot both
+ * survive in a tree and the builder has no undo — whichever side goes is gone.
+ * Each option states how many steps it discards, so the choice is never blind.
+ */
+function DeleteSplitModal({ sizes, onCancel, onConfirm }) {
+  const steps = (n) => `${n} ${n === 1 ? "step" : "steps"}`;
+  const options = [
+    {
+      keep: YES,
+      label: "Keep the Yes branch",
+      sub: sizes.no ? `Deletes the No branch — ${steps(sizes.no)}.` : "The No branch is empty.",
+    },
+    {
+      keep: NO,
+      label: "Keep the No branch",
+      sub: sizes.yes ? `Deletes the Yes branch — ${steps(sizes.yes)}.` : "The Yes branch is empty.",
+    },
+    {
+      keep: null,
+      label: "Delete both branches",
+      sub: `Deletes ${steps(sizes.yes + sizes.no)}. The flow ends where the split was.`,
+    },
+  ];
+  // Same backdrop and shell as ConfirmDialog, so this sits in the same visual
+  // family as every other destructive confirmation in the app.
+  return (
+    <div className="rt-modal-backdrop" onClick={onCancel}>
+      <div
+        className="rt-publish-modal"
+        role="alertdialog"
+        aria-modal="true"
+        aria-label="Remove this split?"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 460 }}
+      >
+        <h2 className="t-h1" style={{ margin: "0 0 8px" }}>Remove this split?</h2>
+        <p className="t-small muted" style={{ margin: "0 0 20px", lineHeight: 1.6 }}>
+          A split&apos;s two branches can&apos;t both continue, so choose which one stays.
+          This can&apos;t be undone.
+        </p>
+        <div className="rt-splitdel-options">
+          {options.map((o) => (
+            <button
+              key={String(o.keep)}
+              className="rt-splitdel-option"
+              onClick={() => onConfirm(o.keep)}
+            >
+              <span className="rt-splitdel-label">{o.label}</span>
+              <span className="rt-splitdel-sub">{o.sub}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 18 }}>
+          <button className="btn btn-secondary" onClick={onCancel}>Cancel</button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -1037,6 +1249,39 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
             <button onClick={(e) => { e.stopPropagation(); onDelete(); }}>
               <Icons.Trash size={13} />
             </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (node.kind === "split") {
+    const rules = countRules(node.splitCondition);
+    return (
+      <div
+        className={`rt-node rt-node-split${selected ? " rt-selected" : ""}`}
+        onClick={onSelect}
+      >
+        <div className="rt-node-head">
+          <div className="rt-node-glyph rt-tint-split"><Icons.Split size={14} /></div>
+          <div className="rt-node-title">{node.emailName || "Split branch"}</div>
+          <div className="rt-node-actions">
+            {/* No duplicate: copying a split would have to say what happens to
+                its two subtrees, and nobody has asked for an answer yet. */}
+            <button onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Icons.Trash size={13} />
+            </button>
+          </div>
+        </div>
+        <div className="rt-node-body">
+          <div className="rt-node-line">
+            {rules === 0 ? (
+              <span className="rt-node-warn">No condition set — everyone takes No</span>
+            ) : (
+              <span className="muted">
+                {rules} {rules === 1 ? "condition" : "conditions"}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -1213,7 +1458,124 @@ function CustomHtmlPreview({ node }) {
   );
 }
 
-function Connector({ id, openMenuId, setOpenMenuId, onInsert }) {
+/**
+ * One vertical run of the flow, from a parent's branch downwards.
+ *
+ * Walks `next` pointers until it reaches a split, then renders the two sides
+ * beside each other and recurses into each. A branch is drawn by the same
+ * component as the trunk, so a step three levels deep behaves exactly like a
+ * step at the top.
+ */
+function BranchColumn({
+  nodes,
+  parentId,
+  branch,
+  journey,
+  selectedId,
+  setSelectedId,
+  onDuplicate,
+  onDelete,
+  onInsert,
+  openMenuId,
+  setOpenMenuId,
+  stats,
+  showPreview,
+  showAnalytics,
+  allowSplit,
+}) {
+  const chain = [];
+  let cursor = childOf(nodes, parentId, branch);
+  const seen = new Set();
+  // Guarded: a cycle here would hang the render with no error on screen.
+  while (cursor && !seen.has(cursor.id)) {
+    seen.add(cursor.id);
+    chain.push(cursor);
+    cursor = cursor.kind === "split" ? null : childOf(nodes, cursor.id, NEXT);
+  }
+
+  // An empty branch still needs somewhere to add the first step.
+  if (!chain.length) {
+    return (
+      <Connector
+        id={`conn-${parentId}-${branch}`}
+        openMenuId={openMenuId}
+        setOpenMenuId={setOpenMenuId}
+        allowSplit={allowSplit(parentId)}
+        onInsert={(kind) => onInsert(parentId, branch, kind)}
+      />
+    );
+  }
+
+  return (
+    <>
+      {chain.map((node, i) => {
+        const parentOf = i === 0 ? parentId : chain[i - 1].id;
+        const branchOf = i === 0 ? branch : NEXT;
+        return (
+          <Fragment key={node.id}>
+            <Connector
+              id={`conn-${parentOf}-${branchOf}`}
+              openMenuId={openMenuId}
+              setOpenMenuId={setOpenMenuId}
+              allowSplit={allowSplit(parentOf)}
+              onInsert={(kind) => onInsert(parentOf, branchOf, kind)}
+            />
+            <NodeCard
+              node={node}
+              journey={journey}
+              selected={node.id === selectedId}
+              onSelect={() => setSelectedId(node.id)}
+              onDuplicate={() => onDuplicate(node.id)}
+              onDelete={() => onDelete(node.id)}
+              stats={stats?.[node.id]}
+              showPreview={showPreview}
+              showAnalytics={showAnalytics}
+            />
+          </Fragment>
+        );
+      })}
+
+      {chain[chain.length - 1].kind === "split" && (
+        <div className="rt-split-fork">
+          {[YES, NO].map((side) => (
+            <div className={`rt-split-side rt-split-${side}`} key={side}>
+              <div className="rt-split-label">{side === YES ? "Yes" : "No"}</div>
+              <BranchColumn
+                nodes={nodes}
+                parentId={chain[chain.length - 1].id}
+                branch={side}
+                journey={journey}
+                selectedId={selectedId}
+                setSelectedId={setSelectedId}
+                onDuplicate={onDuplicate}
+                onDelete={onDelete}
+                onInsert={onInsert}
+                openMenuId={openMenuId}
+                setOpenMenuId={setOpenMenuId}
+                stats={stats}
+                showPreview={showPreview}
+                showAnalytics={showAnalytics}
+                allowSplit={allowSplit}
+              />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {chain[chain.length - 1].kind !== "split" && chain[chain.length - 1].kind !== "exit" && (
+        <Connector
+          id={`conn-${chain[chain.length - 1].id}-${NEXT}`}
+          openMenuId={openMenuId}
+          setOpenMenuId={setOpenMenuId}
+          allowSplit={allowSplit(chain[chain.length - 1].id)}
+          onInsert={(kind) => onInsert(chain[chain.length - 1].id, NEXT, kind)}
+        />
+      )}
+    </>
+  );
+}
+
+function Connector({ id, openMenuId, setOpenMenuId, onInsert, allowSplit = false }) {
   const open = openMenuId === id;
   return (
     <div className="rt-connector">
@@ -1229,12 +1591,13 @@ function Connector({ id, openMenuId, setOpenMenuId, onInsert }) {
         open={open}
         onClose={() => setOpenMenuId(null)}
         onAdd={onInsert}
+        allowSplit={allowSplit}
       />
     </div>
   );
 }
 
-function InsertMenu({ open, onClose, onAdd }) {
+function InsertMenu({ open, onClose, onAdd, allowSplit = false }) {
   if (!open) return null;
   const item = (iconName, label, type, soon = false) => {
     const Icon = Icons[iconName];
@@ -1266,17 +1629,25 @@ function InsertMenu({ open, onClose, onAdd }) {
         <div className="t-micro muted rt-insert-heading">Timing</div>
         {item("Clock", "Wait (delay)", "delay")}
         <div className="t-micro muted rt-insert-heading">Logic</div>
-        {item("Split", "Split branch", "split", true)}
+        {/* Hidden rather than shown disabled where a split cannot go — on a
+            broadcast, or already three splits deep. A greyed control with no
+            explanation reads as a bug; a control that is not there reads as
+            "not applicable here", which is the truth. */}
+        {allowSplit && item("Split", "Split branch", "split")}
         {item("Tag", "Tag contact", "tag", true)}
       </div>
     </>
   );
 }
 
-function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, entryFilters, setEntryFilters, filterFields = [], filterOperators = {}, filterTags = [], triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
+function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, entryFilters, setEntryFilters, filterFields = [], filterOperators = {}, filterTags = [], splitFields = [], triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
   const filterFieldsById = useMemo(
     () => Object.fromEntries(filterFields.map((f) => [f.id, f])),
     [filterFields],
+  );
+  const splitFieldsById = useMemo(
+    () => Object.fromEntries(splitFields.map((f) => [f.id, f])),
+    [splitFields],
   );
   if (!node) {
     return (
@@ -1607,6 +1978,67 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
     );
   }
 
+  if (node.kind === "split") {
+    return (
+      <div className="rt-ins">
+        <div className="rt-ins-head">
+          <div className="rt-node-glyph rt-tint-split"><Icons.Split size={14} /></div>
+          <div>
+            <div className="t-micro muted">Logic step</div>
+            <div className="t-h2" style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>
+              Split branch
+            </div>
+          </div>
+        </div>
+
+        <div className="rt-ins-section">
+          <label className="field-label">Internal name</label>
+          <input
+            className="input"
+            value={node.emailName || ""}
+            placeholder="Split branch"
+            onChange={(e) => onChange({ emailName: e.target.value })}
+          />
+          <div className="field-help">Not shown to contacts.</div>
+        </div>
+
+        <div className="rt-ins-section">
+          <div className="t-micro muted">Condition</div>
+          <div className="t-small muted" style={{ margin: "6px 0 12px" }}>
+            Contacts who match go down the <b>Yes</b> branch. Everyone else goes
+            down <b>No</b>.
+          </div>
+          <GroupBlock
+            node={node.splitCondition || emptyGroup()}
+            fields={splitFields}
+            fieldsById={splitFieldsById}
+            operators={filterOperators}
+            tags={filterTags}
+            onChange={(tree) => onChange({ splitCondition: tree })}
+            canRemove={false}
+          />
+          {/* The single likeliest way to misuse this feature: a split placed
+              straight after a send evaluates before anyone could have opened
+              it, so the whole audience takes No and the feature looks broken. */}
+          <div className="rt-ins-note" style={{ marginTop: 14 }}>
+            <Icons.Clock size={13} />
+            <span>
+              Checked the moment a contact reaches this step. To branch on
+              whether they opened or clicked something, put a <b>Wait</b> above
+              this split to give them time.
+            </span>
+          </div>
+          {splitFields.length === 0 && (
+            <div className="field-help" style={{ marginTop: 10 }}>
+              Add an email above this split to branch on whether it was opened
+              or clicked.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   if (node.kind === "delay") {
     return (
       <div className="rt-ins">
@@ -1912,6 +2344,7 @@ const FORM_KIND_LABEL = {
   delay: "Delay",
   push: "Push notification",
   whatsapp: "WhatsApp",
+  split: "Split branch",
 };
 
 function formViewTitle(n) {
@@ -1919,6 +2352,7 @@ function formViewTitle(n) {
   if (n.kind === "delay") return `Wait ${formatHours(n.hours)}`;
   if (n.kind === "push") return n.pushTitle || "Push notification";
   if (n.kind === "whatsapp") return n.waTemplateName || "WhatsApp message";
+  if (n.kind === "split") return n.emailName || "Split branch";
   return n.kind;
 }
 
@@ -1950,14 +2384,23 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange, onOpenEditor
         <p className="t-small muted" style={{ margin: "12px 0 0" }}>{trig.desc}</p>
       </section>
 
-      {/* Email and delay steps */}
-      {nodes
-        .filter((n) => n.kind !== "trigger" && n.kind !== "exit")
+      {/* Steps, in the order the canvas lays them out: depth-first, Yes branch
+          before No. A branch is shown by indenting it and labelling which side
+          it is — the form view has no room to draw two columns, but it must
+          still say which steps a contact on one branch actually gets. */}
+      {walkTree(nodes)
+        .filter((n) => n.kind !== "exit")
         .map((n, i) => (
           <section
             key={n.id}
             className={`rt-form-section${selectedId === n.id ? " rt-form-selected" : ""}`}
+            style={{ marginLeft: splitDepth(nodes, n.id) * 24 }}
           >
+            {n.branch !== NEXT && (
+              <div className={`rt-form-branch rt-form-branch-${n.branch}`}>
+                {n.branch === YES ? "Yes branch" : "No branch"}
+              </div>
+            )}
             <div className="rt-form-section-head">
               {/* Every sendable kind gets its own icon and label. This used
                   to be a two-way email/delay branch, so a push or WhatsApp step
@@ -1967,6 +2410,7 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange, onOpenEditor
                 {n.kind === "delay" && <Icons.Clock size={14} />}
                 {n.kind === "push" && <Icons.Bell size={14} />}
                 {n.kind === "whatsapp" && <Icons.Whatsapp size={14} />}
+                {n.kind === "split" && <Icons.Split size={14} />}
               </div>
               <div>
                 <div className="t-micro muted">
@@ -2230,6 +2674,13 @@ function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfi
       </div>
     </div>
   );
+}
+
+/** How many rules a condition tree actually contains. */
+function countRules(tree) {
+  if (!tree) return 0;
+  if (tree.type === "group") return (tree.children || []).reduce((n, c) => n + countRules(c), 0);
+  return tree.type === "rule" ? 1 : 0;
 }
 
 function formatHours(h) {
