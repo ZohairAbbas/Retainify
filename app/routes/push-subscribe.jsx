@@ -1,5 +1,6 @@
 import prisma from "../db.server.js";
-import { upsertContact } from "../lib/contacts/contacts.server.js";
+import { upsertContact, normalizeEmail } from "../lib/contacts/contacts.server.js";
+import { recalcContactPushEnabled } from "../lib/contacts/engagement.server.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -18,10 +19,16 @@ export const action = async ({ request }) => {
     return new Response(JSON.stringify({ ok: false }), { status: 400, headers: CORS });
   }
 
-  const { shop, endpoint, p256dh, auth, anonId, contactEmail } = body;
+  const { shop, endpoint, p256dh, auth, anonId } = body;
   if (!shop || !endpoint || !p256dh || !auth) {
     return new Response(JSON.stringify({ ok: false }), { status: 400, headers: CORS });
   }
+
+  // Stored lowercased. Every consumer joins this column to Contact.email, which
+  // is always normalized on write, so a subscription saved with the case the
+  // browser happened to send matched nothing — neither the push worker looking
+  // for a recipient's endpoints nor the pushEnabled rollup below.
+  const contactEmail = normalizeEmail(body.contactEmail) || null;
 
   await prisma.pushSubscription.upsert({
     where: { shop_endpoint: { shop, endpoint } },
@@ -31,7 +38,7 @@ export const action = async ({ request }) => {
       p256dh,
       auth,
       anonId: anonId ?? null,
-      contactEmail: contactEmail ?? null,
+      contactEmail,
     },
     update: {
       isActive: true,
@@ -43,9 +50,12 @@ export const action = async ({ request }) => {
   });
 
   if (contactEmail) {
-    upsertContact({ shop, email: contactEmail, source: "push_only" }).catch((err) =>
-      console.error("[push-subscribe] upsertContact failed:", err.message),
-    );
+    // Sequenced, not parallel: pushEnabled is a column on Contact, so the row
+    // has to exist before it can be set. Still off the response path — the
+    // browser doesn't wait on either.
+    upsertContact({ shop, email: contactEmail, source: "push_only" })
+      .then(() => recalcContactPushEnabled(shop, contactEmail))
+      .catch((err) => console.error("[push-subscribe] contact rollup failed:", err.message));
   }
 
   return new Response(JSON.stringify({ ok: true }), { status: 200, headers: CORS });

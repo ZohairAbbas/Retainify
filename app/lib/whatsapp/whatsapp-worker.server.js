@@ -120,7 +120,7 @@ async function processWhatsappJob(job) {
       where: { id: job.id },
       data: { status: "cancelled", lastError: `sequence broken — ${sequence.reason}` },
     });
-    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true, channel: "whatsapp" });
     console.warn(`[whatsapp-worker] job ${job.id} cancelled — ${sequence.reason}`);
     return;
   }
@@ -338,7 +338,7 @@ async function markWhatsappJobDone(jobId, extras = {}) {
     where: { id: jobId },
     data: { status: "done", ...extras },
   });
-  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
+  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date(), channel: "whatsapp" });
 }
 
 async function markWhatsappJobFailed(jobId, error, errorClass) {
@@ -367,6 +367,6 @@ async function markWhatsappJobFailed(jobId, error, errorClass) {
     `[whatsapp-worker] job ${jobId} ${outcome.status} (${errorClass || "unclassified"}) — ${outcome.note}`,
   );
   if (outcome.status === "failed") {
-    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true, channel: "whatsapp" });
   }
 }

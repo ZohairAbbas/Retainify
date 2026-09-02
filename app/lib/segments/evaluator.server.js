@@ -6,17 +6,18 @@
 // Strategy:
 //   1. Build a Prisma `where` clause for the rule leaves the DB can handle
 //      directly (subscription status, source, has-tag, firstSeen/lastSeen,
-//      lifecycle by date proxy). This narrows the candidate set cheaply.
-//   2. For leaves that depend on per-contact aggregates (cart counts, email
-//      counts, lifecycle by stats), load up to MAX_SCAN contacts and finish
-//      the filter in JS using getContactStats + computeLifecycle.
+//      purchase and engagement aggregates). This narrows the candidate set
+//      cheaply, and a tree made only of these is counted exactly in SQL.
+//   2. For leaves that depend on per-contact aggregates the DB can't compare
+//      as columns (cart counts, lifecycle, AOV), load up to MAX_SCAN contacts
+//      and finish the filter in JS using getContactStats + computeLifecycle.
 //   3. Nested groups recurse: AND intersects, OR unions on contact-id sets.
 //
-// "Unsupported" fields (orders, AOV, rates, lastEmailOpened, push enabled)
-// short-circuit to true (treat the rule as a no-op). This keeps templates
-// like "Big spenders" loadable without throwing — the merchant sees the
-// rule rendered as disabled with a Soon chip, and the count is computed
-// as if that rule weren't there.
+// A field marked unsupported in fields.server.js short-circuits to true — the
+// rule becomes a no-op. Nothing is currently in that state; the mechanism stays
+// because a field can only ever be added to the picker before its data exists,
+// and a tree loading with a rule the evaluator has never heard of must render
+// rather than throw.
 
 import prisma from "../../db.server.js";
 import { FIELD_BY_ID } from "./fields.server.js";
@@ -42,10 +43,21 @@ const PRISMA_SAFE_FIELDS = new Set([
   "totalSpent",
   "orderCount",
   "lastOrderAt",
+  // Engagement facts, denormalized onto Contact by lib/contacts/engagement.
+  // Same reasoning: these were the four fields the picker showed greyed out,
+  // because as a live join over JourneyJob they could only be compared inside
+  // the capped JS scan below.
+  "emailsSent",
+  "emailsOpened",
+  "emailsClicked",
+  "openRate",
+  "clickRate",
+  "lastEmailOpenedAt",
+  "pushEnabled",
 ]);
 // Fields that can only be evaluated in JS, from batched contact stats:
 //   cartAbandonCount, lastCartAt, lastCartValue, hasActiveCart,
-//   emailsSent, emailsOpened, emailsClicked, lifecycleStage, aov
+//   lifecycleStage, aov
 //   (aov is derived from two columns, so it has no column of its own to filter)
 
 function isGroup(node) {
@@ -60,6 +72,30 @@ function dateThreshold(value, unit = "days") {
   const n = Number(value) || 0;
   const ms = unit === "hours" ? n * 60 * 60 * 1000 : n * DAY_MS;
   return new Date(Date.now() - ms);
+}
+
+/**
+ * Which column has to be non-zero for a rate to mean anything.
+ *
+ * Not the same column for the two rates. Click rate is measured only over sends
+ * whose domain had click tracking active — a send without it cannot record a
+ * click, so counting it would report a measurement gap as a 0% click rate. See
+ * lib/contacts/engagement.server.js.
+ */
+function denominatorFor(rateField) {
+  return rateField === "clickRate" ? "emailsClickTracked" : "emailsSent";
+}
+
+/** The numeric half of a rate comparison, without its denominator guard. */
+function numericComparison(col, rule) {
+  if (rule.op === "gt") return { [col]: { gt: Number(rule.value) || 0 } };
+  if (rule.op === "lt") return { [col]: { lt: Number(rule.value) || 0 } };
+  if (rule.op === "eq") return { [col]: Number(rule.value) || 0 };
+  if (rule.op === "between") {
+    const [lo, hi] = Array.isArray(rule.value) ? rule.value : [rule.value, rule.value2];
+    return { [col]: { gte: Number(lo) || 0, lte: Number(hi) || 0 } };
+  }
+  return null;
 }
 
 // ── Prisma WHERE translation ────────────────────────────────────────────
@@ -98,7 +134,10 @@ function ruleToPrisma(rule) {
       return null;
     }
     case "totalSpent":
-    case "orderCount": {
+    case "orderCount":
+    case "emailsSent":
+    case "emailsOpened":
+    case "emailsClicked": {
       const col = rule.field;
       const n = Number(rule.value) || 0;
       if (rule.op === "gt") return { [col]: { gt: n } };
@@ -108,6 +147,38 @@ function ruleToPrisma(rule) {
         const [lo, hi] = Array.isArray(rule.value) ? rule.value : [rule.value, rule.value2];
         return { [col]: { gte: Number(lo) || 0, lte: Number(hi) || 0 } };
       }
+      return null;
+    }
+    case "openRate":
+    case "clickRate": {
+      const col = rule.field;
+      const cmpPart = numericComparison(col, rule);
+      if (!cmpPart) return null;
+      // A contact with nothing in the denominator has no rate, and 0 is not a
+      // stand-in for one. Without this guard "open rate is less than 20%" would
+      // sweep in everyone who has never been emailed — and the same tree is what
+      // a flow entry filter runs, so it would mail exactly the people the
+      // merchant was trying to exclude. See the JS branch for the full note.
+      return { AND: [{ [denominatorFor(col)]: { gt: 0 } }, cmpPart] };
+    }
+    case "lastEmailOpenedAt": {
+      if (rule.op === "empty")   return { lastEmailOpenedAt: null };
+      if (rule.op === "in_last") return { lastEmailOpenedAt: { gte: dateThreshold(rule.value, rule.unit) } };
+      // Never opened counts as "hasn't opened in 90 days". This deliberately
+      // differs from every other date field here, where a null matches nothing
+      // — see the JS branch for why this one field is the exception.
+      if (rule.op === "more_than") {
+        return { OR: [{ lastEmailOpenedAt: null }, { lastEmailOpenedAt: { lt: dateThreshold(rule.value, rule.unit) } }] };
+      }
+      if (rule.op === "before") {
+        return { OR: [{ lastEmailOpenedAt: null }, { lastEmailOpenedAt: { lt: new Date(rule.value) } }] };
+      }
+      if (rule.op === "after") return { lastEmailOpenedAt: { gt: new Date(rule.value) } };
+      return null;
+    }
+    case "pushEnabled": {
+      if (rule.op === "is_true")  return { pushEnabled: true };
+      if (rule.op === "is_false") return { pushEnabled: false };
       return null;
     }
     case "lastOrderAt":
@@ -252,10 +323,47 @@ function evalRuleJs(rule, ctx) {
       if (rule.op === "after")     return ts >  new Date(rule.value).getTime();
       return true;
     }
-    // Email counts
-    case "emailsSent":    return cmp(num(stats.emailsSent),    rule.op, num(rule.value));
-    case "emailsOpened":  return cmp(num(stats.emailsOpened),  rule.op, num(rule.value));
-    case "emailsClicked": return cmp(num(stats.emailsClicked), rule.op, num(rule.value));
+    // Email engagement. Columns on Contact now, maintained by
+    // lib/contacts/engagement.server.js, so these read the contact row for the
+    // same reason totalSpent does — the stats object is derived from the same
+    // numbers, and one source beats two that can disagree.
+    case "emailsSent":    return cmp(num(contact.emailsSent),    rule.op, betweenOrNum(rule));
+    case "emailsOpened":  return cmp(num(contact.emailsOpened),  rule.op, betweenOrNum(rule));
+    case "emailsClicked": return cmp(num(contact.emailsClicked), rule.op, betweenOrNum(rule));
+    case "openRate":
+    case "clickRate": {
+      // A contact with an empty denominator has no rate at all, and zero is not
+      // a stand-in for one. Treating "never emailed" as 0% would make "open rate
+      // is less than 20%" match every contact who has never received anything —
+      // and because flow entry filters run this same tree, that rule would mail
+      // precisely the people the merchant wrote it to exclude.
+      const denominator = num(contact[rule.field === "clickRate" ? "emailsClickTracked" : "emailsSent"]);
+      if (!denominator) return false;
+      return cmp(num(contact[rule.field]), rule.op, betweenOrNum(rule));
+    }
+    case "lastEmailOpenedAt": {
+      const raw = contact.lastEmailOpenedAt;
+      if (rule.op === "empty") return !raw;
+      // The one date field where a null is not simply "no match".
+      //
+      // "Hasn't opened anything in 90 days" is the re-engagement and
+      // list-hygiene segment this field exists to build, and someone who has
+      // never opened has, by any reading a merchant would recognise, not opened
+      // in 90 days. Excluding them would leave exactly the most disengaged part
+      // of the list out of the segment aimed at it. `is empty` still isolates
+      // never-openers on their own when that is what is wanted.
+      if (!raw) return rule.op === "more_than" || rule.op === "before";
+      const ts = new Date(raw).getTime();
+      if (rule.op === "in_last")   return ts >= dateThreshold(rule.value, rule.unit).getTime();
+      if (rule.op === "more_than") return ts <  dateThreshold(rule.value, rule.unit).getTime();
+      if (rule.op === "before")    return ts <  new Date(rule.value).getTime();
+      if (rule.op === "after")     return ts >  new Date(rule.value).getTime();
+      return true;
+    }
+    case "pushEnabled": {
+      const on = Boolean(contact.pushEnabled);
+      return rule.op === "is_true" ? on : !on;
+    }
     default:
       return true;
   }

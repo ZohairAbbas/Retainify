@@ -37,6 +37,7 @@
 import { Webhook } from "svix";
 import prisma from "../db.server.js";
 import { unsubscribeContact } from "../lib/contacts/contacts.server.js";
+import { recalcContactEmailStats } from "../lib/contacts/engagement.server.js";
 import { canUseDomainSlot, MAX_CUSTOM_DOMAINS } from "../lib/email/domain-slots.server.js";
 
 const SECRET = process.env.RESEND_WEBHOOK_SECRET || "";
@@ -147,6 +148,24 @@ async function handleDomainUpdated(data) {
   );
 }
 
+/**
+ * Refresh the engagement columns for whoever received this send.
+ *
+ * The webhook only knows a provider message id, so the recipient has to be read
+ * back through the job's enrollment. Called only when a stamp actually landed,
+ * so a repeat event costs nothing.
+ */
+async function rollupForMessage(messageId, key = "resendMessageId") {
+  const job = await prisma.journeyJob.findFirst({
+    where: { [key]: messageId },
+    select: { shop: true, enrollment: { select: { contactEmail: true } } },
+  });
+  if (!job?.enrollment?.contactEmail) return;
+  await recalcContactEmailStats(job.shop, job.enrollment.contactEmail).catch((err) =>
+    console.error(`[resend-webhook] engagement rollup failed for messageId=${messageId}:`, err.message),
+  );
+}
+
 /** Stamp a timestamp field on whichever record owns this provider message id. */
 async function stampByMessageId(messageId, field, eventType) {
   // updateMany with the null filter makes this idempotent — a second open for
@@ -155,7 +174,13 @@ async function stampByMessageId(messageId, field, eventType) {
     where: { resendMessageId: messageId, [field]: null },
     data: { [field]: new Date() },
   });
-  if (onJob.count > 0) return true;
+  if (onJob.count > 0) {
+    // A first open or click moves this contact's rate and lastEmailOpenedAt,
+    // which segment rules read as columns — so the rollup has to follow the
+    // stamp, not wait for the next sweep.
+    await rollupForMessage(messageId);
+    return true;
+  }
 
   // Already stamped? Then this is a repeat event, not an unmatched one.
   const jobExists = await prisma.journeyJob.findFirst({
@@ -204,6 +229,9 @@ async function handleEvent(eventType, messageId, data) {
     // is usually just "nothing sent yet" rather than a fault.
     if (stamped.count > 0) {
       console.log(`[resend-webhook] ${eventType} recorded for messageId=${messageId}`);
+      // A failure retires the send from the open-rate denominator, so it has to
+      // roll up. A delivery changes none of the engagement columns.
+      if (field === "failedAt") await rollupForMessage(messageId);
     } else {
       console.log(
         `[resend-webhook] ${eventType} messageId=${messageId} matched no journey send (transactional email, or already recorded)`,

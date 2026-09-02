@@ -7,6 +7,7 @@ import { settleEnrollmentIfFinished } from "../journey/journey-queue.server.js";
 import { checkStepSequence, CANCEL, WAIT, SEQUENCE_RECHECK_MS } from "../journey/sequence-gate.server.js";
 import { decideFailureOutcome, MAX_ATTEMPTS, isStale } from "../journey/failure-policy.server.js";
 import { stopShopSending, releaseClaimedJob, cancelStaleJob } from "../journey/shop-work.server.js";
+import { recalcContactPushEnabled } from "../contacts/engagement.server.js";
 
 async function claimDuePushJobs(limit = 20) {
   const now = new Date();
@@ -108,7 +109,7 @@ async function processPushJob(job) {
       where: { id: job.id },
       data: { status: "cancelled", lastError: `sequence broken — ${sequence.reason}` },
     });
-    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true, channel: "push" });
     console.warn(`[push-worker] job ${job.id} cancelled — ${sequence.reason}`);
     return;
   }
@@ -203,6 +204,12 @@ async function processPushJob(job) {
           where: { id: sub.id },
           data: { isActive: false, unsubscribedAt: new Date() },
         });
+        // Contact.pushEnabled is what the segment rule reads, so it has to
+        // follow. A recompute rather than a flip: this contact may have other
+        // browsers still subscribed.
+        await recalcContactPushEnabled(job.shop, enrollment.contactEmail).catch((err) =>
+          console.error(`[push-worker] pushEnabled rollup failed for job=${job.id}:`, err.message),
+        );
       }
     }
   }
@@ -226,7 +233,7 @@ async function markPushJobDone(jobId, extras = {}) {
     where: { id: jobId },
     data: { status: "done", ...extras },
   });
-  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
+  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date(), channel: "push" });
 }
 
 async function markPushJobFailed(jobId, error, errorClass) {
@@ -255,6 +262,6 @@ async function markPushJobFailed(jobId, error, errorClass) {
     `[push-worker] job ${jobId} ${outcome.status} (${errorClass || "unclassified"}) — ${outcome.note}`,
   );
   if (outcome.status === "failed") {
-    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true, channel: "push" });
   }
 }

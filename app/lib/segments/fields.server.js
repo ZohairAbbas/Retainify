@@ -2,9 +2,13 @@
 //
 // Source of truth for the rule builder. Ported from the prototype's
 // segmentsdata.jsx, with a `supported` flag layered on top:
-//   - true  → backend can evaluate it in v1.
-//   - false → rendered but disabled with a "Soon" chip (no order data /
-//             per-event engagement timestamps yet).
+//   - true  → backend can evaluate it.
+//   - false → rendered but disabled with a "Soon" chip.
+//
+// Everything in the catalog is supported today. The flag stays because a field
+// can only ever reach the picker before the data behind it exists, and the
+// alternative — offering a field that quietly matches everyone — is the bug
+// this file spent its first two versions shipping.
 //
 // The list is exported to the client through route loaders so the builder
 // UI shows the exact same field set the server is willing to validate.
@@ -25,14 +29,19 @@ export const FIELDS = [
   { id: "lastCartValue",     label: "Last cart value",      group: "Cart",            type: "money",   supported: true },
   { id: "hasActiveCart",     label: "Has an active cart",   group: "Cart",            type: "boolean", supported: true },
 
-  // Email engagement — counts supported via JourneyJob; rates / last-opened
-  // need per-event timestamps that aren't stored yet.
+  // Email engagement — all backed by aggregates denormalized onto Contact (see
+  // lib/contacts/engagement.server.js). The rates and last-opened were gated
+  // while they were a live join over JourneyJob, which the evaluator could only
+  // run inside its capped JS scan; as columns they compare in SQL.
+  //
+  // A rate rule never matches a contact with an empty denominator — no sends
+  // means no rate, not a rate of zero. The evaluator carries the reasoning.
   { id: "emailsSent",        label: "Emails sent",         group: "Email engagement", type: "number",  supported: true },
   { id: "emailsOpened",      label: "Emails opened",       group: "Email engagement", type: "number",  supported: true },
-  { id: "openRate",          label: "Open rate",           group: "Email engagement", type: "percent", supported: false },
+  { id: "openRate",          label: "Open rate",           group: "Email engagement", type: "percent", supported: true },
   { id: "emailsClicked",     label: "Emails clicked",      group: "Email engagement", type: "number",  supported: true },
-  { id: "clickRate",         label: "Click rate",          group: "Email engagement", type: "percent", supported: false },
-  { id: "lastEmailOpenedAt", label: "Last email opened",   group: "Email engagement", type: "date",    supported: false },
+  { id: "clickRate",         label: "Click rate",          group: "Email engagement", type: "percent", supported: true },
+  { id: "lastEmailOpenedAt", label: "Last email opened",   group: "Email engagement", type: "date",    supported: true },
 
   // Profile — all live
   { id: "subscriptionStatus", label: "Subscription status", group: "Profile", type: "enum", supported: true,
@@ -62,7 +71,9 @@ export const FIELDS = [
   { id: "hasTag",         label: "Has tag",     group: "Profile", type: "tag",     supported: true },
   { id: "firstSeenAt",    label: "First seen",  group: "Profile", type: "date",    supported: true },
   { id: "lastSeenAt",     label: "Last seen",   group: "Profile", type: "date",    supported: true },
-  { id: "pushEnabled",    label: "Push enabled", group: "Profile", type: "boolean", supported: false },
+  // Backed by Contact.pushEnabled, recomputed whenever a browser subscription
+  // is created, removed, or reported gone by the push provider.
+  { id: "pushEnabled",    label: "Push enabled", group: "Profile", type: "boolean", supported: true },
 ];
 
 export const FIELD_BY_ID = Object.fromEntries(FIELDS.map((f) => [f.id, f]));
@@ -182,6 +193,22 @@ export const TEMPLATES = [
     rules: { type: "group", match: "all", children: [
       { type: "rule", field: "emailsOpened", op: "gt", value: 3 },
       { type: "rule", field: "orderCount", op: "eq", value: 0 },
+    ] },
+  },
+  {
+    id: "tpl_lapsed",
+    name: "Lapsed subscribers",
+    description: "Sent email, but nothing opened in 90 days",
+    icon: "Clock",
+    accent: "#E5DCCF",
+    accentInk: "#5A4A33",
+    // The standard re-engagement and list-hygiene segment. The emailsSent rule
+    // is what keeps it honest: "last email opened" is deliberately true for
+    // someone who has never opened, and without this it would also collect
+    // every contact who has never been sent anything at all.
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "emailsSent", op: "gt", value: 0 },
+      { type: "rule", field: "lastEmailOpenedAt", op: "more_than", value: 90, unit: "days" },
     ] },
   },
   {

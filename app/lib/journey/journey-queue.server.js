@@ -1,6 +1,8 @@
 import prisma from "../../db.server.js";
 import { decideFailureOutcome, MAX_ATTEMPTS } from "./failure-policy.server.js";
 import { passesEntryFilters } from "./entry-filters.server.js";
+import { loadGraph, rootId } from "./graph.server.js";
+import { createLazyEnrollment } from "./advance.server.js";
 
 /**
  * Enroll a contact in a journey — creates one JourneyJob per sendable step.
@@ -95,6 +97,50 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
     return null;
   }
 
+  // ── Lazy from here on ────────────────────────────────────────────────────
+  // Every new enrollment is walked one node at a time by advance.server.js.
+  // Nothing is scheduled now beyond the first wake-up: a flow that branches
+  // cannot have its jobs created up front, because the path is not known until
+  // the contact is standing on the split.
+  //
+  // Enrollments created BEFORE this shipped keep schedulingMode "eager" and
+  // finish exactly as they would have, on the jobs they already hold. The two
+  // modes run side by side until that backlog drains — see the drain gauge in
+  // stuck-jobs.server.js.
+  const graph = await loadGraph(journeyId);
+  const root = rootId(graph);
+  if (!root) {
+    console.warn(
+      `[enroll] journey ${journeyId} has no single starting step (${graph.rootIds.length} candidates) — skipping ${contactEmail}`,
+    );
+    return null;
+  }
+
+  return createLazyEnrollment({
+    journey,
+    contactEmail,
+    contactName,
+    payloadObj,
+    rootStepId: root,
+    rootStepKey: graph.steps.get(root)?.stepKey,
+  });
+}
+
+/**
+ * Create every job for a flow up front — the pre-branching scheduler.
+ *
+ * No longer reachable: enrollContact now creates lazy enrollments. Kept because
+ * enrollments made before the cutover are still in flight and still finishing
+ * on the jobs this produced, and reading it is the only way to understand what
+ * schedulingMode "eager" means on those rows.
+ *
+ * Delete this once the drain gauge reports zero eager enrollments and has done
+ * for longer than the longest configured flow delay.
+ *
+ * @deprecated superseded by advance.server.js
+ */
+export async function enrollContactEager(journey, contactEmail, contactName, payloadObj, steps) {
+  const journeyId = journey.id;
   const enrollment = await prisma.journeyEnrollment.create({
     data: {
       shop: journey.shop,
@@ -156,7 +202,18 @@ export async function exitEnrollment(enrollmentId, reason) {
   await prisma.$transaction([
     prisma.journeyEnrollment.update({
       where: { id: enrollmentId },
-      data: { exitReason: reason, completedAt: new Date() },
+      data: {
+        exitReason: reason,
+        completedAt: new Date(),
+        // Clearing the cursor and the wake time is what stops a lazy
+        // enrollment. Without it the advance worker keeps picking this contact
+        // up and walking them on to the next step of a flow they have just
+        // left — the exact "unsubscribed but still receiving mail" bug this
+        // function exists to prevent.
+        nextRunAt: null,
+        currentStepId: null,
+        currentStepKey: null,
+      },
     }),
     prisma.journeyJob.updateMany({
       where: { enrollmentId, status: "pending" },
@@ -232,12 +289,18 @@ const LIVE_JOB = { status: { in: ["pending", "processing"] } };
  * check is `if (enrollment.exitReason)`.
  *
  * @param {string} enrollmentId
- * @param {{ at?: Date, failed?: boolean }} [options] failed marks the closing
- *        job as a permanent failure, so the enrollment reads "ended_failed"
- *        rather than claiming it completed.
+ * @param {{ at?: Date, failed?: boolean, channel?: "email"|"push"|"whatsapp" }} [options]
+ *        `failed` marks the closing job as a permanent failure, so the
+ *        enrollment reads "ended_failed" rather than claiming it completed.
+ *        `channel` says which queue is reporting; it only matters for lazy
+ *        enrollments, where a failed email ends the flow and a failed push or
+ *        WhatsApp does not. Omitting it is read as narrative-breaking.
  * @returns {Promise<boolean>} whether this call closed the enrollment
  */
-export async function settleEnrollmentIfFinished(enrollmentId, { at = new Date(), failed = false } = {}) {
+export async function settleEnrollmentIfFinished(
+  enrollmentId,
+  { at = new Date(), failed = false, channel } = {},
+) {
   if (!enrollmentId) return false;
 
   const [emails, pushes, whatsapps] = await Promise.all([
@@ -246,6 +309,58 @@ export async function settleEnrollmentIfFinished(enrollmentId, { at = new Date()
     prisma.whatsappJob.count({ where: { enrollmentId, ...LIVE_JOB } }),
   ]);
   if (emails + pushes + whatsapps > 0) return false;
+
+  // ── Lazy enrollments are not finished just because nothing is queued ──────
+  // Under lazy scheduling "no live jobs" is the normal state BETWEEN steps —
+  // the next one has not been scheduled yet, because scheduling it is what
+  // happens next. Applying the eager rule here would close every lazy
+  // enrollment the moment its first message sent.
+  //
+  // So for lazy the job settling is a hand-off, not an ending: set the wake
+  // time and let the advance worker decide what comes next. This is the only
+  // place that hand-off happens, which is why every send worker funnels
+  // through this one function.
+  const enrollment = await prisma.journeyEnrollment.findUnique({
+    where: { id: enrollmentId },
+    select: { schedulingMode: true, exitReason: true },
+  });
+  if (enrollment?.schedulingMode === "lazy") {
+    if (enrollment.exitReason) return false;
+
+    // The one exception: a permanently failed EMAIL ends the flow here.
+    //
+    // A flow is a narrative and step 3 assumes step 1 landed — the rule
+    // sequence-gate.server.js exists to enforce. Continuing would schedule the
+    // next step only for the gate to cancel it on arrival, then settle, then
+    // schedule the one after that: every remaining step created and cancelled
+    // in turn, each one a "cancelled" row in the merchant's report.
+    //
+    // Push and WhatsApp failures do NOT stop anything, exactly as they do not
+    // gate anything: no browser subscription and no WhatsApp opt-in are benign
+    // and must not kill a perfectly good email sequence. An unattributed
+    // failure is treated as narrative-breaking, because guessing the other way
+    // means sending mail that refers back to something that never arrived.
+    const benign = channel === "push" || channel === "whatsapp";
+    if (failed && !benign) {
+      const { count } = await prisma.journeyEnrollment.updateMany({
+        where: { id: enrollmentId, exitReason: "" },
+        data: {
+          completedAt: at,
+          exitReason: "ended_failed",
+          nextRunAt: null,
+          currentStepId: null,
+          currentStepKey: null,
+        },
+      });
+      return count > 0;
+    }
+
+    await prisma.journeyEnrollment.updateMany({
+      where: { id: enrollmentId, exitReason: "" },
+      data: { nextRunAt: new Date() },
+    });
+    return false;
+  }
 
   // Guarded on exitReason "" so an enrollment already closed for a real reason
   // — exit criteria, an unsubscribe, a shop shutting down — keeps that reason
@@ -262,7 +377,7 @@ export async function markJourneyJobDone(jobId, extras = {}) {
     where: { id: jobId },
     data: { status: "done", ...extras },
   });
-  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date() });
+  await settleEnrollmentIfFinished(job.enrollmentId, { at: extras.sentAt || new Date(), channel: "email" });
 }
 
 /**
@@ -308,6 +423,6 @@ export async function markJourneyJobFailed(jobId, error, errorClass) {
 
   // Only a permanent failure ends anything; a retry still owes an outcome.
   if (outcome.status === "failed") {
-    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true, channel: "email" });
   }
 }

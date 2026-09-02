@@ -26,6 +26,7 @@
 import { createVerify } from "crypto";
 import prisma from "../db.server.js";
 import { unsubscribeContact } from "../lib/contacts/contacts.server.js";
+import { recalcContactEmailStats } from "../lib/contacts/engagement.server.js";
 
 export const action = async ({ request }) => {
   const raw = await request.text();
@@ -118,6 +119,21 @@ async function handleSesEvent(event) {
       if (!exists) {
         console.log(`[ses-webhook] unmatched messageId=${messageId} event=${type} — ignored`);
       }
+      return;
+    }
+
+    // A first open or click moves this contact's open/click rate and
+    // lastEmailOpenedAt, which segment rules filter on as columns. The webhook
+    // knows only a message id, so the recipient is read back through the job's
+    // enrollment.
+    const job = await prisma.journeyJob.findFirst({
+      where: { providerMessageId: messageId },
+      select: { shop: true, enrollment: { select: { contactEmail: true } } },
+    });
+    if (job?.enrollment?.contactEmail) {
+      await recalcContactEmailStats(job.shop, job.enrollment.contactEmail).catch((err) =>
+        console.error(`[ses-webhook] engagement rollup failed for messageId=${messageId}:`, err.message),
+      );
     }
     return;
   }

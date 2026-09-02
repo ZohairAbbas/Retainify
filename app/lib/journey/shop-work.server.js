@@ -152,7 +152,13 @@ export async function cancelStaleJob(model, job) {
         lastError: `cancelled — ${Math.round((Date.now() - new Date(job.scheduledFor).getTime()) / 3600000)}h past its send time`,
       },
     });
-    await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+    // Channel derived from the queue being reaped. A stale email ends a lazy
+    // enrollment; a stale push or WhatsApp lets it carry on, same rule the
+    // sequence gate applies.
+    await settleEnrollmentIfFinished(job.enrollmentId, {
+      failed: true,
+      channel: model === "journeyJob" ? "email" : model === "pushJob" ? "push" : "whatsapp",
+    });
   } catch (err) {
     console.error(`[shop-work] could not cancel stale ${model} ${job.id}:`, err.message);
   }

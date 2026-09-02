@@ -100,8 +100,13 @@ export async function runStuckJobReaper() {
           },
         });
         // Settle here too, or the enrollment is left open forever by a job that
-        // will never reach a terminal handler.
-        await settleEnrollmentIfFinished(job.enrollmentId, { failed: true });
+        // will never reach a terminal handler. Both queues in this loop are the
+        // benign ones — a lost push or WhatsApp must not end the email sequence
+        // it was travelling alongside.
+        await settleEnrollmentIfFinished(job.enrollmentId, {
+          failed: true,
+          channel: model === "pushJob" ? "push" : "whatsapp",
+        });
         cancelled++;
         console.warn(
           `[stuck-jobs] ${model} ${job.id} (${job.shop}) cancelled — orphaned since ${job.updatedAt.toISOString()}`,
@@ -113,4 +118,92 @@ export async function runStuckJobReaper() {
   }
 
   return { recovered, cancelled };
+}
+
+/**
+ * How long a lazy enrollment may sit with nothing scheduled and nothing queued.
+ *
+ * Generous on purpose. The legitimate version of this state lasts one worker
+ * tick: a job settles, settleEnrollmentIfFinished sets nextRunAt, the next tick
+ * advances it. Anything still in it after fifteen minutes has lost its wake-up.
+ */
+export const STALL_AFTER_MS = 15 * 60 * 1000;
+
+/**
+ * Find lazy enrollments that nobody will ever wake.
+ *
+ * ── Why this exists at all ─────────────────────────────────────────────────
+ * A lazy enrollment is only ever in one of two healthy states: parked on a
+ * nextRunAt, or waiting on a live job. A stall is neither — no wake time, no
+ * job, not exited — and it is completely silent. No job fails, nothing appears
+ * in any report, no error is logged. The contact simply stops hearing from the
+ * merchant partway through a flow, and the only evidence is an absence.
+ *
+ * This codebase has been bitten twice by exactly that shape: 1,264 jobs
+ * stranded by quiet-hours deferrals eating the retry budget, and 129
+ * enrollments left open by terminal paths that never closed them. Both were
+ * found by hand, long after the fact. The whole point of shipping this
+ * alongside the lazy scheduler rather than after it is that the scheduler
+ * introduces a third, larger way to produce the same silence.
+ *
+ * ── Reports, does not repair ───────────────────────────────────────────────
+ * Deliberately read-only. Automatically re-waking a stalled enrollment would
+ * paper over whatever caused the stall — and if the cause is a bug in the walk
+ * itself, re-waking sends the contact round it again. The count belongs on a
+ * dashboard with an alarm on it; a human decides what to do.
+ *
+ * The drain gauge rides along here because it answers the question that
+ * governs the whole cutover: how many enrollments are still on the old
+ * pre-materialized scheduler. The eager path can be deleted when this has read
+ * zero for longer than the longest flow delay.
+ *
+ * @returns {Promise<{ stalled: number, eagerRemaining: number, sample: string[] }>}
+ */
+export async function runEnrollmentStallReaper() {
+  const cutoff = new Date(Date.now() - STALL_AFTER_MS);
+
+  const [candidates, eagerRemaining] = await Promise.all([
+    prisma.journeyEnrollment.findMany({
+      where: {
+        schedulingMode: "lazy",
+        exitReason: "",
+        nextRunAt: null,
+        // Not the enrollment created seconds ago and not yet walked.
+        enrolledAt: { lt: cutoff },
+      },
+      select: { id: true, shop: true, journeyId: true, currentStepId: true },
+      take: 500,
+    }),
+    prisma.journeyEnrollment.count({ where: { schedulingMode: "eager", exitReason: "" } }),
+  ]);
+
+  if (!candidates.length) {
+    return { stalled: 0, eagerRemaining, sample: [] };
+  }
+
+  // No wake time is only a stall if there is also no job owed an outcome —
+  // otherwise this is the ordinary "waiting for a send to settle" state.
+  const ids = candidates.map((e) => e.id);
+  const live = { enrollmentId: { in: ids }, status: { in: ["pending", "processing"] } };
+  const [emails, pushes, whatsapps] = await Promise.all([
+    prisma.journeyJob.findMany({ where: live, select: { enrollmentId: true }, distinct: ["enrollmentId"] }),
+    prisma.pushJob.findMany({ where: live, select: { enrollmentId: true }, distinct: ["enrollmentId"] }),
+    prisma.whatsappJob.findMany({ where: live, select: { enrollmentId: true }, distinct: ["enrollmentId"] }),
+  ]);
+  const busy = new Set([...emails, ...pushes, ...whatsapps].map((j) => j.enrollmentId));
+
+  const stalled = candidates.filter((e) => !busy.has(e.id));
+  if (stalled.length) {
+    console.error(
+      `[stall-reaper] ${stalled.length} lazy enrollment(s) have no wake time and no queued work — ` +
+        `these contacts have silently stopped mid-flow. ` +
+        `Sample: ${stalled.slice(0, 5).map((e) => `${e.id}@${e.shop}(step ${e.currentStepId || "none"})`).join(", ")}`,
+    );
+  }
+
+  return {
+    stalled: stalled.length,
+    eagerRemaining,
+    sample: stalled.slice(0, 20).map((e) => e.id),
+  };
 }

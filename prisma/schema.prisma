@@ -193,6 +193,12 @@ model ShopSettings {
   shopifyCustomerSyncLastError       String    @default("")
   // Segments feature — daily snapshot worker. No-op unless ≥24h elapsed.
   lastSegmentSnapshotAt              DateTime?
+  // Engagement rollup reconciliation. The send path and the open/click webhooks
+  // keep Contact's engagement columns current; this cursor drives the sweep that
+  // repairs whatever a dropped webhook or a crashed worker left behind. Null
+  // means "never swept", which is correct for a shop whose columns were just
+  // backfilled by the migration.
+  lastEngagementRollupAt             DateTime?
   // Historical order backfill. Resumable: the cursor lets a shop with years of
   // orders be processed across several passes instead of one request that
   // times out. ordersBackfilledAt is set only on completion.
@@ -282,6 +288,36 @@ model Contact {
   totalSpent         Float     @default(0)
   firstOrderAt       DateTime?
   lastOrderAt        DateTime?
+  // ── Email engagement facts, rolled up from JourneyJob ──────────────────
+  // Here for exactly the reason the purchase facts above are: a rate or a
+  // last-opened date computed per query is a join the evaluator can only run
+  // inside its 5,000-contact JS scan, which is why these four segment fields
+  // shipped greyed out. As columns they translate into a Prisma WHERE and the
+  // count is exact at any audience size.
+  // Maintained by recalcContactEmailStats() (lib/contacts/engagement.server.js).
+  //
+  // emailsSent counts sends the provider accepted and did not later fail, so a
+  // bounce doesn't sit in an open-rate denominator forever.
+  emailsSent         Int       @default(0)
+  emailsOpened       Int       @default(0)
+  emailsClicked      Int       @default(0)
+  // Sends that left on a domain with click tracking active — the click-rate
+  // denominator, and NOT the same number as emailsSent. A send with
+  // clickTracked false can never record a click, so counting it would report a
+  // measurement gap as a 0% click rate. Every send made before click tracking
+  // shipped is in that state, so for most existing contacts this is zero and
+  // clickRate rules correctly decline to match them at all.
+  emailsClickTracked Int       @default(0)
+  // Percentages, 0-100, stored rather than derived: derived means a SQL
+  // expression, and an expression is neither indexable nor expressible in a
+  // Prisma where. Recomputed with their inputs, never edited on their own.
+  openRate           Float     @default(0)
+  clickRate          Float     @default(0)
+  lastEmailOpenedAt  DateTime?
+  // Whether any browser push subscription for this address is still active.
+  // PushSubscription joins to a contact by email string rather than a foreign
+  // key, so there is no relation for a where clause to traverse.
+  pushEnabled        Boolean   @default(false)
   // Merchant-defined properties, keyed by ContactPropertyDef.key. Stored as
   // JSONB rather than one column per field so a merchant can add a property
   // without a migration; the definitions table gives the keys type and meaning.
@@ -293,6 +329,9 @@ model Contact {
   updatedAt          DateTime  @updatedAt
 
   tags ContactTag[]
+  // No index on pushEnabled: a two-value column has no selectivity to offer, so
+  // the planner would ignore it in favour of one of the shop-prefixed indexes
+  // above.
 
   @@unique([shop, email])
   // GIN index for the merchant-defined property bag. Declared here rather than
@@ -305,6 +344,9 @@ model Contact {
   @@index([shop, whatsappStatus])
   @@index([shop, lastOrderAt])
   @@index([shop, totalSpent])
+  @@index([shop, openRate])
+  @@index([shop, clickRate])
+  @@index([shop, lastEmailOpenedAt])
 }
 
 // Merchant-defined tag — per shop. `nameKey` is the lowercased uniqueness key;
@@ -789,6 +831,14 @@ model JourneyEnrollment {
   // exactly as they would have.
   schedulingMode String    @default("eager") // eager | lazy
   currentStepId  String?
+  // The cursor's stepKey, carried alongside its id.
+  //
+  // saveDraft deletes and recreates every step, so currentStepId stops existing
+  // the moment a merchant edits a flow that has contacts in it. The id alone
+  // cannot be recovered from — a deleted row leaves nothing to look the key up
+  // on — so the key travels with the cursor and the walk can put the contact
+  // back on the step they were actually standing on.
+  currentStepKey String?
   nextRunAt      DateTime?
 
   journey      Journey            @relation(fields: [journeyId], references: [id], onDelete: Cascade)
@@ -848,6 +898,9 @@ model JourneyJob {
   // drives from the click window instead and the query goes quadratic — 1.1s on
   // a store with 3,355 sends, 31ms with it.
   @@index([enrollmentId, clickedAt])
+  // The engagement rollup sweep asks "which jobs changed since the last pass",
+  // per shop. Without this it seq-scans the table on every pass.
+  @@index([shop, updatedAt])
 }
 
 // Browser push subscriptions — one row per browser per shop

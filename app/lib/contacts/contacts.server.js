@@ -208,16 +208,21 @@ export function computeLifecycle(contact, stats) {
 }
 
 /**
- * Per-contact stats computed on read. Aggregates from existing tables
- * (AbandonedCart, JourneyJob, PushJob). Orders / spend are deferred to v2.
+ * Per-contact stats computed on read. Cart figures are aggregated from
+ * AbandonedCart and push figures from PushJob; purchase and email engagement
+ * are read off the Contact row, where lib/orders and lib/contacts/engagement
+ * maintain them.
+ *
+ * Engagement used to be counted here with three JourneyJob queries of its own.
+ * It is read rather than recounted now so that this function and the segment
+ * evaluator cannot produce different numbers for the same contact — an open
+ * rate on the contact page that disagreed with the segment the contact did or
+ * didn't land in would be indistinguishable from a bug in either one.
  */
 export async function getContactStats(shop, email) {
   const lower = normalizeEmail(email);
   const [
     cartAggregate,
-    emailSent,
-    emailOpened,
-    emailClicked,
     pushSent,
     pushClicked,
   ] = await Promise.all([
@@ -225,27 +230,6 @@ export async function getContactStats(shop, email) {
       where: { shop, customerEmail: lower },
       _count: { _all: true },
       _max: { abandonedAt: true, totalPrice: true },
-    }),
-    prisma.journeyJob.count({
-      where: {
-        shop,
-        sentAt: { not: null },
-        enrollment: { contactEmail: lower },
-      },
-    }),
-    prisma.journeyJob.count({
-      where: {
-        shop,
-        openedAt: { not: null },
-        enrollment: { contactEmail: lower },
-      },
-    }),
-    prisma.journeyJob.count({
-      where: {
-        shop,
-        clickedAt: { not: null },
-        enrollment: { contactEmail: lower },
-      },
     }),
     prisma.pushJob.count({
       where: {
@@ -266,11 +250,17 @@ export async function getContactStats(shop, email) {
     }),
   ]);
 
-  // Purchase facts live on the Contact row itself (maintained by lib/orders),
-  // so they cost one lookup rather than an aggregate over Order.
+  // Purchase and engagement facts live on the Contact row itself (maintained by
+  // lib/orders and lib/contacts/engagement), so they cost one lookup rather
+  // than an aggregate per figure.
   const contactRow = await prisma.contact.findUnique({
     where: { shop_email: { shop, email: lower } },
-    select: { orderCount: true, totalSpent: true, lastOrderAt: true },
+    select: {
+      orderCount: true, totalSpent: true, lastOrderAt: true,
+      emailsSent: true, emailsOpened: true, emailsClicked: true,
+      emailsClickTracked: true, openRate: true, clickRate: true,
+      lastEmailOpenedAt: true, pushEnabled: true,
+    },
   });
 
   return buildStats({
@@ -280,9 +270,14 @@ export async function getContactStats(shop, email) {
     cartAbandonCount: cartAggregate._count?._all || 0,
     lastCartAbandonAt: cartAggregate._max?.abandonedAt || null,
     lastCartValue: cartAggregate._max?.totalPrice || 0,
-    emailsSent: emailSent,
-    emailsOpened: emailOpened,
-    emailsClicked: emailClicked,
+    emailsSent: contactRow?.emailsSent || 0,
+    emailsOpened: contactRow?.emailsOpened || 0,
+    emailsClicked: contactRow?.emailsClicked || 0,
+    emailsClickTracked: contactRow?.emailsClickTracked || 0,
+    openRate: contactRow?.openRate || 0,
+    clickRate: contactRow?.clickRate || 0,
+    lastEmailOpenedAt: contactRow?.lastEmailOpenedAt || null,
+    pushEnabled: Boolean(contactRow?.pushEnabled),
     pushesSent: pushSent,
     pushesClicked: pushClicked,
   });
@@ -290,9 +285,6 @@ export async function getContactStats(shop, email) {
 
 /** Shared stats shape — keeps getContactStats and the batch variant identical. */
 function buildStats(parts = {}) {
-  const emailsSent = parts.emailsSent || 0;
-  const emailsOpened = parts.emailsOpened || 0;
-  const emailsClicked = parts.emailsClicked || 0;
   const orderCount = parts.orderCount || 0;
   return {
     // Real figures now, from the aggregates lib/orders maintains on Contact.
@@ -304,11 +296,18 @@ function buildStats(parts = {}) {
     cartAbandonCount: parts.cartAbandonCount || 0,
     lastCartAbandonAt: parts.lastCartAbandonAt || null,
     lastCartValue: parts.lastCartValue || 0,
-    emailsSent,
-    emailsOpened,
-    emailsClicked,
-    openRate: emailsSent > 0 ? (emailsOpened / emailsSent) * 100 : 0,
-    clickRate: emailsSent > 0 ? (emailsClicked / emailsSent) * 100 : 0,
+    // Passed through rather than recomputed. The rates are stored alongside
+    // their inputs precisely so there is one definition of them, held in
+    // lib/contacts/engagement.server.js — recomputing here would quietly
+    // reintroduce a second, with different denominators.
+    emailsSent: parts.emailsSent || 0,
+    emailsOpened: parts.emailsOpened || 0,
+    emailsClicked: parts.emailsClicked || 0,
+    emailsClickTracked: parts.emailsClickTracked || 0,
+    openRate: parts.openRate || 0,
+    clickRate: parts.clickRate || 0,
+    lastEmailOpenedAt: parts.lastEmailOpenedAt || null,
+    pushEnabled: Boolean(parts.pushEnabled),
     pushesSent: parts.pushesSent || 0,
     pushesClicked: parts.pushesClicked || 0,
   };
@@ -322,7 +321,9 @@ export function emptyContactStats() {
  * Batch version of getContactStats. Same per-contact shape, but computed with
  * three grouped queries instead of six per contact — segment evaluation scans
  * thousands of contacts and the per-contact form was an N+1 (see the JS-eval
- * path in segments/evaluator.server.js).
+ * path in segments/evaluator.server.js). The JourneyJob join that used to be
+ * the most expensive of them is gone entirely: email engagement is columns on
+ * Contact now, and comes back with the purchase facts in the same query.
  *
  * Returns a Map keyed by normalized email. Emails with no activity are present
  * with a zeroed stats object, so callers never need a null check.
@@ -340,24 +341,16 @@ export async function getContactStatsBatch(shop, emails) {
     ? Prisma.empty
     : Prisma.sql`AND e."contactEmail" IN (${Prisma.join(list)})`;
 
-  const [cartRows, journeyRows, pushRows] = await Promise.all([
+  const [cartRows, pushRows] = await Promise.all([
     prisma.abandonedCart.groupBy({
       by: ["customerEmail"],
       where: { shop, ...(wide ? {} : { customerEmail: { in: list } }) },
       _count: { _all: true },
       _max: { abandonedAt: true, totalPrice: true },
     }),
-    // JourneyJob/PushJob only reach the contact through their enrollment, which
-    // Prisma's groupBy cannot traverse — one grouped join each instead.
-    prisma.$queryRaw`
-      SELECT e."contactEmail" AS email,
-             COUNT(*) FILTER (WHERE j."sentAt" IS NOT NULL)    AS sent,
-             COUNT(*) FILTER (WHERE j."openedAt" IS NOT NULL)  AS opened,
-             COUNT(*) FILTER (WHERE j."clickedAt" IS NOT NULL) AS clicked
-        FROM "JourneyJob" j
-        JOIN "JourneyEnrollment" e ON e."id" = j."enrollmentId"
-       WHERE j."shop" = ${shop} ${emailFilter}
-       GROUP BY e."contactEmail"`,
+    // PushJob only reaches the contact through its enrollment, which Prisma's
+    // groupBy cannot traverse — a grouped join instead. Email engagement used
+    // to need the same treatment; it is read off Contact below now.
     prisma.$queryRaw`
       SELECT e."contactEmail" AS email,
              COUNT(*) FILTER (WHERE p."sentAt" IS NOT NULL)    AS sent,
@@ -375,15 +368,6 @@ export async function getContactStatsBatch(shop, emails) {
     s.lastCartAbandonAt = row._max?.abandonedAt || null;
     s.lastCartValue = row._max?.totalPrice || 0;
   }
-  for (const row of journeyRows) {
-    const s = out.get(normalizeEmail(row.email));
-    if (!s) continue;
-    s.emailsSent = Number(row.sent) || 0;
-    s.emailsOpened = Number(row.opened) || 0;
-    s.emailsClicked = Number(row.clicked) || 0;
-    s.openRate = s.emailsSent > 0 ? (s.emailsOpened / s.emailsSent) * 100 : 0;
-    s.clickRate = s.emailsSent > 0 ? (s.emailsClicked / s.emailsSent) * 100 : 0;
-  }
   for (const row of pushRows) {
     const s = out.get(normalizeEmail(row.email));
     if (!s) continue;
@@ -391,10 +375,20 @@ export async function getContactStatsBatch(shop, emails) {
     s.pushesClicked = Number(row.clicked) || 0;
   }
 
-  // Purchase facts, straight off the Contact rows — one query for the batch.
+  // Purchase and email engagement facts, straight off the Contact rows — one
+  // query for the batch. The engagement figures were a grouped join over
+  // JourneyJob until they became columns; reading them here rather than
+  // recomputing keeps this function and the segment evaluator on one set of
+  // numbers, which is the only way the contact page and a segment count can be
+  // guaranteed to agree.
   const contactRows = await prisma.contact.findMany({
     where: { shop, email: { in: list } },
-    select: { email: true, orderCount: true, totalSpent: true, lastOrderAt: true },
+    select: {
+      email: true, orderCount: true, totalSpent: true, lastOrderAt: true,
+      emailsSent: true, emailsOpened: true, emailsClicked: true,
+      emailsClickTracked: true, openRate: true, clickRate: true,
+      lastEmailOpenedAt: true, pushEnabled: true,
+    },
   });
   for (const row of contactRows) {
     const s = out.get(row.email);
@@ -403,6 +397,14 @@ export async function getContactStatsBatch(shop, emails) {
     s.totalSpent = row.totalSpent || 0;
     s.lastOrderAt = row.lastOrderAt || null;
     s.aov = s.orderCount ? s.totalSpent / s.orderCount : 0;
+    s.emailsSent = row.emailsSent || 0;
+    s.emailsOpened = row.emailsOpened || 0;
+    s.emailsClicked = row.emailsClicked || 0;
+    s.emailsClickTracked = row.emailsClickTracked || 0;
+    s.openRate = row.openRate || 0;
+    s.clickRate = row.clickRate || 0;
+    s.lastEmailOpenedAt = row.lastEmailOpenedAt || null;
+    s.pushEnabled = Boolean(row.pushEnabled);
   }
 
   return out;

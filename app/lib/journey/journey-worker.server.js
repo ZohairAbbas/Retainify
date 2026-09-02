@@ -28,6 +28,7 @@ import { PERMANENT, isStale } from "./failure-policy.server.js";
 import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.server.js";
 import { stopShopSending, releaseClaimedJob, cancelStaleJob } from "./shop-work.server.js";
 import { checkStepSequence, CANCEL, WAIT, SEQUENCE_RECHECK_MS } from "./sequence-gate.server.js";
+import { recalcContactEmailStats } from "../contacts/engagement.server.js";
 
 
 export async function runJourneyWorker() {
@@ -103,7 +104,7 @@ async function processJourneyJob(job) {
       where: { id: job.id },
       data: { status: "cancelled", lastError: `sequence broken — ${sequence.reason}` },
     });
-    await settleEnrollmentIfFinished(enrollment.id, { failed: true });
+    await settleEnrollmentIfFinished(enrollment.id, { failed: true, channel: "email" });
     console.warn(`[journey-worker] job ${job.id} cancelled — ${sequence.reason}`);
     return;
   }
@@ -281,6 +282,15 @@ async function processJourneyJob(job) {
     // today's untracked sends were measured.
     clickTracked: sendingDomainTracksClicks({ settings }),
   });
+
+  // Roll the send into the contact's engagement columns, which segment rules
+  // filter on directly. Deliberately after the job is marked done and outside
+  // its success path's error handling: a rollup that fails must not make the
+  // worker retry a send that already went out. The reconciliation sweep repairs
+  // whatever a failure here leaves behind.
+  await recalcContactEmailStats(shop, enrollment.contactEmail).catch((err) =>
+    console.error(`[journey-worker] engagement rollup failed for job=${job.id}:`, err.message),
+  );
 }
 
 function defaultSubject(trigger, stepNumber, storeName) {
