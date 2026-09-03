@@ -20,6 +20,7 @@ import { stopShopSending, releaseClaimedJob, cancelStaleJob } from "../journey/s
 import { settleEnrollmentIfFinished } from "../journey/journey-queue.server.js";
 import { checkStepSequence, CANCEL, WAIT, SEQUENCE_RECHECK_MS } from "../journey/sequence-gate.server.js";
 import { decideFailureOutcome, MAX_ATTEMPTS, isStale } from "../journey/failure-policy.server.js";
+import { toE164 } from "../contacts/contacts.server.js";
 import { sendWhatsapp } from "./index.server.js";
 
 async function claimDueWhatsappJobs(limit = 20) {
@@ -170,6 +171,22 @@ async function processWhatsappJob(job) {
     return;
   }
 
+  // The opt-in path validates on the way in, but the no-opt-in fallback reads
+  // Contact.phone, which comes from Shopify and CSV imports and is stored as
+  // whatever the merchant had. Sending a national-format number would earn a
+  // permanent-failure code and get the contact suppressed forever, so an
+  // unsendable one is skipped instead — the number stays, and starts working
+  // the moment the merchant corrects it.
+  const shape = toE164(phoneNumber);
+  if (!shape.ok) {
+    console.warn(
+      `[whatsapp-worker] job=${job.id} phone for contactEmail=${enrollment.contactEmail} is not in international format — ${shape.error} — skipping`,
+    );
+    await markWhatsappJobDone(job.id);
+    return;
+  }
+  phoneNumber = shape.phone;
+
   // Suppression / STOP opt-out — ALWAYS enforced regardless of opt-in mode.
   const suppressed = await prisma.whatsappSuppression.findUnique({
     where: { shop_phoneNumber: { shop: job.shop, phoneNumber } },
@@ -251,6 +268,20 @@ async function processWhatsappJob(job) {
     await markWhatsappJobDone(job.id, { failedAt: new Date(), lastError: result.error || "invalid recipient" });
     console.warn(`[whatsapp-worker] job=${job.id} permanent failure — suppressed ${phoneNumber}`);
     return;
+  }
+
+  // The connection is broken, not this message. Record it on the account so the
+  // WhatsApp page can say what happened — otherwise the merchant's only symptom
+  // is that nothing arrives, with a healthy-looking "Connected" badge above a
+  // queue quietly retrying an unauthorized token for 24 hours.
+  if (result.accountError) {
+    await prisma.whatsappAccount
+      .update({
+        where: { shop: job.shop },
+        data: { lastError: String(result.error || "").slice(0, 500) },
+      })
+      .catch(() => {});
+    console.error(`[whatsapp-worker] shop=${job.shop} connection error — ${result.error}`);
   }
 
   await markWhatsappJobFailed(job.id, result.error || "send failed");

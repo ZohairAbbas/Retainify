@@ -24,6 +24,50 @@ export function normalizePhone(raw) {
   const digits = String(raw).replace(/[^\d]/g, "");
   return digits;
 }
+
+/**
+ * Is this a number WhatsApp can actually deliver to?
+ *
+ * normalizePhone only strips punctuation, which is right for a stored contact
+ * phone — a number typed at checkout is still worth keeping even if we can't
+ * message it. WhatsApp is stricter: Meta wants full international format, and a
+ * national-format number is not merely rejected but rejected *permanently*, so
+ * the worker suppresses the recipient and the shop loses that subscriber for
+ * good. Catching it at the point of entry is the only place the shopper is
+ * still there to correct it.
+ *
+ * A leading zero is the giveaway: it is the national trunk prefix, and no
+ * country calling code begins with one. Beyond that, E.164 allows 15 digits
+ * total, and nothing shorter than 8 is a real mobile number with a country code
+ * in front of it.
+ *
+ * @param {string} raw
+ * @returns {{ ok: true, phone: string } | { ok: false, error: string }}
+ */
+export function toE164(raw) {
+  let digits = normalizePhone(raw);
+  if (!digits) return { ok: false, error: "Enter a phone number." };
+  // "00" is the international dialling prefix in most of the world, so
+  // 00447700900123 already IS the number we want with a standard prefix in
+  // front. Dropping it is a fixed substitution for "+", not a guess about
+  // which country the caller is in — the leading-zero rejection below is for
+  // a national trunk code, which genuinely lacks the information to fix.
+  if (digits.startsWith("00")) digits = digits.slice(2);
+  if (digits.startsWith("0")) {
+    return {
+      ok: false,
+      error: "Start with your country code instead of 0 — for example 447700900123, not 07700900123.",
+    };
+  }
+  if (digits.length < 8 || digits.length > 15) {
+    return {
+      ok: false,
+      error: "That doesn't look like a full international number. Include your country code, with no leading 0.",
+    };
+  }
+  return { ok: true, phone: digits };
+
+}
 const VALID_SOURCES = new Set([
   "popup",
   "cart_abandoned",

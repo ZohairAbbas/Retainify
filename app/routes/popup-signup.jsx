@@ -23,7 +23,7 @@ import { sendEmail, resolveFrom, resolveProvider } from "../lib/email/index.serv
 import { checkShopHealth, SHOP_CLOSED, SHOP_UNINSTALLED } from "../lib/shopify/shop-health.server.js";
 import { renderConfirmationEmail } from "../lib/email/templates.server.js";
 import { generateConfirmToken } from "../lib/email/confirm.server.js";
-import { upsertContact, normalizeEmail, normalizePhone } from "../lib/contacts/contacts.server.js";
+import { upsertContact, normalizeEmail, toE164 } from "../lib/contacts/contacts.server.js";
 import { recordOptIn } from "../lib/whatsapp/optin.server.js";
 import { hit, clientIp } from "../lib/security/rate-limit.server.js";
 
@@ -50,8 +50,8 @@ const SHOP_WINDOW_MS = 60 * 60 * 1000;
 
 /** Every rejection returns this. Never leak whether the shop, address or rate
  *  limit was the reason — that turns the endpoint into an oracle. */
-function accepted() {
-  return new Response(JSON.stringify({ ok: true, message: "check_email" }), {
+function accepted(extra) {
+  return new Response(JSON.stringify({ ok: true, message: "check_email", ...extra }), {
     status: 200,
     headers: CORS,
   });
@@ -75,8 +75,18 @@ export const action = async ({ request }) => {
   // WhatsApp opt-in, captured by the popup when the merchant enables it. Both
   // must be present: a phone number is not consent, and a ticked box with no
   // number is nothing to send to.
-  const phone = normalizePhone(body.phone);
   const waConsent = body.whatsappConsent === true || body.whatsappConsent === "true";
+  // A consented number is held to WhatsApp's standard, not the contacts one: a
+  // national-format number is rejected by Meta permanently, and the worker
+  // reacts to that by suppressing the subscriber for good. Refusing the opt-in
+  // here — while still completing the email signup — is the only outcome that
+  // doesn't quietly cost the shop a subscriber it thinks it has.
+  const phoneCheck = body.phone ? toE164(body.phone) : { ok: false, error: "" };
+  const phone = phoneCheck.ok ? phoneCheck.phone : "";
+  const phoneRejected = waConsent && !phoneCheck.ok;
+  if (phoneRejected) {
+    console.warn(`[popup-signup] WhatsApp opt-in rejected for shop=${shop} — ${phoneCheck.error}`);
+  }
 
   // 1. Shape.
   if (!email || !EMAIL_RE.test(email) || !SHOP_RE.test(shop)) {
@@ -245,7 +255,10 @@ export const action = async ({ request }) => {
     })
     .catch((err) => console.error("[popup-signup] confirmation email failed:", err.message));
 
-  return accepted();
+  // The email signup succeeded either way; whatsappError says only that the
+  // WhatsApp opt-in was not recorded, so the popup can say so rather than
+  // letting the shopper believe they subscribed to a channel they didn't.
+  return accepted(phoneRejected ? { whatsappError: phoneCheck.error } : undefined);
 };
 
 // CORS preflight

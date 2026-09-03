@@ -406,13 +406,18 @@ export default function CampaignAnalytics() {
                 {s.clickTracked !== false && s.sent ? pct(s.clickRate) : "—"}
               </div>
               <div className="rt-tnum t-mono">{fmt(s.failed)}</div>
-              {/* WhatsApp records no click, so it can never carry credit under
-                  a click-based model — a dash, not a zero. */}
+              {/* WhatsApp DOES carry credit now: a template created here has
+                  our redirect in its URL buttons, so the tap comes back
+                  through /w/:token and attribution reads clickedAt exactly as
+                  it reads email's and push's. Only a template synced from Meta
+                  is unmeasurable — clickTracked is already false for those, so
+                  it is the right test here, and the blanket channel check this
+                  replaced was hiding revenue the backend had computed. */}
               <div className="rt-tnum t-mono">
-                {s.channel === "whatsapp" || s.orders === null ? "—" : fmt(s.orders)}
+                {s.clickTracked === false || s.orders === null ? "—" : fmt(s.orders)}
               </div>
               <div className="rt-tnum t-mono">
-                {s.channel === "whatsapp" || s.revenue === null
+                {s.clickTracked === false || s.revenue === null
                   ? "—"
                   : money(s.revenue, s.currency)}
               </div>

@@ -192,17 +192,20 @@ export async function validateFlowForPublish(journeyId) {
   // for THIS shop — a name that doesn't resolve is rejected at send time with an
   // opaque provider error.
   const usesWhatsapp = sendable.some((s) => s.nodeType === "whatsapp");
-  let approvedTemplates = new Set();
+  // Keyed by "name|language": a template is approved for one language at a
+  // time, and picking a step's language from a different row is exactly the
+  // mistake that produces Meta's opaque "template not found" at send time.
+  let approvedTemplates = new Map();
   if (usesWhatsapp) {
     const [account, settings, templates] = await Promise.all([
       prisma.whatsappAccount.findUnique({ where: { shop: journey.shop } }),
       prisma.shopSettings.findUnique({ where: { shop: journey.shop } }),
       prisma.whatsappTemplate.findMany({
         where: { shop: journey.shop, status: "APPROVED" },
-        select: { name: true },
+        select: { name: true, language: true, bodyText: true, components: true },
       }),
     ]);
-    approvedTemplates = new Set(templates.map((t) => t.name));
+    approvedTemplates = new Map(templates.map((t) => [`${t.name}|${t.language}`, t]));
 
     if (!account || account.status !== "connected") {
       errors.push({
@@ -243,16 +246,56 @@ export async function validateFlowForPublish(journeyId) {
 
     if (step.nodeType === "whatsapp") {
       const name = String(step.waTemplateName || "").trim();
+      const language = String(step.waLanguage || "").trim() || "en_US";
+      const template = approvedTemplates.get(`${name}|${language}`);
+
       if (!name) {
         errors.push({ stepNumber: at, message: `Step ${at}: pick an approved WhatsApp template.` });
-      } else if (approvedTemplates.size && !approvedTemplates.has(name)) {
+      } else if (approvedTemplates.size && !template) {
         errors.push({
           stepNumber: at,
-          message: `Step ${at}: the WhatsApp template "${name}" is no longer approved. Re-sync templates and pick another.`,
+          message: `Step ${at}: the WhatsApp template "${name}" (${language}) is no longer approved. Re-sync templates and pick another.`,
         });
+      } else if (template) {
+        // Meta rejects the send outright if the parameter count doesn't match
+        // the approved body, with an error that names neither the template nor
+        // the missing variable. Catching it at publish is the difference
+        // between a fixable message and a flow that silently sends nothing.
+        const vars = step.waVariables && typeof step.waVariables === "object" ? step.waVariables : {};
+        const missing = bodyVarNumbers(template.bodyText).filter(
+          (n) => !String(vars[String(n)] ?? "").trim(),
+        );
+        if (missing.length) {
+          errors.push({
+            stepNumber: at,
+            message: `Step ${at}: the WhatsApp template "${name}" needs a value for ${missing
+              .map((n) => `{{${n}}}`)
+              .join(", ")}.`,
+          });
+        }
+        // An IMAGE header is a required parameter, not decoration — the send
+        // fails without one.
+        if (hasImageHeader(template.components) && !String(step.waMediaUrl || "").trim()) {
+          errors.push({
+            stepNumber: at,
+            message: `Step ${at}: the WhatsApp template "${name}" has an image header, so this step needs an image URL.`,
+          });
+        }
       }
     }
   }
 
   return { ok: errors.length === 0, errors, warnings };
+}
+
+/** The positional variables {{n}} an approved template body declares, ascending. */
+function bodyVarNumbers(bodyText) {
+  const nums = [...String(bodyText || "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1]));
+  return [...new Set(nums)].sort((a, b) => a - b);
+}
+
+/** Does this Meta component spec declare an IMAGE header? */
+function hasImageHeader(components) {
+  if (!Array.isArray(components)) return false;
+  return components.some((c) => c?.type === "HEADER" && c?.format === "IMAGE");
 }

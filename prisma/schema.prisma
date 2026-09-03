@@ -1025,22 +1025,28 @@ model PushJob {
 // accessTokenEnc is AES-256-GCM ciphertext (see app/lib/crypto/secrets.server.js)
 // — the long-lived system-user token is never stored in plaintext.
 model WhatsappAccount {
-  id                 String    @id @default(cuid())
-  shop               String    @unique
-  wabaId             String    @default("")
-  phoneNumberId      String    @default("")
-  displayPhoneNumber String    @default("")
-  businessId         String    @default("")
-  accessTokenEnc     String    @default("")
-  status             String    @default("pending") // pending | connected | disconnected
-  connectedAt        DateTime?
+  id                   String    @id @default(cuid())
+  shop                 String    @unique
+  wabaId               String    @default("")
+  phoneNumberId        String    @default("")
+  displayPhoneNumber   String    @default("")
+  businessId           String    @default("")
+  accessTokenEnc       String    @default("")
+  status               String    @default("pending") // pending | connected | disconnected
+  connectedAt          DateTime?
   // Cloud API registration (POST /{phoneNumberId}/register). A number must be
   // registered before it can send ANY message (template or free-text); without
   // it Meta returns error #133010 "Account not registered".
-  registeredAt       DateTime?
-  lastError          String    @default("")
-  createdAt          DateTime  @default(now())
-  updatedAt          DateTime  @updatedAt
+  registeredAt         DateTime?
+  // Our app's subscription to this WABA (POST /{wabaId}/subscribed_apps).
+  // Null means Meta delivers us no status, inbound or template event for this
+  // shop — sends work, every metric stays zero, and STOP is never honoured.
+  webhooksSubscribedAt DateTime?
+  // When the granted token lapses; null for a non-expiring business token.
+  tokenExpiresAt       DateTime?
+  lastError            String    @default("")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
 }
 
 // Meta-approved message templates (HSM) synced from a shop's WABA.
@@ -1140,4 +1146,39 @@ model WhatsappSuppression {
   createdAt   DateTime @default(now())
 
   @@unique([shop, phoneNumber])
+}
+
+// ── Worker leases ──────────────────────────────────────────────────────────
+//
+// The job queues used to be driven by a setInterval in the web server's entry
+// module, which pinned the app to exactly one instance: a second web process
+// would run every worker a second time. The send queues survive that on their
+// own — email, push, WhatsApp, broadcast dispatch and the enrollment advance
+// all claim their work with a conditional update, so a loser updates zero rows
+// and does nothing — but the periodic workers do not. They read a timestamp,
+// decide they are due, and act, which two processes can do simultaneously.
+//
+// This is that missing claim, at worker granularity rather than row: one row
+// per worker name, taken for a TTL and released on completion.
+//
+// Why a lease with an expiry rather than a boolean: a holder can die. A crash
+// mid-tick with a plain "running" flag leaves the worker off forever, and the
+// failure is silent — exactly the shape stuck-jobs.server.js exists to clean up
+// after. An expiry means the worst case is one skipped interval.
+//
+// Deliberately NOT applied to the send workers. Their per-row claims already
+// make them safe, and a lease would serialize them, so two instances would
+// drain the queues no faster than one.
+model WorkerLease {
+  // The worker's name, e.g. "segment-enrollment". One row per worker, forever.
+  name       String   @id
+  // Who holds it — host:pid:nonce. Only the holder may release, so a process
+  // that overran its TTL cannot release a lease that has since been taken by
+  // someone else.
+  holder     String
+  acquiredAt DateTime @default(now())
+  // Free the moment this passes, whether or not the holder is alive.
+  expiresAt  DateTime
+
+  @@index([expiresAt])
 }

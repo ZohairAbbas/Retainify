@@ -21,6 +21,13 @@ const PERMANENT_RECIPIENT_CODES = new Set([131026, 131049, 131051, 131053]);
 // is rejected and a template is required. Transient, not a permanent failure.
 const REENGAGEMENT_CODE = 131047;
 
+// Failures of the CONNECTION rather than of one message. Retrying these across
+// the 24h horizon is pure noise: every send for the shop will fail identically
+// until a human reconnects or registers the number, and nothing in the app says
+// so unless the account row is marked. (190 expired/revoked token, 200 and 10
+// missing permission, 133010 number never registered for the Cloud API.)
+const ACCOUNT_ERROR_CODES = new Set([190, 200, 10, 133010]);
+
 /**
  * Low-level POST to the messages endpoint with shared error handling.
  * @returns {Promise<import('./adapter.server.js').SendWhatsappResult>}
@@ -46,8 +53,17 @@ async function postMessage(phoneNumberId, accessToken, body) {
       if (code === REENGAGEMENT_CODE) {
         message =
           "This number hasn't messaged you in the last 24 hours, so free-text isn't allowed. Ask them to message your WhatsApp number first, or use an approved template.";
+      } else if (code === 190 || code === 200 || code === 10) {
+        message = `WhatsApp connection is no longer authorized (${message}). Reconnect your WhatsApp Business account.`;
+      } else if (code === 133010) {
+        message = "This number isn't registered for the Cloud API yet. Register it on the WhatsApp page.";
       }
-      return { ok: false, error: message, invalid: PERMANENT_RECIPIENT_CODES.has(code) };
+      return {
+        ok: false,
+        error: message,
+        invalid: PERMANENT_RECIPIENT_CODES.has(code),
+        accountError: ACCOUNT_ERROR_CODES.has(code),
+      };
     }
 
     const wamid = json?.messages?.[0]?.id || "";

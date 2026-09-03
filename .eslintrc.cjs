@@ -106,6 +106,11 @@ module.exports = {
         // Without this they report `process is not defined` on every use, which
         // is the same false-positive noise the override above exists to remove.
         "scripts/**/*.{js,mjs,cjs}",
+        // The dedicated worker process — a plain Node program, run by pm2 as
+        // `node workers/main.js` rather than through the react-router build.
+        "workers/**/*.{js,mjs,cjs}",
+        // pm2's process definition, which is CommonJS and uses __dirname.
+        "ecosystem.config.cjs",
       ],
       env: {
         node: true,

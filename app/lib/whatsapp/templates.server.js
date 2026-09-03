@@ -223,19 +223,27 @@ export async function syncTemplates(shop) {
     return { ok: false, error: `token decrypt failed: ${err.message}` };
   }
 
-  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${account.wabaId}/message_templates?limit=200`;
-  let json;
-  try {
-    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-    json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      return { ok: false, error: json?.error?.message || `HTTP ${res.status}` };
+  // Follow Meta's cursor pagination. A single 200-row page silently truncated
+  // any WABA with more templates than that, and the ones that fell off the end
+  // looked exactly like templates that had never been created.
+  const templates = [];
+  let next = `https://graph.facebook.com/${GRAPH_VERSION}/${account.wabaId}/message_templates?limit=100`;
+  // Bounded so a malformed paging cursor can't spin here forever.
+  for (let page = 0; next && page < 25; page++) {
+    let json;
+    try {
+      const res = await fetch(next, { headers: { Authorization: `Bearer ${accessToken}` } });
+      json = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        return { ok: false, error: json?.error?.message || `HTTP ${res.status}` };
+      }
+    } catch (err) {
+      return { ok: false, error: err.message };
     }
-  } catch (err) {
-    return { ok: false, error: err.message };
+    if (Array.isArray(json?.data)) templates.push(...json.data);
+    next = json?.paging?.next || "";
   }
 
-  const templates = Array.isArray(json?.data) ? json.data : [];
   const now = new Date();
   let synced = 0;
 

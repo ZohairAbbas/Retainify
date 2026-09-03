@@ -14,5 +14,8 @@
  * @property {string} [providerMessageId] - Meta wamid; matched by the status webhook.
  * @property {string} [error]
  * @property {boolean} [invalid] - Permanent recipient failure (bad/unreachable number) → suppress.
+ * @property {boolean} [accountError] - The connection itself is broken (token
+ *   revoked/expired, number unregistered). Applies to every send for the shop,
+ *   not just this one, so the account row is marked rather than the job retried.
  */
 export {};

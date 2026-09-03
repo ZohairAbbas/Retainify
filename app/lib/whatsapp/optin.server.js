@@ -10,7 +10,7 @@
  */
 import { createHmac } from "crypto";
 import prisma from "../../db.server.js";
-import { upsertContact, normalizePhone } from "../contacts/contacts.server.js";
+import { upsertContact, normalizePhone, toE164 } from "../contacts/contacts.server.js";
 
 const VALID_METHODS = new Set(["popup", "checkout", "click_to_wa", "imported", "api"]);
 
@@ -48,8 +48,18 @@ export function verifyOptInToken(shop, phoneNumber, token) {
  * @returns {Promise<object|null>} the subscription row, or null on bad input.
  */
 export async function recordOptIn({ shop, phoneNumber, contactEmail, optInMethod, confirmed = false }) {
-  const phone = normalizePhone(phoneNumber);
-  if (!shop || !phone) return null;
+  // Full international format only. Storing a national-format number would
+  // create a subscriber Meta rejects permanently on the first send, which the
+  // worker then suppresses — a subscriber the shop can see, has consent for,
+  // and can never message. Callers validate first and show the shopper why;
+  // this is the backstop for the ones that don't.
+  const check = toE164(phoneNumber);
+  if (!check.ok) {
+    console.warn(`[wa-optin] rejected opt-in for shop=${shop} — ${check.error}`);
+    return null;
+  }
+  const phone = check.phone;
+  if (!shop) return null;
   const method = VALID_METHODS.has(optInMethod) ? optInMethod : "api";
   const now = new Date();
 

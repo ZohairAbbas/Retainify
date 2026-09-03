@@ -3,10 +3,10 @@ import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
-import { connectWhatsappAccount } from "../lib/whatsapp/embedded-signup.server.js";
+import { connectWhatsappAccount, resubscribeWebhooks } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
 import { sendWhatsapp, sendWhatsappText, registerWhatsappNumber } from "../lib/whatsapp/index.server.js";
-import { normalizePhone } from "../lib/contacts/contacts.server.js";
+import { toE164 } from "../lib/contacts/contacts.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
@@ -61,6 +61,10 @@ export const loader = async ({ request }) => {
           wabaId: account.wabaId,
           displayPhoneNumber: account.displayPhoneNumber,
           registered: !!account.registeredAt,
+          // Null means Meta sends us no events for this shop at all: sends
+          // work, but delivery, reads, replies and STOP never come back.
+          webhooksSubscribed: !!account.webhooksSubscribedAt,
+          tokenExpiresAt: account.tokenExpiresAt ? account.tokenExpiresAt.toISOString() : null,
           lastError: account.lastError,
         }
       : null,
@@ -97,6 +101,7 @@ export const action = async ({ request }) => {
     "toggle-enabled",
     "send-test",
     "create-template",
+    "resubscribe-webhooks",
   ];
   if (GATED_INTENTS.includes(intent)) {
     const denied = await requireFeature(shop, "whatsapp");
@@ -147,7 +152,13 @@ export const action = async ({ request }) => {
     }
     const res = await connectWhatsappAccount({ shop, code, wabaId, businessId });
     if (!res.ok) return { ok: false, error: res.error || "Failed to connect." };
-    return { ok: true, connected: true };
+    return { ok: true, connected: true, warning: res.warning };
+  }
+
+  if (intent === "resubscribe-webhooks") {
+    const res = await resubscribeWebhooks(shop);
+    if (!res.ok) return { ok: false, error: res.error || "Could not subscribe to WhatsApp events." };
+    return { ok: true, subscribed: true };
   }
 
   if (intent === "register-number") {
@@ -207,9 +218,10 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "send-test") {
-    const to = normalizePhone(String(fd.get("to") || ""));
+    const check = toE164(String(fd.get("to") || ""));
+    if (!check.ok) return { ok: false, error: check.error };
+    const to = check.phone;
     const mode = String(fd.get("mode") || "template"); // template | text
-    if (!to) return { ok: false, error: "Enter a test phone number in E.164 format." };
 
     if (mode === "text") {
       const text = String(fd.get("text") || "");
@@ -261,12 +273,15 @@ function WhatsappPageInner() {
   const createFetcher = useFetcher();
   const optInFetcher = useFetcher();
   const registerFetcher = useFetcher();
+  const subscribeFetcher = useFetcher();
 
   const isConnected = account?.status === "connected";
   // Optimistic: reflect a just-completed registration immediately, since a
   // fetcher submit doesn't guarantee the loader re-read lands before render.
   const isRegistered = !!account?.registered || registerFetcher.data?.ok === true;
   const canSend = isConnected && isRegistered;
+  // Same optimism as registration: reflect a just-succeeded retry immediately.
+  const webhooksLive = !!account?.webhooksSubscribed || subscribeFetcher.data?.ok === true;
   const approvedTemplates = templates.filter((t) => t.status === "APPROVED");
   const [pin, setPin] = useState("");
 
@@ -386,12 +401,48 @@ function WhatsappPageInner() {
                       {isRegistered
                         ? <> · <span style={{ color: "var(--node-whatsapp-ink)" }}>Registered</span></>
                         : <> · <span style={{ color: "var(--danger-ink)" }}>Not registered</span></>}
+                      {webhooksLive
+                        ? <> · <span style={{ color: "var(--node-whatsapp-ink)" }}>Events on</span></>
+                        : <> · <span style={{ color: "var(--danger-ink)" }}>Events off</span></>}
                     </div>
                   </div>
                   <button className="btn" onClick={disconnect} disabled={connectFetcher.state !== "idle"}>
                     Disconnect
                   </button>
                 </div>
+
+                {/* A ~60-day token is what Meta grants an unapproved app, and
+                    it is indistinguishable from a permanent one except by this
+                    date. Without it the only symptom of expiry is that every
+                    send starts failing. */}
+                {account.tokenExpiresAt && (
+                  <div className="t-small" style={{ borderTop: "1px solid var(--line)", paddingTop: 16, color: "var(--ink-2)" }}>
+                    This connection expires on{" "}
+                    <strong>{new Date(account.tokenExpiresAt).toLocaleDateString()}</strong>.
+                    Reconnect before then to keep sending.
+                  </div>
+                )}
+
+                {!webhooksLive && (
+                  <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+                    <div className="t-small" style={{ marginBottom: 10, background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "10px 12px", borderRadius: "var(--r-2)" }}>
+                      <strong>Delivery reporting is off.</strong> We aren&rsquo;t subscribed to
+                      WhatsApp events for this account, so messages will send but nothing comes
+                      back: no delivered or read status, no replies, and <strong>STOP opt-outs
+                      won&rsquo;t be honored</strong>. Retry the subscription before sending.
+                    </div>
+                    <button
+                      className="btn btn-primary"
+                      onClick={() => subscribeFetcher.submit({ intent: "resubscribe-webhooks" }, { method: "post" })}
+                      disabled={subscribeFetcher.state !== "idle"}
+                    >
+                      {subscribeFetcher.state !== "idle" ? "Subscribing\u2026" : "Retry event subscription"}
+                    </button>
+                    {subscribeFetcher.data?.ok === false && (
+                      <div className="t-small" style={{ marginTop: 8, color: "var(--danger-ink)" }}>{subscribeFetcher.data.error}</div>
+                    )}
+                  </div>
+                )}
 
                 {!isRegistered && (
                   <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>

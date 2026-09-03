@@ -100,7 +100,9 @@ async function handlePayload(body) {
         change?.field === "message_template_status_update" ||
         change?.field === "template_category_update"
       ) {
-        await handleTemplateEvent(change.field, value).catch((e) =>
+        // entry.id is the WABA id for template events — the only thing in the
+        // payload that identifies whose template this is.
+        await handleTemplateEvent(change.field, value, entry?.id).catch((e) =>
           console.error("[wa-webhook] template handler:", e.message),
         );
         continue;
@@ -242,7 +244,7 @@ async function recordQuickReply(message) {
     .catch((e) => console.error("[wa-webhook] quick-reply stamp failed:", e.message));
 }
 
-async function handleTemplateEvent(field, value) {
+async function handleTemplateEvent(field, value, wabaId) {
   // Payloads carry the Meta template id + name/language and the new state.
   const metaTemplateId = String(value?.message_template_id || "");
   const name = value?.message_template_name || "";
@@ -260,18 +262,32 @@ async function handleTemplateEvent(field, value) {
   data.lastSyncedAt = new Date();
 
   // Prefer matching by Meta's stable template id; fall back to name+language.
+  //
+  // The fallback MUST be scoped to the shop that owns the WABA. Template names
+  // are only unique within a WABA, and "abandoned_cart_reminder" is exactly the
+  // name every shop picks — an unscoped updateMany let one merchant's approval
+  // (or rejection) rewrite the status of every other merchant's template of the
+  // same name, silently making templates sendable that Meta had never seen.
+  const account = wabaId
+    ? await prisma.whatsappAccount.findFirst({ where: { wabaId }, select: { shop: true } })
+    : null;
+
   if (metaTemplateId) {
     const res = await prisma.whatsappTemplate.updateMany({
-      where: { metaTemplateId },
+      where: { metaTemplateId, ...(account ? { shop: account.shop } : {}) },
       data,
     });
     if (res.count > 0) return;
   }
-  if (name && language) {
+  if (name && language && account) {
     await prisma.whatsappTemplate.updateMany({
-      where: { name, language },
+      where: { shop: account.shop, name, language },
       data,
     });
+  } else if (name && language) {
+    console.warn(
+      `[wa-webhook] template event for ${name}/${language} on unknown WABA ${wabaId || "?"} — ignored`,
+    );
   }
 }
 

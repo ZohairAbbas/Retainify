@@ -418,6 +418,7 @@
       '<div class="rt-wa-optin">' +
         '<input class="rt-wa-phone" type="tel" data-rt-phone autocomplete="tel" ' +
           'placeholder="' + escapeHtml((d && d.phonePlaceholder) || "WhatsApp number (with country code)") + '">' +
+        '<div class="rt-wa-error" data-rt-phone-error></div>' +
         '<label class="rt-wa-consent">' +
           '<input type="checkbox" data-rt-wa-consent>' +
           "<span>" + escapeHtml(label) + "</span>" +
@@ -426,12 +427,36 @@
     );
   }
 
+  /**
+   * Why a typed number can't be messaged on WhatsApp, or "" if it can.
+   *
+   * Mirrors toE164 on the server. Meta treats a national-format number as a
+   * permanent failure, which suppresses the subscriber for good — so the
+   * shopper is told now, while they are still here to fix it, rather than
+   * being signed up for messages that will never arrive.
+   */
+  function whatsappPhoneError(raw) {
+    var digits = (raw || "").replace(/[^0-9]/g, "");
+    if (!digits) return "Enter your WhatsApp number.";
+    // "00" is the international dialling prefix — already correct, just
+    // written the long way. Kept in step with toE164 on the server.
+    if (digits.indexOf("00") === 0) digits = digits.slice(2);
+    if (digits.charAt(0) === "0") {
+      return "Start with your country code instead of 0 — e.g. 447700900123.";
+    }
+    if (digits.length < 8 || digits.length > 15) {
+      return "Include your country code, with no leading 0.";
+    }
+    return "";
+  }
+
   /** Styles for the opt-in block, neutral enough to sit in any template. */
   var WA_OPTIN_CSS =
     ".rt-wa-optin{margin:0 0 12px;display:flex;flex-direction:column;gap:8px}" +
     ".rt-wa-phone{width:100%;height:38px;padding:0 12px;border:1px solid rgba(0,0,0,.25);border-radius:4px;font-family:inherit;font-size:13px;color:inherit;background:transparent;outline:none}" +
     ".rt-wa-consent{display:flex;gap:8px;align-items:flex-start;font-size:11px;line-height:1.45;cursor:pointer;opacity:.85}" +
-    ".rt-wa-consent input{margin-top:2px;flex-shrink:0}";
+    ".rt-wa-consent input{margin-top:2px;flex-shrink:0}" +
+    ".rt-wa-error{display:none;font-size:11px;line-height:1.4;color:#c0261a}";
 
   // Wire up the email-submit form inside any template. Each template's renderer
   // must expose an input with [data-rt-email], a submit button [data-rt-submit],
@@ -445,7 +470,16 @@
     // consent, and a ticked box with no number is nothing to send to.
     var phoneInput = modal.querySelector("[data-rt-phone]");
     var waConsentInput = modal.querySelector("[data-rt-wa-consent]");
+    var phoneError = modal.querySelector("[data-rt-phone-error]");
     if (!input || !btn) return;
+
+    function showPhoneError(message) {
+      if (phoneError) {
+        phoneError.textContent = message;
+        phoneError.style.display = message ? "block" : "none";
+      }
+      if (phoneInput) phoneInput.style.outline = message ? "2px solid #e00" : "";
+    }
 
     function submit() {
       var email = (input.value || "").trim();
@@ -457,10 +491,14 @@
 
       var phone = phoneInput ? (phoneInput.value || "").trim() : "";
       var waConsent = !!(waConsentInput && waConsentInput.checked);
-      if (waConsent && phone.replace(/[^0-9]/g, "").length < 8) {
-        phoneInput.style.outline = "2px solid #e00";
-        phoneInput.focus();
-        return;
+      if (waConsent) {
+        var waError = whatsappPhoneError(phone);
+        if (waError) {
+          showPhoneError(waError);
+          phoneInput.focus();
+          return;
+        }
+        showPhoneError("");
       }
       var originalLabel = btn.textContent;
       btn.disabled = true;
@@ -480,7 +518,18 @@
         }),
       })
         .then(function (r) { return r.json(); })
-        .then(function () {
+        .then(function (res) {
+          // The server holds a consented number to WhatsApp's own standard,
+          // which is stricter than the client check. If it refused the opt-in,
+          // say so instead of closing on "you're subscribed" — the email
+          // signup itself still went through.
+          if (res && res.whatsappError) {
+            showPhoneError(res.whatsappError);
+            btn.disabled = false;
+            btn.textContent = originalLabel;
+            if (phoneInput) phoneInput.focus();
+            return;
+          }
           localStorage.setItem(STORAGE_KEY_FOREVER, "1");
           requestPushPermission(email);
           var spinMs = (_templateId === "wheel") ? spinWheel(modal) : 0;
