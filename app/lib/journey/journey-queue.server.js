@@ -97,16 +97,10 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
     return null;
   }
 
-  // ── Lazy from here on ────────────────────────────────────────────────────
-  // Every new enrollment is walked one node at a time by advance.server.js.
-  // Nothing is scheduled now beyond the first wake-up: a flow that branches
+  // Every enrollment is walked one node at a time by advance.server.js.
+  // Nothing is scheduled here beyond the first wake-up: a flow that branches
   // cannot have its jobs created up front, because the path is not known until
   // the contact is standing on the split.
-  //
-  // Enrollments created BEFORE this shipped keep schedulingMode "eager" and
-  // finish exactly as they would have, on the jobs they already hold. The two
-  // modes run side by side until that backlog drains — see the drain gauge in
-  // stuck-jobs.server.js.
   const graph = await loadGraph(journeyId);
   const root = rootId(graph);
   if (!root) {
@@ -124,75 +118,6 @@ export async function enrollContact(journeyId, contactEmail, contactName, payloa
     rootStepId: root,
     rootStepKey: graph.steps.get(root)?.stepKey,
   });
-}
-
-/**
- * Create every job for a flow up front — the pre-branching scheduler.
- *
- * No longer reachable: enrollContact now creates lazy enrollments. Kept because
- * enrollments made before the cutover are still in flight and still finishing
- * on the jobs this produced, and reading it is the only way to understand what
- * schedulingMode "eager" means on those rows.
- *
- * Delete this once the drain gauge reports zero eager enrollments and has done
- * for longer than the longest configured flow delay.
- *
- * @deprecated superseded by advance.server.js
- */
-export async function enrollContactEager(journey, contactEmail, contactName, payloadObj, steps) {
-  const journeyId = journey.id;
-  const enrollment = await prisma.journeyEnrollment.create({
-    data: {
-      shop: journey.shop,
-      journeyId,
-      contactEmail,
-      contactName: contactName || "",
-      payload: JSON.stringify(payloadObj || {}),
-    },
-  });
-
-  const now = new Date();
-  const emailSteps = steps.filter((s) => s.nodeType === "email");
-  const pushSteps = steps.filter((s) => s.nodeType === "push");
-  const whatsappSteps = steps.filter((s) => s.nodeType === "whatsapp");
-
-  if (emailSteps.length) {
-    await prisma.journeyJob.createMany({
-      data: emailSteps.map((step) => ({
-        shop: journey.shop,
-        enrollmentId: enrollment.id,
-        stepId: step.id,
-        scheduledFor: new Date(now.getTime() + step.delayHours * 60 * 60 * 1000),
-        status: "pending",
-      })),
-    });
-  }
-
-  if (pushSteps.length) {
-    await prisma.pushJob.createMany({
-      data: pushSteps.map((step) => ({
-        shop: journey.shop,
-        enrollmentId: enrollment.id,
-        stepId: step.id,
-        scheduledFor: new Date(now.getTime() + step.delayHours * 60 * 60 * 1000),
-        status: "pending",
-      })),
-    });
-  }
-
-  if (whatsappSteps.length) {
-    await prisma.whatsappJob.createMany({
-      data: whatsappSteps.map((step) => ({
-        shop: journey.shop,
-        enrollmentId: enrollment.id,
-        stepId: step.id,
-        scheduledFor: new Date(now.getTime() + step.delayHours * 60 * 60 * 1000),
-        status: "pending",
-      })),
-    });
-  }
-
-  return enrollment;
 }
 
 /**
@@ -310,66 +235,54 @@ export async function settleEnrollmentIfFinished(
   ]);
   if (emails + pushes + whatsapps > 0) return false;
 
-  // ── Lazy enrollments are not finished just because nothing is queued ──────
-  // Under lazy scheduling "no live jobs" is the normal state BETWEEN steps —
-  // the next one has not been scheduled yet, because scheduling it is what
-  // happens next. Applying the eager rule here would close every lazy
-  // enrollment the moment its first message sent.
-  //
-  // So for lazy the job settling is a hand-off, not an ending: set the wake
-  // time and let the advance worker decide what comes next. This is the only
-  // place that hand-off happens, which is why every send worker funnels
-  // through this one function.
+  // ── "Nothing queued" is not "finished" ───────────────────────────────────
+  // A settling job is a hand-off, not an ending. Between steps an enrollment
+  // legitimately owns no job at all — the next one has not been scheduled yet,
+  // because scheduling it is what happens next. So this sets the wake time and
+  // lets the advance worker decide; it is the only place that hand-off
+  // happens, which is why every send worker funnels through this one function.
   const enrollment = await prisma.journeyEnrollment.findUnique({
     where: { id: enrollmentId },
-    select: { schedulingMode: true, exitReason: true },
+    select: { exitReason: true },
   });
-  if (enrollment?.schedulingMode === "lazy") {
-    if (enrollment.exitReason) return false;
+  if (!enrollment || enrollment.exitReason) return false;
 
-    // The one exception: a permanently failed EMAIL ends the flow here.
-    //
-    // A flow is a narrative and step 3 assumes step 1 landed — the rule
-    // sequence-gate.server.js exists to enforce. Continuing would schedule the
-    // next step only for the gate to cancel it on arrival, then settle, then
-    // schedule the one after that: every remaining step created and cancelled
-    // in turn, each one a "cancelled" row in the merchant's report.
-    //
-    // Push and WhatsApp failures do NOT stop anything, exactly as they do not
-    // gate anything: no browser subscription and no WhatsApp opt-in are benign
-    // and must not kill a perfectly good email sequence. An unattributed
-    // failure is treated as narrative-breaking, because guessing the other way
-    // means sending mail that refers back to something that never arrived.
-    const benign = channel === "push" || channel === "whatsapp";
-    if (failed && !benign) {
-      const { count } = await prisma.journeyEnrollment.updateMany({
-        where: { id: enrollmentId, exitReason: "" },
-        data: {
-          completedAt: at,
-          exitReason: "ended_failed",
-          nextRunAt: null,
-          currentStepId: null,
-          currentStepKey: null,
-        },
-      });
-      return count > 0;
-    }
-
-    await prisma.journeyEnrollment.updateMany({
+  // The one exception: a permanently failed EMAIL ends the flow here.
+  //
+  // A flow is a narrative and step 3 assumes step 1 landed — the rule
+  // sequence-gate.server.js exists to enforce. Continuing would schedule the
+  // next step only for the gate to cancel it on arrival, then settle, then
+  // schedule the one after that: every remaining step created and cancelled in
+  // turn, each one a "cancelled" row in the merchant's report.
+  //
+  // Push and WhatsApp failures do NOT stop anything, exactly as they do not
+  // gate anything: no browser subscription and no WhatsApp opt-in are benign
+  // and must not kill a perfectly good email sequence. An unattributed failure
+  // is treated as narrative-breaking, because guessing the other way means
+  // sending mail that refers back to something that never arrived.
+  const benign = channel === "push" || channel === "whatsapp";
+  if (failed && !benign) {
+    // Guarded on exitReason "" so an enrollment already closed for a real
+    // reason — exit criteria, an unsubscribe, a shop shutting down — keeps
+    // that reason rather than being overwritten by a straggler job.
+    const { count } = await prisma.journeyEnrollment.updateMany({
       where: { id: enrollmentId, exitReason: "" },
-      data: { nextRunAt: new Date() },
+      data: {
+        completedAt: at,
+        exitReason: "ended_failed",
+        nextRunAt: null,
+        currentStepId: null,
+        currentStepKey: null,
+      },
     });
-    return false;
+    return count > 0;
   }
 
-  // Guarded on exitReason "" so an enrollment already closed for a real reason
-  // — exit criteria, an unsubscribe, a shop shutting down — keeps that reason
-  // rather than being overwritten with "completed" by a straggler job.
-  const { count } = await prisma.journeyEnrollment.updateMany({
+  await prisma.journeyEnrollment.updateMany({
     where: { id: enrollmentId, exitReason: "" },
-    data: { completedAt: at, exitReason: failed ? "ended_failed" : "completed" },
+    data: { nextRunAt: new Date() },
   });
-  return count > 0;
+  return false;
 }
 
 export async function markJourneyJobDone(jobId, extras = {}) {

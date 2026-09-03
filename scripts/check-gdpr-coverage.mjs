@@ -17,10 +17,19 @@ import { readFileSync } from "node:fs";
 const schema = readFileSync(new URL("../prisma/schema.prisma", import.meta.url), "utf8");
 const gdpr = readFileSync(new URL("../app/lib/privacy/gdpr.server.js", import.meta.url), "utf8");
 
-/** Models removed transitively by a parent's onDelete: Cascade. */
+/**
+ * Models removed transitively by a parent's onDelete: Cascade.
+ *
+ * JourneyPathEvent is listed even though it has no `shop` column and so is
+ * never scanned below. That is exactly why it is worth writing down: it holds
+ * shopper data (which branch a person took), it is erased only because it
+ * cascades from JourneyEnrollment, and nothing here would notice if that
+ * cascade were ever dropped. Verified by advance.test.js.
+ */
 const CASCADE_COVERED = new Set([
   "JourneyStep", "JourneyJob", "PushJob", "WhatsappJob",
   "JourneyEnrollment", "SegmentMembership", "ContactTag",
+  "JourneyPathEvent", "JourneyEdge",
 ]);
 
 /** Session is the merchant's auth, not shopper data — erased by shop/redact only. */

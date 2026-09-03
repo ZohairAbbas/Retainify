@@ -692,12 +692,6 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
               </button>
               <button className="rt-cm-radio rt-locked">
                 <span className="rt-cm-radio-dot" />
-                <Icons.Sms size={14} />
-                <span>SMS</span>
-                <span className="pill soon" style={{ height: 18, fontSize: 9, padding: "0 6px" }}>Soon</span>
-              </button>
-              <button className="rt-cm-radio rt-locked">
-                <span className="rt-cm-radio-dot" />
                 <Icons.Bell size={14} />
                 <span>Push</span>
                 <span className="pill soon" style={{ height: 18, fontSize: 9, padding: "0 6px" }}>Soon</span>

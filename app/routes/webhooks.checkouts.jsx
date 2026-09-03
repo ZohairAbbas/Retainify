@@ -2,6 +2,7 @@ import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
 import { enrollContact } from "../lib/journey/journey-queue.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
+import { recalcContactCartStats } from "../lib/contacts/carts.server.js";
 
 export const action = async ({ request }) => {
   const { topic, shop, payload } = await authenticate.webhook(request);
@@ -69,6 +70,9 @@ export const action = async ({ request }) => {
     }).catch((err) =>
       console.error("[webhook] upsertContact (checkout_create) failed:", err.message),
     );
+    await recalcContactCartStats(shop, email).catch((err) =>
+      console.error("[webhook] cart rollup (checkout_create) failed:", err.message),
+    );
   }
 
   if (topic === "CHECKOUTS_UPDATE") {
@@ -105,6 +109,13 @@ export const action = async ({ request }) => {
       source: "cart_abandoned",
     }).catch((err) =>
       console.error("[webhook] upsertContact (checkout_update) failed:", err.message),
+    );
+    // Before the enrollment below, not after: a cart_abandoned flow's entry
+    // filters are evaluated at the moment of enrollment, so a rule on "last cart
+    // value" or "abandoned cart count" has to be reading this cart, not the one
+    // before it.
+    await recalcContactCartStats(shop, email).catch((err) =>
+      console.error("[webhook] cart rollup (checkout_update) failed:", err.message),
     );
 
     // Enroll in any published cart_abandoned journey, gated on the shop being

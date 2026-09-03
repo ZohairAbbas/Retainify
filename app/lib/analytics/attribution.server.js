@@ -97,11 +97,15 @@ const ATTRIBUTED_ORDERS = `
          o."totalPrice"  AS total_price,
          o.currency      AS currency,
          t.journey_id    AS journey_id,
-         t.step_id       AS step_id
+         t.step_id       AS step_id,
+         -- Carried so revenue can be rolled up per contact-run as well as per
+         -- step. An A/B arm needs both the total and the spread across
+         -- recipients, and a per-step total cannot give the second.
+         t.enrollment_id AS enrollment_id
     FROM "Order" o
     JOIN LATERAL (
       SELECT * FROM (
-        SELECT e."journeyId" AS journey_id, j."stepId" AS step_id, j."clickedAt" AS at
+        SELECT e."journeyId" AS journey_id, j."stepId" AS step_id, j."clickedAt" AS at, e.id AS enrollment_id
           FROM "JourneyEnrollment" e
           JOIN "JourneyJob" j ON j."enrollmentId" = e.id
          WHERE e.shop = o.shop
@@ -111,7 +115,7 @@ const ATTRIBUTED_ORDERS = `
            AND j."clickedAt" <= o."processedAt"
            AND j."clickedAt" >  o."processedAt" - ($3 || ' days')::interval
         UNION ALL
-        SELECT e."journeyId", p."stepId", p."clickedAt"
+        SELECT e."journeyId", p."stepId", p."clickedAt", e.id
           FROM "JourneyEnrollment" e
           JOIN "PushJob" p ON p."enrollmentId" = e.id
          WHERE e.shop = o.shop
@@ -120,7 +124,7 @@ const ATTRIBUTED_ORDERS = `
            AND p."clickedAt" <= o."processedAt"
            AND p."clickedAt" >  o."processedAt" - ($3 || ' days')::interval
         UNION ALL
-        SELECT e."journeyId", w."stepId", w."clickedAt"
+        SELECT e."journeyId", w."stepId", w."clickedAt", e.id
           FROM "JourneyEnrollment" e
           JOIN "WhatsappJob" w ON w."enrollmentId" = e.id
          WHERE e.shop = o.shop
@@ -292,6 +296,37 @@ function groupAndFold(rows, keyColumn) {
  * @param {{ journeyId?: string|null }} [opts] scopes to one flow, for the
  *        dashboard's campaign selector.
  */
+/**
+ * Attributed revenue per ENROLLMENT for one flow.
+ *
+ * The per-step twin of getStepAttribution, keyed on the contact's run through
+ * the flow instead. An A/B arm is a set of enrollments, not a set of steps —
+ * and comparing two arms on revenue needs the spread across recipients, not
+ * just the total, because one large order can move a mean further than the
+ * variant did.
+ *
+ * @returns {Promise<Map<string, {revenue: number, orders: number, currency: string}>>}
+ */
+export async function getEnrollmentAttribution(shop, journeyId, since) {
+  if (!(await windowIsTracked(shop, since, [journeyId]))) return new Map();
+
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT enrollment_id, currency,
+            SUM(total_price)::float8 AS revenue,
+            COUNT(*)::int            AS orders
+       FROM (${ATTRIBUTED_ORDERS}) a
+      WHERE a.journey_id = $5
+      GROUP BY enrollment_id, currency`,
+    shop,
+    since,
+    String(ATTRIBUTION_WINDOW_DAYS),
+    EXCLUDED_STATUSES,
+    journeyId,
+  );
+
+  return groupAndFold(rows, "enrollment_id");
+}
+
 export async function getShopAttribution(shop, since, { journeyId = null } = {}) {
   const journeys = await prisma.journey.findMany({
     where: { shop, ...(journeyId ? { id: journeyId } : {}) },

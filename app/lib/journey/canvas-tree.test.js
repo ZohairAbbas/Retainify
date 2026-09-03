@@ -17,6 +17,10 @@ import {
   NEXT,
   YES,
   NO,
+  ARM_A,
+  ARM_B,
+  BY_CHANCE,
+  branchesOf,
   childOf,
   walk,
   subtree,
@@ -134,7 +138,55 @@ test("a split added at the end of a flow gets an exit on both sides", () => {
 });
 
 test("splitBranchSizes counts what each side would take with it", () => {
-  assert.deepEqual(splitBranchSizes(branched(), "s"), { yes: 2, no: 1 });
+  // Keyed by branch value, and naming the pair, so the delete modal can label
+  // the two sides correctly whichever kind of split it is looking at.
+  assert.deepEqual(splitBranchSizes(branched(), "s"), {
+    yes: 2, no: 1, first: YES, second: NO,
+  });
+});
+
+// ── A/B splits ─────────────────────────────────────────────────────────────
+
+/** trigger → a → s(A/B) ⇒ arm A: y1 → y2 | arm B: n1 */
+const abSplit = () => [
+  { id: "a", kind: "email", parentId: TRIGGER_ID, branch: NEXT },
+  { id: "s", kind: "split", splitMode: BY_CHANCE, splitWeight: 50, parentId: "a", branch: NEXT },
+  { id: "y1", kind: "email", parentId: "s", branch: ARM_A },
+  { id: "y2", kind: "exit", parentId: "y1", branch: NEXT },
+  { id: "n1", kind: "exit", parentId: "s", branch: ARM_B },
+];
+
+test("branchesOf follows the split's mode", () => {
+  assert.deepEqual(branchesOf({ kind: "split" }), [YES, NO]);
+  assert.deepEqual(branchesOf({ kind: "split", splitMode: BY_CHANCE }), [ARM_A, ARM_B]);
+  assert.deepEqual(branchesOf({ kind: "email" }), [NEXT]);
+});
+
+test("an A/B split walks, subtrees and sizes like any other split", () => {
+  const n = abSplit();
+  assert.deepEqual(ids(walk(n)), ["a", "s", "y1", "y2", "n1"]);
+  assert.deepEqual(ids(subtree(n, "s")).sort(), ["n1", "s", "y1", "y2"]);
+  assert.deepEqual(splitBranchSizes(n, "s"), { a: 2, b: 1, first: ARM_A, second: ARM_B });
+});
+
+test("inserting an A/B split arrives with both arms populated", () => {
+  seq = 0;
+  const out = insertSplit(linear(), { parentId: "a", branch: NEXT, makeId, mode: BY_CHANCE });
+  const split = out.find((n) => n.kind === "split");
+  assert.equal(split.splitMode, BY_CHANCE);
+  assert.equal(split.splitWeight, 50, "an even split unless the merchant says otherwise");
+  assert.equal(childOf(out, split.id, ARM_A).id, "b", "existing flow stays on arm A");
+  assert.equal(childOf(out, split.id, ARM_B).kind, "exit");
+  // And it must NOT carry yes/no edges, which nothing would ever follow.
+  assert.equal(childOf(out, split.id, YES), null);
+  assert.equal(childOf(out, split.id, NO), null);
+});
+
+test("removing an A/B split keeps the arm asked for", () => {
+  const kept = removeSplit(abSplit(), "s", ARM_B);
+  assert.deepEqual(ids(walk(kept)), ["a", "n1"]);
+  const both = removeSplit(abSplit(), "s", null);
+  assert.deepEqual(ids(walk(both)), ["a"]);
 });
 
 // ── Deleting ───────────────────────────────────────────────────────────────

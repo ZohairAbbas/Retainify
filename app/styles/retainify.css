@@ -130,6 +130,12 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
     2fr 0.9fr 0.7fr 0.85fr 0.75fr 0.7fr 0.75fr 0.9fr 0.9fr 0.7fr 0.75fr 1.1fr;
   gap: 12px;
 }
+.rt-table--splits .rt-thead, .rt-table--splits .rt-trow {
+  /* Split, Reached, Yes, No, Yes rate, Share */
+  grid-template-columns: 2fr 0.8fr 0.7fr 0.7fr 0.9fr 1.6fr;
+  gap: 12px;
+}
+
 .rt-table--flows .rt-thead, .rt-table--flows .rt-trow {
   /* Flow, Status, Updated, Sent, Open rate, Click rate, Revenue, menu */
   grid-template-columns: 2.2fr 1fr 1fr 0.8fr 0.9fr 0.9fr 1.1fr 48px;
@@ -3177,3 +3183,104 @@ a.rt-bulk-btn:hover { color: var(--on-brand); }
 }
 .rt-view-chip-x:hover { background: var(--hair-1); color: var(--danger-ink); }
 .rt-views-add { margin-left: 4px; }
+
+/* Split share bar — how a split divided the people who reached it. Two-colour
+   by design: the whole width IS the audience, so the No side needs no separate
+   element, and a 100% Yes split reads as a full bar rather than an empty one. */
+.rt-splitbar {
+  height: 8px;
+  width: 100%;
+  min-width: 80px;
+  border-radius: 999px;
+  background: var(--node-exit-bg);
+  overflow: hidden;
+}
+.rt-splitbar-yes {
+  display: block;
+  height: 100%;
+  background: var(--node-split-ink);
+  border-radius: 999px;
+}
+
+/* Which side of a split a contact took, in their timeline. */
+.rt-tl-branch-yes { color: var(--node-split-ink); font-weight: 600; }
+.rt-tl-branch-no  { color: var(--ink-3); font-weight: 600; }
+
+/* ── A/B test report ────────────────────────────────────────────────────────
+   A card per test rather than a table row. The verdict is the point of the
+   feature and a verdict is a sentence, so it needs room a cell would not give
+   it — and the two arms need to sit side by side to be compared at all. */
+.rt-ab-list { display: flex; flex-direction: column; gap: 16px; margin-bottom: 32px; }
+.rt-ab-card {
+  background: var(--paper-1);
+  border: 1px solid var(--hair-1);
+  border-radius: var(--r-4);
+  padding: 20px;
+}
+.rt-ab-card-head { margin-bottom: 16px; }
+.rt-ab-arms { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 620px) { .rt-ab-arms { grid-template-columns: 1fr; } }
+
+.rt-ab-arm {
+  border: 1px solid var(--hair-2);
+  border-radius: var(--r-3);
+  padding: 14px 16px;
+  background: var(--paper-2);
+}
+/* The winning arm is marked only once the test has actually decided — an arm
+   that is merely ahead must not look like a result. */
+.rt-ab-arm-win { border-color: var(--node-split-ink); background: var(--paper-1); }
+.rt-ab-arm-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.rt-ab-arm-name {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-3);
+}
+.rt-ab-win-chip {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--node-split-ink);
+  color: var(--paper-1);
+}
+.rt-ab-rate { font-size: 26px; line-height: 1.1; color: var(--ink-1); }
+.rt-ab-meta { font-size: 11.5px; color: var(--ink-3); margin-top: 4px; line-height: 1.5; }
+.rt-ab-track {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--hair-2);
+  margin-top: 10px;
+  overflow: hidden;
+}
+.rt-ab-fill { display: block; height: 100%; background: var(--node-split-ink); border-radius: 999px; }
+
+/* Neutral until the test has something to say. A verdict styled as a result
+   before it is one would undo the point of computing significance at all. */
+.rt-ab-verdict {
+  margin-top: 16px;
+  padding: 11px 14px;
+  border-radius: var(--r-3);
+  font-size: 13px;
+  line-height: 1.55;
+  background: var(--paper-2);
+  border: 1px solid var(--hair-2);
+  color: var(--ink-2);
+}
+.rt-ab-verdict-wait { color: var(--ink-3); }
+.rt-ab-verdict-done {
+  background: var(--node-split-bg);
+  border-color: var(--node-split-ink);
+  color: var(--node-split-ink);
+  font-weight: 500;
+}
+
+/* Tag action node.
+   NOT .rt-node-tag — that name was already taken by the trigger card's "Entry"
+   label, which is uppercase 10px mono. A node card inheriting it would have
+   rendered its whole body as a tiny caption. */
+.rt-node-tagaction { width: 240px; }

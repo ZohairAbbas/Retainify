@@ -10,7 +10,9 @@
 //      skip evaluation entirely and just bump lastEnrollmentAt — the
 //      expensive evaluateSegment call only happens when *something* in the
 //      shop's data actually changed.
-//   3. evaluateSegment is already capped at 5,000 contacts (Phase 1).
+//   3. evaluateSegment counts in SQL, so a shop of any size costs one COUNT.
+//      The id list it returns for the entered/left diff is bounded, which is a
+//      separate concern from the count and no longer silently truncates it.
 //
 // Static segments don't wait for this worker — addStaticMember /
 // removeStaticMember in segments.server.js call the helpers

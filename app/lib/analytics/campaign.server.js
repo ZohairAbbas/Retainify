@@ -21,8 +21,17 @@
  *     unmeasurable period reads as unmeasured rather than as no revenue.
  */
 import prisma from "../../db.server.js";
-import { getFlowAttribution, getStepAttribution } from "./attribution.server.js";
-import { loadGraph, delayFromRoot } from "../journey/graph.server.js";
+import { getFlowAttribution, getStepAttribution, getEnrollmentAttribution } from "./attribution.server.js";
+import {
+  loadGraph,
+  delayFromRoot,
+  walkFrom,
+  nextStepId,
+  ARM_A,
+  ARM_B,
+  BY_CHANCE,
+} from "../journey/graph.server.js";
+import { abVerdict } from "./ab-significance.server.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -489,6 +498,235 @@ function numeric(row) {
  * @param {object} args
  * @param {"all"|"opened"|"clicked"|"unopened"} [args.filter]
  */
+/**
+ * How each split divided its audience.
+ *
+ * ── Why this needs its own table ───────────────────────────────────────────
+ * "42 went Yes, 18 went No" is not derivable from the jobs. A branch whose
+ * chosen side happens to send nothing leaves no job at all, and a job that
+ * does exist cannot distinguish "the split said no" from "the split has not
+ * been reached yet". JourneyPathEvent records the decision itself, which is
+ * also the only way to answer "why did this person get that email" without a
+ * database session.
+ *
+ * Grouped by stepKey, like every other report here, so a merchant editing the
+ * flow does not detach a split from its own history.
+ *
+ * @returns {Promise<Array<{stepKey, stepNumber, label, yes, no, total, yesRate, removed}>>}
+ */
+export async function getCampaignSplitBreakdown(shop, journeyId, days = 30) {
+  const since = sinceDate(days);
+
+  const splits = await prisma.journeyStep.findMany({
+    where: { journeyId, nodeType: "split" },
+    orderBy: { stepNumber: "asc" },
+    select: { id: true, stepKey: true, stepNumber: true, emailName: true, isArchived: true },
+  });
+  if (!splits.length) return [];
+
+  // Scoped to this flow's enrollments rather than to stepKey alone: a
+  // duplicated flow starts with fresh keys, but nothing stops two flows
+  // sharing one if a key is ever hand-copied, and a report that quietly
+  // merged two flows would be worse than one that showed nothing.
+  const rows = await prisma.journeyPathEvent.groupBy({
+    by: ["stepKey", "branch"],
+    where: {
+      stepKey: { in: splits.map((s) => s.stepKey) },
+      evaluatedAt: { gte: since },
+      enrollment: { journeyId, shop },
+    },
+    _count: { _all: true },
+  });
+
+  const byKey = {};
+  for (const r of rows) {
+    const acc = (byKey[r.stepKey] ||= { yes: 0, no: 0 });
+    if (r.branch === "yes" || r.branch === "no") acc[r.branch] += r._count._all;
+  }
+
+  // One row per stepKey, preferring the live step for its label and position.
+  // A split the merchant has since deleted still gets a row if it decided
+  // anything, or the numbers above it would not reconcile.
+  const seen = new Set();
+  const out = [];
+  for (const split of [...splits].sort((a, b) => Number(a.isArchived) - Number(b.isArchived))) {
+    if (seen.has(split.stepKey)) continue;
+    seen.add(split.stepKey);
+    const counts = byKey[split.stepKey];
+    if (!counts && split.isArchived) continue;
+    const yes = counts?.yes || 0;
+    const no = counts?.no || 0;
+    const total = yes + no;
+    out.push({
+      stepKey: split.stepKey,
+      stepNumber: split.stepNumber,
+      label: split.emailName || `Split ${split.stepNumber}`,
+      yes,
+      no,
+      total,
+      yesRate: rate(yes, total),
+      removed: split.isArchived,
+    });
+  }
+  return out.sort((a, b) => a.stepNumber - b.stepNumber);
+}
+
+/**
+ * How each A/B test divided its audience, and whether either arm actually won.
+ *
+ * ── An arm is a branch, not a step ─────────────────────────────────────────
+ * Everything below the arm counts, down to its exit. A merchant testing "a
+ * discount email then a reminder" against "one reminder" changed a sequence,
+ * not a message, and scoring only the first send would ignore the revenue the
+ * second one earned — usually where an offer test actually pays off.
+ *
+ * ── Recipients, not sends ──────────────────────────────────────────────────
+ * The denominator is the number of enrollments assigned to the arm, taken from
+ * JourneyPathEvent. Sends would be wrong twice over: a branch can send several
+ * messages to one person, and an arm whose branch sends nothing at all would
+ * have a denominator of zero rather than its true share of the audience.
+ *
+ * Opens, clicks and orders are counted as DISTINCT recipients who did the
+ * thing at least once, so every figure is a proportion of the same denominator
+ * and the significance test has the shape it assumes.
+ *
+ * @returns {Promise<Array<object>>} one row per A/B split
+ */
+export async function getCampaignAbBreakdown(shop, journeyId, days = 30) {
+  const since = sinceDate(days);
+  const graph = await loadGraph(journeyId);
+  const tests = [...graph.steps.values()].filter(
+    (s) => s.nodeType === "split" && s.splitMode === BY_CHANCE,
+  );
+  if (!tests.length) return [];
+
+  const [events, revenueByEnrollment] = await Promise.all([
+    prisma.journeyPathEvent.findMany({
+      where: {
+        stepKey: { in: tests.map((t) => t.stepKey) },
+        branch: { in: [ARM_A, ARM_B] },
+        evaluatedAt: { gte: since },
+        enrollment: { journeyId, shop },
+      },
+      select: { stepKey: true, branch: true, enrollmentId: true },
+    }),
+    getEnrollmentAttribution(shop, journeyId, since),
+  ]);
+  if (!events.length) {
+    return tests.map((t) => emptyAbRow(t, graph));
+  }
+
+  // Which enrollments engaged, per step. One query for the flow rather than
+  // one per arm.
+  const jobs = await prisma.journeyJob.findMany({
+    where: {
+      enrollmentId: { in: [...new Set(events.map((e) => e.enrollmentId))] },
+      sentAt: { not: null },
+    },
+    select: { enrollmentId: true, stepId: true, openedAt: true, clickedAt: true },
+  });
+  const jobsByEnrollment = new Map();
+  for (const j of jobs) {
+    const list = jobsByEnrollment.get(j.enrollmentId) || [];
+    list.push(j);
+    jobsByEnrollment.set(j.enrollmentId, list);
+  }
+
+  const rows = [];
+  for (const test of tests) {
+    const assigned = events.filter((e) => e.stepKey === test.stepKey);
+    const arms = {};
+    for (const branch of [ARM_A, ARM_B]) {
+      const target = nextStepId(graph, test.id, branch);
+      // Every step on this arm, so engagement anywhere below it counts.
+      const armSteps = new Set(target ? walkFrom(graph, target) : []);
+      const ids = assigned.filter((e) => e.branch === branch).map((e) => e.enrollmentId);
+      arms[branch] = rollUpArm(ids, armSteps, jobsByEnrollment, revenueByEnrollment);
+    }
+    rows.push({
+      stepKey: test.stepKey,
+      stepNumber: test.stepNumber,
+      label: test.emailName || `Test ${test.stepNumber}`,
+      metric: test.splitMetric,
+      weight: test.splitWeight,
+      removed: test.isArchived,
+      a: arms[ARM_A],
+      b: arms[ARM_B],
+      verdict: abVerdict(test.splitMetric, arms[ARM_A], arms[ARM_B]),
+    });
+  }
+  return rows.sort((x, y) => x.stepNumber - y.stepNumber);
+}
+
+/** One arm's figures, from the enrollments assigned to it. */
+function rollUpArm(enrollmentIds, armSteps, jobsByEnrollment, revenueByEnrollment) {
+  let opened = 0;
+  let clicked = 0;
+  let orders = 0;
+  let revenue = 0;
+  let currency = "";
+  // Per-recipient revenue, kept so the means test has a variance to work with.
+  const perRecipient = [];
+
+  for (const id of enrollmentIds) {
+    const mine = (jobsByEnrollment.get(id) || []).filter((j) => armSteps.has(j.stepId));
+    // Distinct recipients, not events: someone who opened three emails on this
+    // branch is one opener, or the "rate" could exceed 100%.
+    if (mine.some((j) => j.openedAt)) opened++;
+    if (mine.some((j) => j.clickedAt)) clicked++;
+
+    const money = revenueByEnrollment.get(id);
+    const amount = money?.revenue || 0;
+    if (money?.orders) orders++;
+    revenue += amount;
+    currency = currency || money?.currency || "";
+    perRecipient.push(amount);
+  }
+
+  const recipients = enrollmentIds.length;
+  const mean = recipients ? revenue / recipients : 0;
+  // Sample variance. Zero when nobody bought, which meansTest reads as
+  // "nothing to compare" rather than as infinite certainty.
+  const variance =
+    recipients > 1
+      ? perRecipient.reduce((acc, v) => acc + (v - mean) ** 2, 0) / (recipients - 1)
+      : 0;
+
+  return {
+    recipients,
+    opened,
+    clicked,
+    orders,
+    revenue,
+    currency,
+    revenuePerRecipient: mean,
+    revenueVariance: variance,
+    openRate: rate(opened, recipients),
+    clickRate: rate(clicked, recipients),
+    orderRate: rate(orders, recipients),
+  };
+}
+
+const EMPTY_ARM = {
+  recipients: 0, opened: 0, clicked: 0, orders: 0, revenue: 0, currency: "",
+  revenuePerRecipient: 0, revenueVariance: 0, openRate: 0, clickRate: 0, orderRate: 0,
+};
+
+function emptyAbRow(test, graph) {
+  void graph;
+  return {
+    stepKey: test.stepKey,
+    stepNumber: test.stepNumber,
+    label: test.emailName || `Test ${test.stepNumber}`,
+    metric: test.splitMetric,
+    weight: test.splitWeight,
+    removed: test.isArchived,
+    a: { ...EMPTY_ARM },
+    b: { ...EMPTY_ARM },
+    verdict: abVerdict(test.splitMetric, { ...EMPTY_ARM }, { ...EMPTY_ARM }),
+  };
+}
+
 export async function listCampaignRecipients({
   shop,
   journeyId,

@@ -18,11 +18,11 @@ import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import { GroupBlock } from "../components/segments/FilterTree.jsx";
 import { emptyGroup } from "../components/segments/constants.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
+import TagChip from "../components/contacts/TagChip.jsx";
 import {
   TRIGGER_ID,
   NEXT,
   YES,
-  NO,
   MAX_SPLIT_DEPTH,
   childOf,
   walk as walkTree,
@@ -36,7 +36,27 @@ import {
   serializeTree,
   newStepKey,
   ancestorEmailNodes,
+  ARM_A,
+  ARM_B,
+  BY_CONDITION,
+  BY_CHANCE,
+  branchesOf as branchesOfNode,
 } from "../lib/journey/canvas-tree.js";
+
+/** What to call one side of a split, given which kind of split it is. */
+function branchLabelFor(node, branch) {
+  if (branch === ARM_A) return "Variant A";
+  if (branch === ARM_B) return "Variant B";
+  return branch === YES ? "Yes" : "No";
+}
+
+/** The four things an A/B test can be judged on. */
+const AB_METRIC_OPTIONS = [
+  { id: "open", label: "Open rate", sub: "Best for testing subject lines." },
+  { id: "click", label: "Click rate", sub: "The most sensitive signal that still shows intent." },
+  { id: "order", label: "Order rate", sub: "Share of recipients who went on to buy." },
+  { id: "revenue", label: "Revenue per recipient", sub: "Needs the most data before it can call a winner." },
+];
 import { ConfirmDialog } from "../components/ui/Dialog.jsx";
 import EmailEditor, { RenderedBlockPreview } from "../components/EmailEditor.jsx";
 
@@ -194,7 +214,24 @@ function stepToNode(s) {
   if (s.nodeType === "delay") return { ...base, kind: "delay", hours: s.delayHours };
   if (s.nodeType === "exit") return { ...base, kind: "exit" };
   if (s.nodeType === "split") {
-    return { ...base, kind: "split", emailName: s.emailName, splitCondition: s.splitCondition || null };
+    return {
+      ...base,
+      kind: "split",
+      emailName: s.emailName,
+      splitCondition: s.splitCondition || null,
+      splitMode: s.splitMode || BY_CONDITION,
+      splitWeight: s.splitWeight ?? 50,
+      splitMetric: s.splitMetric || "click",
+    };
+  }
+  if (s.nodeType === "tag") {
+    return {
+      ...base,
+      kind: "tag",
+      emailName: s.emailName,
+      tagId: s.tagId || null,
+      tagAction: s.tagAction === "remove" ? "remove" : "add",
+    };
   }
   if (s.nodeType === "push") {
     return {
@@ -300,7 +337,12 @@ export const action = async ({ request, params }) => {
     if (!validation.ok) {
       // The draft is already saved at this point — the merchant keeps their work
       // and only the go-live step is refused.
-      return { ok: false, saved: hasDraftPayload, publishErrors: validation.errors };
+      return {
+        ok: false,
+        saved: hasDraftPayload,
+        publishErrors: validation.errors,
+        publishWarnings: validation.warnings,
+      };
     }
 
     const backfillSegmentMembers = fd.get("backfillSegmentMembers") === "1";
@@ -310,6 +352,9 @@ export const action = async ({ request, params }) => {
       saved: hasDraftPayload,
       published: true,
       segmentBaseline: result?.segmentBaseline ?? null,
+      // Carried on the SUCCESS path as well: a warning describes a flow that
+      // publishes and works, so this is the only route it would ever travel.
+      publishWarnings: validation.warnings,
     };
   }
 
@@ -391,12 +436,24 @@ async function persistDraft({ id, journey, fd }) {
         if (n.kind === "exit") {
           return { ...stepKey, nodeType: "exit" };
         }
+        if (n.kind === "tag") {
+          return {
+            ...stepKey,
+            nodeType: "tag",
+            emailName: n.emailName || "",
+            tagId: n.tagId || null,
+            tagAction: n.tagAction === "remove" ? "remove" : "add",
+          };
+        }
         if (n.kind === "split") {
           return {
             ...stepKey,
             nodeType: "split",
             emailName: n.emailName || "",
             splitCondition: n.splitCondition ?? null,
+            splitMode: n.splitMode || BY_CONDITION,
+            splitWeight: n.splitWeight ?? 50,
+            splitMetric: n.splitMetric || "click",
           };
         }
         // Note: a Wait node is the only thing that carries delayHours at all.
@@ -507,6 +564,7 @@ export default function FlowBuilder() {
   // Validation failures keep the modal open and are rendered inside it, so the
   // merchant sees exactly which step blocked the publish.
   const publishErrors = fetcher.data?.publishErrors || null;
+  const publishWarnings = fetcher.data?.publishWarnings || null;
 
   // Deferred navigation after "Save draft & continue". Waiting on the fetcher
   // rather than a timer means the draft is guaranteed persisted before the
@@ -574,7 +632,12 @@ export default function FlowBuilder() {
     // the merchant chooses which side survives. The canvas has no undo, which
     // is exactly why there is no silent default here.
     if (node.kind === "split") {
-      setDialog({ kind: "delete-split", id, sizes: splitBranchSizes(nodes, id) });
+      setDialog({
+        kind: "delete-split",
+        id,
+        sizes: splitBranchSizes(nodes, id),
+        isTest: node.splitMode === BY_CHANCE,
+      });
       return;
     }
     setNodes((arr) => removeTreeNode(arr, id));
@@ -610,12 +673,13 @@ export default function FlowBuilder() {
   }
 
   function insertNode(parentId, branch, kind) {
-    if (kind === "split") {
+    if (kind === "split" || kind === "abtest") {
       let created = null;
       setNodes((arr) =>
         insertSplit(arr, {
           parentId,
           branch,
+          mode: kind === "abtest" ? BY_CHANCE : BY_CONDITION,
           makeId: () => {
             const id = `tmp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
             created = created || id;
@@ -628,7 +692,18 @@ export default function FlowBuilder() {
       return;
     }
     let newNode;
-    if (kind === "delay") {
+    if (kind === "tag") {
+      newNode = {
+        kind: "tag",
+        id: `tmp-${Date.now()}`,
+        stepKey: newStepKey(),
+        emailName: "",
+        // No tag chosen yet — publish validation asks for one, which is a
+        // better prompt than silently picking the merchant's first tag.
+        tagId: null,
+        tagAction: "add",
+      };
+    } else if (kind === "delay") {
       newNode = { kind: "delay", id: `tmp-${Date.now()}`, stepKey: newStepKey(), hours: 24 };
     } else if (kind === "push") {
       newNode = {
@@ -928,6 +1003,7 @@ export default function FlowBuilder() {
                   showPreview={showPreview}
                   showAnalytics={showAnalytics}
                   allowSplit={allowSplit}
+                  tags={filterTags}
                 />
               </div>
             </div>
@@ -1001,6 +1077,7 @@ export default function FlowBuilder() {
       {dialog?.kind === "delete-split" && (
         <DeleteSplitModal
           sizes={dialog.sizes}
+          isTest={dialog.isTest}
           onCancel={() => setDialog(null)}
           onConfirm={(keep) => applySplitDelete(dialog.id, keep)}
         />
@@ -1030,6 +1107,7 @@ export default function FlowBuilder() {
           onConfirm={publishAction}
           loading={saving}
           errors={publishErrors}
+          warnings={publishWarnings}
           segmentBackfill={{
             eligible: triggerDraft === "segment_entered" && !!triggerSegmentKey,
             count: triggerSegmentCount || 0,
@@ -1067,23 +1145,26 @@ export default function FlowBuilder() {
  * survive in a tree and the builder has no undo — whichever side goes is gone.
  * Each option states how many steps it discards, so the choice is never blind.
  */
-function DeleteSplitModal({ sizes, onCancel, onConfirm }) {
+function DeleteSplitModal({ sizes, isTest, onCancel, onConfirm }) {
   const steps = (n) => `${n} ${n === 1 ? "step" : "steps"}`;
+  const { first, second } = sizes;
+  const name = (b) => (isTest ? `variant ${b.toUpperCase()}` : `the ${b === YES ? "Yes" : "No"} branch`);
+  const Name = (b) => name(b).charAt(0).toUpperCase() + name(b).slice(1);
   const options = [
     {
-      keep: YES,
-      label: "Keep the Yes branch",
-      sub: sizes.no ? `Deletes the No branch — ${steps(sizes.no)}.` : "The No branch is empty.",
+      keep: first,
+      label: `Keep ${name(first)}`,
+      sub: sizes[second] ? `Deletes ${name(second)} — ${steps(sizes[second])}.` : `${Name(second)} is empty.`,
     },
     {
-      keep: NO,
-      label: "Keep the No branch",
-      sub: sizes.yes ? `Deletes the Yes branch — ${steps(sizes.yes)}.` : "The Yes branch is empty.",
+      keep: second,
+      label: `Keep ${name(second)}`,
+      sub: sizes[first] ? `Deletes ${name(first)} — ${steps(sizes[first])}.` : `${Name(first)} is empty.`,
     },
     {
       keep: null,
-      label: "Delete both branches",
-      sub: `Deletes ${steps(sizes.yes + sizes.no)}. The flow ends where the split was.`,
+      label: isTest ? "Delete both variants" : "Delete both branches",
+      sub: `Deletes ${steps(sizes[first] + sizes[second])}. The flow ends where the split was.`,
     },
   ];
   // Same backdrop and shell as ConfirmDialog, so this sits in the same visual
@@ -1207,7 +1288,7 @@ function LeaveDraftModal({ onCancel, onSaveAndContinue, onDiscardAndContinue, lo
   );
 }
 
-function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, stats, showPreview, showAnalytics }) {
+function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, stats, showPreview, showAnalytics, tags = [] }) {
   const trig = TRIGGER_CONFIG[journey.trigger] || TRIGGER_CONFIG.customer_created;
   const TrigIcon = Icons[trig.icon];
 
@@ -1255,16 +1336,62 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
     );
   }
 
+  if (node.kind === "tag") {
+    const tag = (tags || []).find((t) => t.id === node.tagId);
+    const removing = node.tagAction === "remove";
+    return (
+      <div
+        className={`rt-node rt-node-tagaction${selected ? " rt-selected" : ""}`}
+        onClick={onSelect}
+      >
+        <div className="rt-node-head">
+          <div className="rt-node-glyph rt-tint-tag"><Icons.Tag size={14} /></div>
+          <div className="rt-node-title">
+            {node.emailName || (removing ? "Remove tag" : "Tag contact")}
+          </div>
+          <div className="rt-node-actions">
+            <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
+              <Icons.Copy size={13} />
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); onDelete(); }}>
+              <Icons.Trash size={13} />
+            </button>
+          </div>
+        </div>
+        <div className="rt-node-body">
+          <div className="rt-node-line">
+            {tag ? (
+              <>
+                <span className="muted">{removing ? "Removes" : "Adds"}</span>{" "}
+                <TagChip tag={tag} />
+              </>
+            ) : (
+              // Said on the card, not just in the inspector: the canvas is
+              // where a merchant scans for what is unfinished.
+              <span className="rt-node-warn">No tag chosen — this step does nothing</span>
+            )}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (node.kind === "split") {
+    const isTest = node.splitMode === BY_CHANCE;
     const rules = countRules(node.splitCondition);
+    const weight = Number(node.splitWeight ?? 50);
     return (
       <div
         className={`rt-node rt-node-split${selected ? " rt-selected" : ""}`}
         onClick={onSelect}
       >
         <div className="rt-node-head">
-          <div className="rt-node-glyph rt-tint-split"><Icons.Split size={14} /></div>
-          <div className="rt-node-title">{node.emailName || "Split branch"}</div>
+          <div className="rt-node-glyph rt-tint-split">
+            {isTest ? <Icons.Chart size={14} /> : <Icons.Split size={14} />}
+          </div>
+          <div className="rt-node-title">
+            {node.emailName || (isTest ? "A/B test" : "Split branch")}
+          </div>
           <div className="rt-node-actions">
             {/* No duplicate: copying a split would have to say what happens to
                 its two subtrees, and nobody has asked for an answer yet. */}
@@ -1275,7 +1402,18 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
         </div>
         <div className="rt-node-body">
           <div className="rt-node-line">
-            {rules === 0 ? (
+            {isTest ? (
+              <>
+                {/* The division is the whole point of the node, so it is on
+                    the card rather than only in the inspector. */}
+                <div className="rt-abbar" role="img" aria-label={`${weight}% variant A, ${100 - weight}% variant B`}>
+                  <span className="rt-abbar-a" style={{ width: `${weight}%` }} />
+                </div>
+                <span className="muted t-small">
+                  {weight}% A · {100 - weight}% B · judged on {AB_METRIC_OPTIONS.find((m) => m.id === (node.splitMetric || "click"))?.label.toLowerCase()}
+                </span>
+              </>
+            ) : rules === 0 ? (
               <span className="rt-node-warn">No condition set — everyone takes No</span>
             ) : (
               <span className="muted">
@@ -1482,6 +1620,7 @@ function BranchColumn({
   showPreview,
   showAnalytics,
   allowSplit,
+  tags = [],
 }) {
   const chain = [];
   let cursor = childOf(nodes, parentId, branch);
@@ -1530,6 +1669,7 @@ function BranchColumn({
               stats={stats?.[node.id]}
               showPreview={showPreview}
               showAnalytics={showAnalytics}
+              tags={tags}
             />
           </Fragment>
         );
@@ -1537,9 +1677,9 @@ function BranchColumn({
 
       {chain[chain.length - 1].kind === "split" && (
         <div className="rt-split-fork">
-          {[YES, NO].map((side) => (
+          {branchesOfNode(chain[chain.length - 1]).map((side) => (
             <div className={`rt-split-side rt-split-${side}`} key={side}>
-              <div className="rt-split-label">{side === YES ? "Yes" : "No"}</div>
+              <div className="rt-split-label">{branchLabelFor(chain[chain.length - 1], side)}</div>
               <BranchColumn
                 nodes={nodes}
                 parentId={chain[chain.length - 1].id}
@@ -1556,6 +1696,7 @@ function BranchColumn({
                 showPreview={showPreview}
                 showAnalytics={showAnalytics}
                 allowSplit={allowSplit}
+                tags={tags}
               />
             </div>
           ))}
@@ -1625,7 +1766,10 @@ function InsertMenu({ open, onClose, onAdd, allowSplit = false }) {
         {item("Mail", "Email", "email")}
         {item("Bell", "Push notification", "push")}
         {item("Whatsapp", "WhatsApp message", "whatsapp")}
-        {item("Sms", "SMS message", "sms", true)}
+        {/* SMS is not planned this year, so its placeholder is gone rather
+            than sitting here disabled. A "Soon" chip is a promise, and the
+            product should not make one it has no date for. FB-5 stays on the
+            work inventory as an unbuilt channel. */}
         <div className="t-micro muted rt-insert-heading">Timing</div>
         {item("Clock", "Wait (delay)", "delay")}
         <div className="t-micro muted rt-insert-heading">Logic</div>
@@ -1634,7 +1778,8 @@ function InsertMenu({ open, onClose, onAdd, allowSplit = false }) {
             explanation reads as a bug; a control that is not there reads as
             "not applicable here", which is the truth. */}
         {allowSplit && item("Split", "Split branch", "split")}
-        {item("Tag", "Tag contact", "tag", true)}
+        {allowSplit && item("Chart", "A/B test", "abtest")}
+        {item("Tag", "Tag contact", "tag")}
       </div>
     </>
   );
@@ -1975,6 +2120,161 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
   if (node.kind === "whatsapp") {
     return (
       <WhatsappInspector node={node} onChange={onChange} whatsappTemplates={whatsappTemplates} />
+    );
+  }
+
+  if (node.kind === "split" && node.splitMode === BY_CHANCE) {
+    const weight = Number(node.splitWeight ?? 50);
+    return (
+      <div className="rt-ins">
+        <div className="rt-ins-head">
+          <div className="rt-node-glyph rt-tint-split"><Icons.Chart size={14} /></div>
+          <div>
+            <div className="t-micro muted">Logic step</div>
+            <div className="t-h2" style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>
+              A/B test
+            </div>
+          </div>
+        </div>
+
+        <div className="rt-ins-section">
+          <label className="field-label" htmlFor="ab-name">Internal name</label>
+          <input
+            id="ab-name"
+            className="input"
+            value={node.emailName || ""}
+            placeholder="A/B test"
+            onChange={(e) => onChange({ emailName: e.target.value })}
+          />
+          <div className="field-help">Not shown to contacts. Names this test in the report.</div>
+        </div>
+
+        <div className="rt-ins-section">
+          <div className="t-micro muted">Split</div>
+          <div className="t-small muted" style={{ margin: "6px 0 12px" }}>
+            Each contact is assigned once, on arrival, and stays on that side.
+          </div>
+          <div className="rt-abbar rt-abbar-lg" role="img" aria-label={`${weight}% variant A, ${100 - weight}% variant B`}>
+            <span className="rt-abbar-a" style={{ width: `${weight}%` }} />
+          </div>
+          <div className="rt-ab-legend">
+            <span><b>A</b> {weight}%</span>
+            <span><b>B</b> {100 - weight}%</span>
+          </div>
+          <input
+            className="rt-ab-range"
+            type="range"
+            min="1"
+            max="99"
+            value={weight}
+            aria-label="Percentage sent to variant A"
+            onChange={(e) => onChange({ splitWeight: Number(e.target.value) })}
+          />
+          {/* An uneven split is the safe way to try something risky: put 10%
+              on the new idea and leave the rest on what already works. */}
+          <div className="field-help">
+            Drag to send an uneven share — useful for trying a risky variant on
+            a small slice first.
+          </div>
+        </div>
+
+        <div className="rt-ins-section">
+          <div className="t-micro muted">Decide the winner on</div>
+          <div className="rt-radios" style={{ marginTop: 10 }}>
+            {AB_METRIC_OPTIONS.map((m) => (
+              <RadioOption
+                key={m.id}
+                checked={(node.splitMetric || "click") === m.id}
+                onClick={() => onChange({ splitMetric: m.id })}
+                label={m.label}
+                sub={m.sub}
+              />
+            ))}
+          </div>
+          <div className="rt-ins-note" style={{ marginTop: 14 }}>
+            <Icons.Chart size={13} />
+            <span>
+              The report says <b>who is ahead</b> only once there is enough data
+              to be sure it isn&apos;t chance. Until then it says so plainly
+              rather than naming a winner.
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (node.kind === "tag") {
+    const removing = node.tagAction === "remove";
+    return (
+      <div className="rt-ins">
+        <div className="rt-ins-head">
+          <div className="rt-node-glyph rt-tint-tag"><Icons.Tag size={14} /></div>
+          <div>
+            <div className="t-micro muted">Action step</div>
+            <div className="t-h2" style={{ fontFamily: "var(--font-display)", fontWeight: 400 }}>
+              Tag contact
+            </div>
+          </div>
+        </div>
+
+        <div className="rt-ins-section">
+          <label className="field-label">Internal name</label>
+          <input
+            className="input"
+            value={node.emailName || ""}
+            placeholder={removing ? "Remove tag" : "Tag contact"}
+            onChange={(e) => onChange({ emailName: e.target.value })}
+          />
+          <div className="field-help">Not shown to contacts.</div>
+        </div>
+
+        <div className="rt-ins-section">
+          <div className="t-micro muted" style={{ marginBottom: 10 }}>Action</div>
+          <div className="rt-segmented">
+            <button
+              className={!removing ? "rt-seg-on" : ""}
+              onClick={() => onChange({ tagAction: "add" })}
+            >
+              Add tag
+            </button>
+            <button
+              className={removing ? "rt-seg-on" : ""}
+              onClick={() => onChange({ tagAction: "remove" })}
+            >
+              Remove tag
+            </button>
+          </div>
+
+          <label className="field-label" style={{ marginTop: 16 }}>Tag</label>
+          {filterTags.length ? (
+            <select
+              className="input"
+              value={node.tagId || ""}
+              onChange={(e) => onChange({ tagId: e.target.value || null })}
+            >
+              <option value="">Choose a tag…</option>
+              {filterTags.map((t) => (
+                <option key={t.id} value={t.id}>{t.name}</option>
+              ))}
+            </select>
+          ) : (
+            <div className="field-help">
+              This workspace has no tags yet. Create one from the Contacts page,
+              then pick it here.
+            </div>
+          )}
+
+          <div className="rt-ins-note" style={{ marginTop: 14 }}>
+            <Icons.Tag size={13} />
+            <span>
+              {removing
+                ? "Removes the tag whoever applied it — a person or another flow."
+                : "Tags applied here are recorded as coming from this step, so they can be found and undone separately from ones applied by hand."}
+            </span>
+          </div>
+        </div>
+      </div>
     );
   }
 
@@ -2345,6 +2645,7 @@ const FORM_KIND_LABEL = {
   push: "Push notification",
   whatsapp: "WhatsApp",
   split: "Split branch",
+  tag: "Tag contact",
 };
 
 function formViewTitle(n) {
@@ -2353,6 +2654,7 @@ function formViewTitle(n) {
   if (n.kind === "push") return n.pushTitle || "Push notification";
   if (n.kind === "whatsapp") return n.waTemplateName || "WhatsApp message";
   if (n.kind === "split") return n.emailName || "Split branch";
+  if (n.kind === "tag") return n.emailName || (n.tagAction === "remove" ? "Remove tag" : "Tag contact");
   return n.kind;
 }
 
@@ -2411,6 +2713,7 @@ function FormView({ nodes, journey, selectedId, onSelect, onChange, onOpenEditor
                 {n.kind === "push" && <Icons.Bell size={14} />}
                 {n.kind === "whatsapp" && <Icons.Whatsapp size={14} />}
                 {n.kind === "split" && <Icons.Split size={14} />}
+                {n.kind === "tag" && <Icons.Tag size={14} />}
               </div>
               <div>
                 <div className="t-micro muted">
@@ -2590,13 +2893,16 @@ function PublishToast({ toast, onDismiss }) {
   );
 }
 
-function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfill, errors }) {
+function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfill, errors, warnings = null }) {
   const [backfill, setBackfill] = useState(false);
   // Offered only on first publish of a segment-triggered flow that has members
   // waiting. Re-publishing never backfills, so the box would be a lie.
   const showBackfill = !isPublished && segmentBackfill?.eligible && segmentBackfill.count > 0;
   const n = segmentBackfill?.count || 0;
   const hasErrors = Array.isArray(errors) && errors.length > 0;
+  // Shown alongside the confirm rather than instead of it: a warning describes
+  // a flow that will publish and work, and the merchant may well have meant it.
+  const hasWarnings = !hasErrors && Array.isArray(warnings) && warnings.length > 0;
 
   return (
     <div className="rt-modal-backdrop">
@@ -2630,6 +2936,24 @@ function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfi
           >
             {errors.map((e, i) => (
               <li key={i}>{e.message}</li>
+            ))}
+          </ul>
+        )}
+        {hasWarnings && (
+          <ul
+            style={{
+              margin: "0 0 24px",
+              padding: "12px 16px 12px 32px",
+              background: "var(--warn-bg, #FBF3E0)",
+              color: "var(--warn-ink, #6B4E11)",
+              border: "1px solid var(--warn-ink, #DCC48A)",
+              borderRadius: 8,
+              fontSize: 13,
+              lineHeight: 1.6,
+            }}
+          >
+            {warnings.map((w, i) => (
+              <li key={i}>{w.message}</li>
             ))}
           </ul>
         )}

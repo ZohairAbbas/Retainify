@@ -7,7 +7,6 @@
 
 import prisma from "../../db.server.js";
 import { evaluateSegment, evalTreeForContact, validateFilterTree } from "./evaluator.server.js";
-import { computeLifecycle, getContactStats } from "../contacts/contacts.server.js";
 import { SYSTEM_SEGMENTS } from "./systemSegments.server.js";
 import {
   enrollContactsIntoSegmentFlows,
@@ -349,11 +348,9 @@ export async function listSegmentsForContact(shop, contact) {
   // Dynamic: evaluate each filter tree against just this contact.
   let dynamicMatchIds = new Set();
   if (dynamicSegments.length) {
-    const stats = await getContactStats(shop, contact.email);
-    const lifecycle = computeLifecycle(contact, stats);
     for (const seg of dynamicSegments) {
       try {
-        if (evalTreeForContact(seg.filterTree, { contact, stats, lifecycle })) {
+        if (evalTreeForContact(seg.filterTree, { contact })) {
           dynamicMatchIds.add(seg.id);
         }
       } catch (_e) {
@@ -365,25 +362,4 @@ export async function listSegmentsForContact(shop, contact) {
   return all
     .filter((s) => staticMatchIds.has(s.id) || dynamicMatchIds.has(s.id))
     .map((s) => ({ id: s.id, name: s.name, kind: s.kind }));
-}
-
-// ── Build a filter tree from current Contacts list filters ─────────────
-// Powers "Save as segment" from the Contacts page.
-export function filtersToTree({ status, source, tagId, search }) {
-  const children = [];
-  if (status && status !== "all") {
-    children.push({ type: "rule", field: "subscriptionStatus", op: "is", value: status });
-  }
-  if (source && source !== "all") {
-    children.push({ type: "rule", field: "source", op: "is", value: source });
-  }
-  if (tagId && tagId !== "all") {
-    children.push({ type: "rule", field: "hasTag", op: "has", value: tagId });
-  }
-  // `search` is not representable as a rule — surface a stub only if there
-  // are no other filters, so the segment isn't accidentally "everyone".
-  if (children.length === 0) {
-    children.push({ type: "rule", field: "subscriptionStatus", op: "is", value: "subscribed" });
-  }
-  return { type: "group", match: "all", children };
 }

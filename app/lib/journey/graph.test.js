@@ -30,6 +30,11 @@ import {
   YES,
   NO,
   NEXT,
+  ARM_A,
+  ARM_B,
+  BY_CHANCE,
+  branchesOf,
+  branchLabel,
 } from "./graph.server.js";
 
 // ── Fixtures ───────────────────────────────────────────────────────────────
@@ -345,4 +350,91 @@ test("isEmptyCondition", () => {
   assert.equal(isEmptyCondition({}), true);
   assert.equal(isEmptyCondition({ type: "group", children: [] }), true);
   assert.equal(isEmptyCondition(CONDITION), false);
+});
+
+// ── A/B splits ─────────────────────────────────────────────────────────────
+
+const ab = (extra = {}) =>
+  step("s", "split", { splitMode: BY_CHANCE, splitWeight: 50, splitMetric: "click", ...extra });
+
+/** a ── s(A/B) ⇒ arm A: y | arm B: n */
+function abFlow(extra = {}) {
+  n = 0;
+  return buildGraph({
+    steps: [step("a"), ab(extra), step("y", "exit"), step("n", "exit")],
+    edges: [edge("a", "s"), edge("s", "y", ARM_A), edge("s", "n", ARM_B)],
+  });
+}
+
+test("branchesOf follows the split's mode", () => {
+  assert.deepEqual(branchesOf({ nodeType: "split" }), [YES, NO]);
+  assert.deepEqual(branchesOf({ nodeType: "split", splitMode: BY_CHANCE }), [ARM_A, ARM_B]);
+  assert.deepEqual(branchesOf({ nodeType: "email" }), [NEXT]);
+  assert.deepEqual(branchesOf(null), [NEXT]);
+});
+
+test("branchLabel names each branch for the merchant", () => {
+  assert.equal(branchLabel(YES), "Yes");
+  assert.equal(branchLabel(ARM_A), "A");
+  assert.equal(branchLabel(ARM_B), "B");
+});
+
+test("a well-formed A/B split passes", () => {
+  const { ok, errors } = validateGraph(abFlow());
+  assert.equal(ok, true, errors.map((e) => e.message).join(" | "));
+});
+
+test("an A/B split needs no condition", () => {
+  // The condition rule must apply only to conditional splits, or every test
+  // would be unpublishable.
+  assert.equal(messages(abFlow({ splitCondition: null })).includes("no condition"), false);
+});
+
+test("the walk follows a and b, so nothing on an arm is lost", () => {
+  assert.deepEqual(walkFrom(abFlow()), ["a", "s", "y", "n"]);
+  assert.equal(orderedSteps(abFlow()).length, 4);
+});
+
+test("an A/B split with an empty arm is blocked, and says arm not branch", () => {
+  n = 0;
+  const g = buildGraph({
+    steps: [ab(), step("y", "exit")],
+    edges: [edge("s", "y", ARM_A)],
+  });
+  assert.match(messages(g), /"B" variant is empty/);
+});
+
+test("a test that sends everyone one way is blocked", () => {
+  // A 0% or 100% arm is not a test — the report would declare a winner from a
+  // sample of nobody.
+  for (const w of [0, 100, -5, 140]) {
+    assert.match(messages(abFlow({ splitWeight: w })), /between 1% and 99%/, `weight ${w}`);
+  }
+  assert.equal(validateGraph(abFlow({ splitWeight: 90 })).ok, true);
+});
+
+test("a test with no chosen metric is blocked", () => {
+  assert.match(messages(abFlow({ splitMetric: "" })), /which result decides/);
+  assert.match(messages(abFlow({ splitMetric: "vibes" })), /which result decides/);
+});
+
+test("an edge left over from the other mode is reported, not ignored", () => {
+  // Flipping a split between a condition and a test can strand the old pair.
+  // The walk would follow neither, so the contact falls out of the flow with
+  // no job and no error — exactly the silence this whole engine guards against.
+  n = 0;
+  const g = buildGraph({
+    steps: [ab(), step("y", "exit"), step("n", "exit"), step("stale", "exit")],
+    edges: [edge("s", "y", ARM_A), edge("s", "n", ARM_B), edge("s", "stale", YES)],
+  });
+  assert.match(messages(g), /still has a "Yes" branch from before it was changed/);
+});
+
+test("an arm hung off a step that is not a split is still caught", () => {
+  n = 0;
+  const g = buildGraph({
+    steps: [step("a"), step("y", "exit")],
+    edges: [edge("a", "y", ARM_A)],
+  });
+  assert.match(messages(g), /isn't a split/);
 });

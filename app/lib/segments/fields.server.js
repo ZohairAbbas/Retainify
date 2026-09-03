@@ -66,6 +66,7 @@ export const FIELDS = [
       { id: "shopify_customer", label: "Shopify customer" },
       { id: "csv_import",       label: "CSV import" },
       { id: "push_only",        label: "Push only" },
+      { id: "journey_enrollment", label: "Flow enrollment" },
       { id: "manual",           label: "Added manually" },
     ] },
   { id: "hasTag",         label: "Has tag",     group: "Profile", type: "tag",     supported: true },

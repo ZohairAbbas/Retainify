@@ -30,8 +30,20 @@ const VALID_SOURCES = new Set([
   "shopify_customer",
   "csv_import",
   "push_only",
+  "journey_enrollment",
   "manual",
 ]);
+
+/**
+ * Sources that describe how a contact was first *noticed* rather than how they
+ * arrived, and so lose to any real acquisition source that turns up later.
+ *
+ * "manual" is the default a row gets when nobody said otherwise.
+ * "journey_enrollment" is the contacts backfill reading old flow enrollments:
+ * it proves the address existed, not where it came from — the popup signup or
+ * cart that actually produced it may simply predate the tables we can see.
+ */
+const PLACEHOLDER_SOURCES = new Set(["", "manual", "journey_enrollment"]);
 
 export function normalizeEmail(raw) {
   if (!raw) return "";
@@ -47,8 +59,9 @@ export function normalizeEmail(raw) {
  *   - lastSeenAt always advances to now().
  *   - subscriptionStatus is never downgraded out of a suppression state
  *     (unsubscribed/bounced/complained) — suppression wins.
- *   - source is only set when the existing row has source = "manual" or empty
- *     (i.e. real sources beat the placeholder), so the first real touch wins.
+ *   - source is only set when the existing row holds a placeholder (see
+ *     PLACEHOLDER_SOURCES) and the incoming source is a real one, so the first
+ *     real touch wins and nothing ever downgrades back to a placeholder.
  *   - name is overwritten only when a non-empty value is provided.
  *   - a soft-deleted row is only revived when the caller passes revive: true.
  *     Deletion is a deliberate merchant action, so passive writes (webhooks,
@@ -119,10 +132,7 @@ export async function upsertContact(input) {
 
   if (name && !existing.name) data.name = name;
 
-  if (
-    source &&
-    (existing.source === "manual" || existing.source === "")
-  ) {
+  if (source && PLACEHOLDER_SOURCES.has(existing.source) && !PLACEHOLDER_SOURCES.has(source)) {
     data.source = source;
   }
 
@@ -181,7 +191,12 @@ export async function upsertContact(input) {
  * original order-based design was reaching for; it just had no order data to
  * read.
  *
- * @param {{ firstSeenAt: Date|string, lastSeenAt?: Date|string, lastOrderAt?: Date|string|null }} contact
+ * Cart recency is read from contact.lastCartAt when the row carries it, and
+ * from stats.lastCartAbandonAt otherwise. It used to come only from stats,
+ * which meant every caller had to fetch an aggregate first; it is a column now,
+ * so most callers already hold it and the stats argument is optional.
+ *
+ * @param {{ firstSeenAt: Date|string, lastSeenAt?: Date|string, lastOrderAt?: Date|string|null, lastCartAt?: Date|string|null }} contact
  * @param {{ lastCartAbandonAt?: Date|string|null }} [stats]
  * @returns {"new"|"active"|"at_risk"|"churned"}
  */
@@ -192,7 +207,8 @@ export function computeLifecycle(contact, stats) {
   const firstSeen = new Date(contact.firstSeenAt).getTime();
   if (Number.isFinite(firstSeen) && (now - firstSeen) / DAY <= 14) return "new";
 
-  const signals = [contact.lastSeenAt, contact.lastOrderAt, stats?.lastCartAbandonAt]
+  const lastCart = contact.lastCartAt ?? stats?.lastCartAbandonAt ?? null;
+  const signals = [contact.lastSeenAt, contact.lastOrderAt, lastCart]
     .filter(Boolean)
     .map((d) => new Date(d).getTime())
     .filter((t) => Number.isFinite(t));
@@ -222,15 +238,9 @@ export function computeLifecycle(contact, stats) {
 export async function getContactStats(shop, email) {
   const lower = normalizeEmail(email);
   const [
-    cartAggregate,
     pushSent,
     pushClicked,
   ] = await Promise.all([
-    prisma.abandonedCart.aggregate({
-      where: { shop, customerEmail: lower },
-      _count: { _all: true },
-      _max: { abandonedAt: true, totalPrice: true },
-    }),
     prisma.pushJob.count({
       where: {
         shop,
@@ -260,6 +270,7 @@ export async function getContactStats(shop, email) {
       emailsSent: true, emailsOpened: true, emailsClicked: true,
       emailsClickTracked: true, openRate: true, clickRate: true,
       lastEmailOpenedAt: true, pushEnabled: true,
+      cartAbandonCount: true, lastCartAt: true, lastCartValue: true,
     },
   });
 
@@ -267,9 +278,9 @@ export async function getContactStats(shop, email) {
     orderCount: contactRow?.orderCount || 0,
     totalSpent: contactRow?.totalSpent || 0,
     lastOrderAt: contactRow?.lastOrderAt || null,
-    cartAbandonCount: cartAggregate._count?._all || 0,
-    lastCartAbandonAt: cartAggregate._max?.abandonedAt || null,
-    lastCartValue: cartAggregate._max?.totalPrice || 0,
+    cartAbandonCount: contactRow?.cartAbandonCount || 0,
+    lastCartAbandonAt: contactRow?.lastCartAt || null,
+    lastCartValue: contactRow?.lastCartValue || 0,
     emailsSent: contactRow?.emailsSent || 0,
     emailsOpened: contactRow?.emailsOpened || 0,
     emailsClicked: contactRow?.emailsClicked || 0,
@@ -341,33 +352,19 @@ export async function getContactStatsBatch(shop, emails) {
     ? Prisma.empty
     : Prisma.sql`AND e."contactEmail" IN (${Prisma.join(list)})`;
 
-  const [cartRows, pushRows] = await Promise.all([
-    prisma.abandonedCart.groupBy({
-      by: ["customerEmail"],
-      where: { shop, ...(wide ? {} : { customerEmail: { in: list } }) },
-      _count: { _all: true },
-      _max: { abandonedAt: true, totalPrice: true },
-    }),
-    // PushJob only reaches the contact through its enrollment, which Prisma's
-    // groupBy cannot traverse — a grouped join instead. Email engagement used
-    // to need the same treatment; it is read off Contact below now.
-    prisma.$queryRaw`
-      SELECT e."contactEmail" AS email,
-             COUNT(*) FILTER (WHERE p."sentAt" IS NOT NULL)    AS sent,
-             COUNT(*) FILTER (WHERE p."clickedAt" IS NOT NULL) AS clicked
-        FROM "PushJob" p
-        JOIN "JourneyEnrollment" e ON e."id" = p."enrollmentId"
-       WHERE p."shop" = ${shop} ${emailFilter}
-       GROUP BY e."contactEmail"`,
-  ]);
+  // PushJob only reaches the contact through its enrollment, which Prisma's
+  // groupBy cannot traverse — a grouped join instead. Email engagement and cart
+  // both used to need the same treatment; they are read off Contact below now,
+  // which leaves this as the only join left in this function.
+  const pushRows = await prisma.$queryRaw`
+    SELECT e."contactEmail" AS email,
+           COUNT(*) FILTER (WHERE p."sentAt" IS NOT NULL)    AS sent,
+           COUNT(*) FILTER (WHERE p."clickedAt" IS NOT NULL) AS clicked
+      FROM "PushJob" p
+      JOIN "JourneyEnrollment" e ON e."id" = p."enrollmentId"
+     WHERE p."shop" = ${shop} ${emailFilter}
+     GROUP BY e."contactEmail"`;
 
-  for (const row of cartRows) {
-    const s = out.get(normalizeEmail(row.customerEmail));
-    if (!s) continue;
-    s.cartAbandonCount = row._count?._all || 0;
-    s.lastCartAbandonAt = row._max?.abandonedAt || null;
-    s.lastCartValue = row._max?.totalPrice || 0;
-  }
   for (const row of pushRows) {
     const s = out.get(normalizeEmail(row.email));
     if (!s) continue;
@@ -388,6 +385,7 @@ export async function getContactStatsBatch(shop, emails) {
       emailsSent: true, emailsOpened: true, emailsClicked: true,
       emailsClickTracked: true, openRate: true, clickRate: true,
       lastEmailOpenedAt: true, pushEnabled: true,
+      cartAbandonCount: true, lastCartAt: true, lastCartValue: true,
     },
   });
   for (const row of contactRows) {
@@ -405,6 +403,9 @@ export async function getContactStatsBatch(shop, emails) {
     s.clickRate = row.clickRate || 0;
     s.lastEmailOpenedAt = row.lastEmailOpenedAt || null;
     s.pushEnabled = Boolean(row.pushEnabled);
+    s.cartAbandonCount = row.cartAbandonCount || 0;
+    s.lastCartAbandonAt = row.lastCartAt || null;
+    s.lastCartValue = row.lastCartValue || 0;
   }
 
   return out;

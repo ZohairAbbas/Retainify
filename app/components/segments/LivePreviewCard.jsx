@@ -27,7 +27,6 @@ export default function LivePreviewCard({ filterTree, kind, staticMembers, total
         sample: (staticMembers || []).slice(0, 5).map((m) => ({
           id: m.id, email: m.email, name: m.name, lifecycle: "active",
         })),
-        capped: false,
         lifecycleMix: null,
       });
       return;
@@ -56,7 +55,6 @@ export default function LivePreviewCard({ filterTree, kind, staticMembers, total
   }, [filterTree, kind, staticMembers]);
 
   const count = data?.count ?? 0;
-  const capped = data?.capped;
   const sample = data?.sample || [];
   const mix = data?.lifecycleMix;
 
@@ -73,7 +71,11 @@ export default function LivePreviewCard({ filterTree, kind, staticMembers, total
       </div>
 
       <div className="rt-prev-count">
-        <em>{capped ? "5000+" : count.toLocaleString()}</em>
+        {/* Always the real number. This read "5000+" whenever the evaluator
+            set `capped`, which on the SQL path it did for any exact count over
+            5,000 — so a correct 16,472 was displayed as "5000+". Nothing
+            truncates a count now and the flag is gone. */}
+        <em>{count.toLocaleString()}</em>
         <span className="rt-prev-count-unit">contacts match</span>
       </div>
 

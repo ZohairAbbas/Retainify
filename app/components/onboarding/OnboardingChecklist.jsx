@@ -250,8 +250,21 @@ function FlowPanel({ ctx, onComplete }) {
   );
 }
 
+/**
+ * The scheduling link comes from resolveCallUrl (lib/onboarding/tasks.js), which
+ * returns "" rather than a "#" sentinel when there is no real link configured.
+ *
+ * Opening the scheduler completes the step. It is not proof a call was booked,
+ * but the alternative — asking the merchant to come back and confirm — puts a
+ * second gate on the least consequential step in the list, and the step is
+ * optional and skippable either way.
+ *
+ * With no link at all the panel offers Skip alone. A disabled primary button
+ * reading "Scheduling link coming soon" was the previous behaviour, and it made
+ * an unfinished deploy config look like an unfinished product to the merchant.
+ */
 function CallPanel({ ctx, onComplete, onSkip }) {
-  const hasUrl = ctx.callUrl && ctx.callUrl !== "#";
+  const hasUrl = !!ctx.callUrl;
   return (
     <div className="ob-panel-pad">
       <p className="ob-panel-lede">Optional, but worth it. A 20-minute call with an onboarding specialist to review your flows, deliverability, and a 30-day plan tailored to {ctx.storeName || "your store"}.</p>
@@ -264,15 +277,20 @@ function CallPanel({ ctx, onComplete, onSkip }) {
       </div>
       <div className="ob-panel-actions">
         {hasUrl ? (
-          <a className="ob-btn ob-btn-primary" href={ctx.callUrl} target="_blank" rel="noreferrer" onClick={onComplete}>
-            Pick a time <Icons.Exit size={14} />
-          </a>
+          <>
+            <a className="ob-btn ob-btn-primary" href={ctx.callUrl} target="_blank" rel="noreferrer" onClick={onComplete}>
+              Pick a time <Icons.Exit size={14} />
+            </a>
+            <button className="ob-skip-btn" onClick={onSkip}>Skip for now</button>
+          </>
         ) : (
-          <button className="ob-btn ob-btn-primary is-disabled" disabled title="Scheduling link coming soon">
-            Pick a time
-          </button>
+          <>
+            <button className="ob-btn ob-btn-primary" onClick={onSkip}>
+              Continue without a call
+            </button>
+            <span className="ob-time-tag"><Icons.Clock size={13} /> Booking opens shortly</span>
+          </>
         )}
-        <button className="ob-skip-btn" onClick={onSkip}>Skip for now</button>
       </div>
     </div>
   );

@@ -50,11 +50,7 @@
 
 import prisma from "../../db.server.js";
 import { evalTreeForContact } from "../segments/evaluator.server.js";
-import {
-  getContactStats,
-  computeLifecycle,
-  normalizeEmail,
-} from "../contacts/contacts.server.js";
+import { normalizeEmail } from "../contacts/contacts.server.js";
 import { isEmptyCondition, sendableAncestors } from "./graph.server.js";
 
 /**
@@ -202,8 +198,10 @@ export async function evaluateSplit({ shop, enrollment, step, graph }) {
       if (!contact) {
         return { matched: false, reason: "no contact record to evaluate against" };
       }
-      const stats = await getContactStats(shop, email);
-      contactCtx = { contact, stats, lifecycle: computeLifecycle(contact, stats) };
+      // No stats aggregate: every contact-scoped field a split can name is a
+      // column on the row above, lifecycle included. This ran on each split
+      // evaluation, in the send path.
+      contactCtx = { contact };
     }
 
     const flowCtx = needsFlow ? await loadFlowEngagement(enrollment.id) : new Map();

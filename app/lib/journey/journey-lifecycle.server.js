@@ -6,6 +6,11 @@
  * Paused journeys keep in-flight jobs running but block new enrollments.
  */
 import prisma from "../../db.server.js";
+import { YES, NO, ARM_A, ARM_B, NEXT, AB_METRICS } from "./graph.server.js";
+import { clampWeight as clampSplitWeight } from "./ab-assignment.server.js";
+
+/** Every branch value an edge may carry. */
+const VALID_BRANCHES = new Set([NEXT, YES, NO, ARM_A, ARM_B]);
 
 // Default email blocks for steps the merchant never opened in the visual
 // editor. The journey worker always calls renderVisualEmail(), so we seed a
@@ -177,10 +182,35 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
         discountPct: 0,
         isEnabled: true,
       });
+    } else if (s.nodeType === "tag") {
+      rows.push({
+        ...keepKey,
+        nodeType: "tag",
+        // By id, so a renamed tag keeps working. An id belonging to another
+        // shop, or to a deleted tag, is caught at publish and again at apply
+        // time — this only stores what the canvas sent.
+        tagId: s.tagId || null,
+        tagAction: s.tagAction === "remove" ? "remove" : "add",
+        delayHours: 0,
+        positionY: positionY++,
+        stepNumber: positionY,
+        subject: "",
+        previewText: "",
+        emailName: s.emailName || "",
+        templateStyle: "classic",
+        discountPct: 0,
+        isEnabled: true,
+      });
     } else if (s.nodeType === "split") {
       rows.push({
         ...keepKey,
         nodeType: "split",
+        // Without these an A/B split would save as a conditional one: the
+        // walk would look for yes/no edges that do not exist, and every
+        // contact would fall out of the flow at the split.
+        splitMode: s.splitMode === "random" ? "random" : "condition",
+        splitWeight: clampSplitWeight(s.splitWeight),
+        splitMetric: AB_METRICS.includes(s.splitMetric) ? s.splitMetric : "click",
         // Stored as sent. Null rather than {} for an unset condition, so
         // isEmptyCondition and the publish check agree that nothing has been
         // configured yet — an empty object would read as a group with no
@@ -328,11 +358,22 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
           );
           continue;
         }
+        // Rejected, not coerced. This used to fall back to "next" for any
+        // value it did not recognise, which quietly turned both arms of an A/B
+        // split into one edge — a malformed graph rather than an error, and
+        // only caught because the unique constraint happened to fire. An
+        // unknown branch is a serialisation bug and has to be visible.
+        if (!VALID_BRANCHES.has(e.branch)) {
+          console.error(
+            `[saveDraft] journey ${journeyId} — edge ${e.from}→${e.to} has unknown branch "${e.branch}"; dropped`,
+          );
+          continue;
+        }
         edgeRows.push({
           journeyId,
           fromStepId: from.id,
           toStepId: to.id,
-          branch: e.branch === "yes" || e.branch === "no" ? e.branch : "next",
+          branch: e.branch,
         });
       }
     } else if (live.length > 1) {

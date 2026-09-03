@@ -42,20 +42,15 @@ if (typeof setInterval !== "undefined") {
     runStuckJobReaper().catch((err) => console.error("[stuck-jobs] poll error:", err));
   }, 60_000);
 
-  // Lazy enrollments that lost their wake-up, plus the eager drain gauge.
-  // Five-minutely rather than per-minute: a stall is a standing condition, not
-  // an event, and this reads across every open enrollment rather than a claim
-  // window. It only reports — see runEnrollmentStallReaper for why it must not
-  // quietly re-wake anything.
+  // Enrollments that lost their wake-up. Five-minutely rather than per-minute:
+  // a stall is a standing condition, not an event, and this reads across every
+  // open enrollment rather than a claim window. It only reports — and logs its
+  // own findings at error level with a sample — see runEnrollmentStallReaper
+  // for why it must not quietly re-wake anything.
   setInterval(() => {
-    runEnrollmentStallReaper()
-      // Stalls are logged by the reaper itself, at error level with a sample.
-      .then(({ eagerRemaining }) => {
-        if (eagerRemaining > 0) {
-          console.warn(`[drain] ${eagerRemaining} enrollment(s) still on the eager scheduler`);
-        }
-      })
-      .catch((err) => console.error("[stall-reaper] poll error:", err));
+    runEnrollmentStallReaper().catch((err) =>
+      console.error("[stall-reaper] poll error:", err),
+    );
   }, 5 * 60_000);
 
   // Housekeeping for the standalone auth tables. Hourly, not per-minute: an

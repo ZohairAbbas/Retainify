@@ -7,7 +7,7 @@ import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
 import { addDomain, verifyOrCheckDomain, removeDomain } from "../lib/email/domain-actions.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import OnboardingChecklist from "../components/onboarding/OnboardingChecklist.jsx";
-import { themeEditorEmbedUrl } from "../lib/onboarding/tasks.js";
+import { themeEditorEmbedUrl, resolveCallUrl } from "../lib/onboarding/tasks.js";
 import {
   getOnboardingState,
   setTaskState,
@@ -41,7 +41,7 @@ export const loader = async ({ request }) => {
     slotAvailable,
     domainRecords,
     apiKey: process.env.SHOPIFY_API_KEY || "",
-    callUrl: process.env.ONBOARDING_CALL_URL || "#",
+    callUrl: resolveCallUrl(process.env.ONBOARDING_CALL_URL),
     sendingFromAddress,
     storeName: state.settings?.senderName && state.settings.senderName !== "Your Store"
       ? state.settings.senderName

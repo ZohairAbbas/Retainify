@@ -121,7 +121,7 @@ export async function runStuckJobReaper() {
 }
 
 /**
- * How long a lazy enrollment may sit with nothing scheduled and nothing queued.
+ * How long an enrollment may sit with nothing scheduled and nothing queued.
  *
  * Generous on purpose. The legitimate version of this state lasts one worker
  * tick: a job settles, settleEnrollmentIfFinished sets nextRunAt, the next tick
@@ -130,10 +130,10 @@ export async function runStuckJobReaper() {
 export const STALL_AFTER_MS = 15 * 60 * 1000;
 
 /**
- * Find lazy enrollments that nobody will ever wake.
+ * Find enrollments that nobody will ever wake.
  *
  * ── Why this exists at all ─────────────────────────────────────────────────
- * A lazy enrollment is only ever in one of two healthy states: parked on a
+ * An enrollment is only ever in one of two healthy states: parked on a
  * nextRunAt, or waiting on a live job. A stall is neither — no wake time, no
  * job, not exited — and it is completely silent. No job fails, nothing appears
  * in any report, no error is logged. The contact simply stops hearing from the
@@ -152,34 +152,28 @@ export const STALL_AFTER_MS = 15 * 60 * 1000;
  * itself, re-waking sends the contact round it again. The count belongs on a
  * dashboard with an alarm on it; a human decides what to do.
  *
- * The drain gauge rides along here because it answers the question that
- * governs the whole cutover: how many enrollments are still on the old
- * pre-materialized scheduler. The eager path can be deleted when this has read
- * zero for longer than the longest flow delay.
+ * This also subsumes the cutover's drain gauge. That counted enrollments still
+ * on the pre-branching scheduler; now that the scheduler is gone, one created
+ * by mistake would hold no wake time and no jobs — which is precisely what
+ * this reports. One alarm rather than two.
  *
- * @returns {Promise<{ stalled: number, eagerRemaining: number, sample: string[] }>}
+ * @returns {Promise<{ stalled: number, sample: string[] }>}
  */
 export async function runEnrollmentStallReaper() {
   const cutoff = new Date(Date.now() - STALL_AFTER_MS);
 
-  const [candidates, eagerRemaining] = await Promise.all([
-    prisma.journeyEnrollment.findMany({
-      where: {
-        schedulingMode: "lazy",
-        exitReason: "",
-        nextRunAt: null,
-        // Not the enrollment created seconds ago and not yet walked.
-        enrolledAt: { lt: cutoff },
-      },
-      select: { id: true, shop: true, journeyId: true, currentStepId: true },
-      take: 500,
-    }),
-    prisma.journeyEnrollment.count({ where: { schedulingMode: "eager", exitReason: "" } }),
-  ]);
+  const candidates = await prisma.journeyEnrollment.findMany({
+    where: {
+      exitReason: "",
+      nextRunAt: null,
+      // Not the enrollment created seconds ago and not yet walked.
+      enrolledAt: { lt: cutoff },
+    },
+    select: { id: true, shop: true, journeyId: true, currentStepId: true },
+    take: 500,
+  });
 
-  if (!candidates.length) {
-    return { stalled: 0, eagerRemaining, sample: [] };
-  }
+  if (!candidates.length) return { stalled: 0, sample: [] };
 
   // No wake time is only a stall if there is also no job owed an outcome —
   // otherwise this is the ordinary "waiting for a send to settle" state.
@@ -201,9 +195,5 @@ export async function runEnrollmentStallReaper() {
     );
   }
 
-  return {
-    stalled: stalled.length,
-    eagerRemaining,
-    sample: stalled.slice(0, 20).map((e) => e.id),
-  };
+  return { stalled: stalled.length, sample: stalled.slice(0, 20).map((e) => e.id) };
 }

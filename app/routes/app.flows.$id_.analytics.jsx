@@ -27,6 +27,8 @@ import {
   countCampaignRecipients,
   getCampaignOverview,
   getCampaignStepBreakdown,
+  getCampaignSplitBreakdown,
+  getCampaignAbBreakdown,
   listCampaignRecipients,
   resolveRange,
 } from "../lib/analytics/campaign.server.js";
@@ -57,8 +59,10 @@ export const loader = async ({ request, params }) => {
   const overview = await getCampaignOverview(shop, id, days);
   if (!overview) throw new Response("Not found", { status: 404 });
 
-  const [steps, recipients, recipientTotal] = await Promise.all([
+  const [steps, splits, abTests, recipients, recipientTotal] = await Promise.all([
     getCampaignStepBreakdown(shop, id, days),
+    getCampaignSplitBreakdown(shop, id, days),
+    getCampaignAbBreakdown(shop, id, days),
     listCampaignRecipients({ shop, journeyId: id, days, cursor, limit: PAGE_SIZE, filter }),
     countCampaignRecipients({ shop, journeyId: id, days, filter }),
   ]);
@@ -66,6 +70,8 @@ export const loader = async ({ request, params }) => {
   return {
     overview,
     steps,
+    splits,
+    abTests,
     recipients: recipients.rows,
     nextCursor: recipients.nextCursor,
     recipientTotal,
@@ -125,6 +131,8 @@ export default function CampaignAnalytics() {
   const {
     overview,
     steps,
+    splits,
+    abTests,
     recipients,
     nextCursor,
     recipientTotal,
@@ -413,6 +421,68 @@ export default function CampaignAnalytics() {
         </div>
       </div>
 
+      {/* A/B tests. Each one gets its own card rather than a table row: the
+          verdict is the point, and a verdict is a sentence, not a cell. */}
+      {abTests.length > 0 && (
+        <>
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>A/B tests</div>
+          <div className="rt-ab-list">
+            {abTests.map((t) => (
+              <AbTestCard key={t.stepKey} test={t} />
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Where each split sent people. Only rendered when the flow has one —
+          a straight-line flow should not grow an empty table. */}
+      {splits.length > 0 && (
+        <>
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Branches</div>
+          <div className="tscroll" style={{ overflowX: "auto", marginBottom: 32 }}>
+            <div className="rt-table rt-table--splits" style={{ minWidth: 720 }}>
+              <div className="rt-thead">
+                <div>Split</div>
+                <div className="rt-tnum">Reached</div>
+                <div className="rt-tnum">Yes</div>
+                <div className="rt-tnum">No</div>
+                <div className="rt-tnum">Yes rate</div>
+                <div>Share</div>
+              </div>
+              {splits.map((sp) => (
+                <div key={sp.stepKey} className="rt-trow">
+                  <div>
+                    <div className="rt-flow-name">{sp.label}</div>
+                    {sp.removed && (
+                      <div className="rt-flow-meta">Removed from the flow · past decisions</div>
+                    )}
+                  </div>
+                  <div className="rt-tnum t-mono">{fmt(sp.total)}</div>
+                  <div className="rt-tnum t-mono">{fmt(sp.yes)}</div>
+                  <div className="rt-tnum t-mono">{fmt(sp.no)}</div>
+                  {/* A split nobody has reached yet has no rate — a dash, not
+                      0%, which would read as "everyone took No". */}
+                  <div className="rt-tnum t-mono">{sp.total ? pct(sp.yesRate) : "—"}</div>
+                  <div>
+                    {sp.total ? (
+                      <div
+                        className="rt-splitbar"
+                        role="img"
+                        aria-label={`${sp.yes} took Yes, ${sp.no} took No`}
+                      >
+                        <span className="rt-splitbar-yes" style={{ width: `${sp.yesRate}%` }} />
+                      </div>
+                    ) : (
+                      <span className="muted t-small">Not reached yet</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
+      )}
+
       {/* Recipients */}
       <div
         style={{
@@ -522,3 +592,70 @@ export function ErrorBoundary() {
 }
 
 export const headers = (headersArgs) => boundary.headers(headersArgs);
+
+/**
+ * One A/B test: the two arms side by side, and what the numbers actually mean.
+ *
+ * The verdict leads. A merchant reading a table of rates will find a winner in
+ * it whatever the sample size — that is the failure this whole feature exists
+ * to prevent — so the sentence that says whether there is one comes first, and
+ * the figures support it rather than the other way round.
+ */
+function AbTestCard({ test }) {
+  const [a, b] = test.arms || [test.a, test.b];
+  const v = test.verdict || {};
+  const decided = v.state === "significant";
+  const waiting = v.state === "not_enough";
+
+  const bar = (arm, rate, best) => (
+    <div className={`rt-ab-arm${decided && best ? " rt-ab-arm-win" : ""}`}>
+      <div className="rt-ab-arm-head">
+        <span className="rt-ab-arm-name">Variant {arm.arm ? arm.arm.toUpperCase() : ""}</span>
+        {decided && best && <span className="rt-ab-win-chip">Winner</span>}
+      </div>
+      <div className="rt-ab-rate t-mono">{test.metric === "revenue" ? money(rate, arm.currency) : pct(rate)}</div>
+      <div className="rt-ab-meta">
+        {fmt(arm.recipients)} {arm.recipients === 1 ? "contact" : "contacts"}
+        {" · "}{fmt(arm.opened)} opened{" · "}{fmt(arm.clicked)} clicked
+        {arm.orders > 0 && <>{" · "}{fmt(arm.orders)} orders</>}
+      </div>
+      <div className="rt-ab-track">
+        <span
+          className="rt-ab-fill"
+          style={{ width: `${scaleWidth(rate, test.rates)}%` }}
+        />
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="rt-ab-card">
+      <div className="rt-ab-card-head">
+        <div>
+          <div className="rt-flow-name">{test.label}</div>
+          <div className="rt-flow-meta">
+            Judged on {test.metricLabel || test.metric}
+            {" · "}{test.weight}% / {100 - test.weight}% split
+            {test.removed && " · removed from the flow"}
+          </div>
+        </div>
+      </div>
+
+      <div className="rt-ab-arms">
+        {bar(a, test.rates?.a ?? 0, v.leader === "a")}
+        {bar(b, test.rates?.b ?? 0, v.leader === "b")}
+      </div>
+
+      <div className={`rt-ab-verdict${decided ? " rt-ab-verdict-done" : ""}${waiting ? " rt-ab-verdict-wait" : ""}`}>
+        {v.message}
+      </div>
+    </div>
+  );
+}
+
+/** Bar widths relative to the better arm, so the smaller one is readable. */
+function scaleWidth(value, rates) {
+  const top = Math.max(Number(rates?.a) || 0, Number(rates?.b) || 0);
+  if (!top) return 0;
+  return Math.max(2, ((Number(value) || 0) / top) * 100);
+}

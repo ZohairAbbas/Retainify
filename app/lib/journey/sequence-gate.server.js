@@ -2,7 +2,7 @@
  * Step ordering for a journey.
  *
  * ── What this fixes ────────────────────────────────────────────────────────
- * Under the eager scheduler every job for an enrollment was created up front,
+ * The pre-branching scheduler created every job for an enrollment up front,
  * each with its own scheduledFor, and each claimed independently when due.
  * Nothing ever related them, so a step that died took no notice of the steps
  * behind it: 7,201 enrollments in this database had step 1 fail permanently
@@ -27,27 +27,22 @@
  * An earlier step still PENDING means "not yet", not "never" — the later step
  * waits rather than overtaking it.
  *
- * ── "Earlier" means two different things ───────────────────────────────────
- * Which steps count as before this one depends on how the enrollment was
- * scheduled, and both answers have to work at once while the eager backlog
- * drains.
+ * ── "Earlier" means my ancestors ───────────────────────────────────────────
+ * Not "a lower stepNumber". On a tree stepNumber is a preorder position, so a
+ * lower number can sit on a branch this contact never took — and gating on a
+ * message that was never meant for them would cancel a perfectly good flow.
  *
- *   eager   every job existed from the start, on one straight line, so
- *           "earlier" is stepNumber < mine. Untouched, deliberately: these
- *           enrollments were created under that model and must finish under it.
+ * "Earlier" is therefore the steps on the one path that reaches this one.
+ * Because branches never merge that path is unique, so it is a structural
+ * fact needing no record of what the contact did.
  *
- *   lazy    the flow is a tree and stepNumber is a preorder position, so a
- *           lower number can sit on a branch this contact never took. "Earlier"
- *           has to mean MY ANCESTORS — the steps on the one path that reaches
- *           me. Because branches never merge, that path is unique and needs no
- *           record of what the contact did.
- *
- * The lazy path is close to redundant by construction: a job is only created
- * once the previous step settled, and a permanently failed email already ends
- * the enrollment before the next step is scheduled. It stays because "the
- * design says this cannot happen" is exactly the reasoning that produced the
- * 7,201 broken sequences, and because the cancel paths (a dead shop, a stale
- * job, this gate itself) can still retire a step out from under a successor.
+ * ── Why this is kept at all ────────────────────────────────────────────────
+ * It is close to redundant by construction: a job is only created once the
+ * previous step settled, and a permanently failed email already ends the
+ * enrollment before the next step is scheduled. It stays because "the design
+ * says this cannot happen" is exactly the reasoning that produced the 7,201
+ * broken sequences, and because the cancel paths (a dead shop, a stale job,
+ * this gate itself) can still retire a step out from under a successor.
  */
 import prisma from "../../db.server.js";
 import { loadGraph, sendableAncestors } from "./graph.server.js";
@@ -62,7 +57,7 @@ export const SEQUENCE_RECHECK_MS = 15 * 60 * 1000;
 /**
  * Decide whether a step may send yet.
  *
- * @param {{id: string, schedulingMode?: string, journeyId?: string}} enrollment
+ * @param {{id: string, journeyId?: string}} enrollment
  * @param {{id: string, stepNumber: number, stepKey?: string}} step the step being considered
  * @returns {Promise<{ verdict: string, reason: string }>}
  */
@@ -72,10 +67,7 @@ export async function checkStepSequence(enrollment, step) {
     return { verdict: PROCEED, reason: "no sequence context" };
   }
 
-  const earlier =
-    enrollment.schedulingMode === "lazy"
-      ? await earlierByAncestry(enrollment, step)
-      : await earlierByNumber(enrollmentId, step.stepNumber);
+  const earlier = await earlierByAncestry(enrollment, step);
 
   if (earlier === null) {
     // Ancestry could not be resolved — see earlierByAncestry. Proceeding is the
@@ -105,24 +97,6 @@ export async function checkStepSequence(enrollment, step) {
   }
 
   return { verdict: PROCEED, reason: "all earlier email steps settled" };
-}
-
-/**
- * Eager: every email step with a lower number, however the flow is shaped.
- *
- * An enrollment belongs to exactly one journey, so enrollmentId already scopes
- * this to the right flow.
- */
-async function earlierByNumber(enrollmentId, stepNumber) {
-  if (!Number.isFinite(stepNumber)) return null;
-  const rows = await prisma.journeyJob.findMany({
-    where: {
-      enrollmentId,
-      step: { nodeType: "email", stepNumber: { lt: stepNumber } },
-    },
-    select: { status: true, step: { select: { stepNumber: true } } },
-  });
-  return rows.map((r) => ({ status: r.status, stepNumber: r.step.stepNumber }));
 }
 
 /**

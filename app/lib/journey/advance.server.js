@@ -5,7 +5,7 @@
  * Enrollment used to create every job for a whole flow up front, each with its
  * own absolute scheduledFor. That works only while a flow is a straight line:
  * you cannot pre-schedule a path nobody has chosen yet. A split has to be stood
- * on before it can be answered.
+ * on before it can be answered. That scheduler is gone; this is the only one.
  *
  * So the work is scheduled one node at a time instead. An enrollment carries a
  * cursor (`currentStepId` — the next node to process) and a wake time
@@ -24,6 +24,17 @@
  * this shape (1,264 stranded quiet-hours jobs, 129 enrollments left open by
  * non-success terminal paths), and both took far too long to notice.
  *
+ * ── Operational note: this is forward-only ─────────────────────────────────
+ * There is no second scheduler to fall back to. The pre-branching one — which
+ * created every job for a whole flow at enrollment — was retired once its
+ * backlog reached zero, and its code is gone.
+ *
+ * So a bad deploy here is fixed forward, not reverted: rolling back to a build
+ * without this module leaves every open enrollment with a cursor nothing knows
+ * how to move, and they stop silently rather than failing. That is the reason
+ * this file is kept as small as it is, and the reason the stall reaper reports
+ * on a schedule rather than on demand.
+ *
  * ── Who calls this ─────────────────────────────────────────────────────────
  * Only runEnrollmentAdvanceWorker, on the 60s tick. Send workers never call it
  * directly: when a job settles they set nextRunAt = now via
@@ -33,7 +44,9 @@
  */
 
 import prisma from "../../db.server.js";
-import { loadGraph, nextStepId, NEXT, YES, NO } from "./graph.server.js";
+import { loadGraph, nextStepId, NEXT, YES, NO, BY_CHANCE } from "./graph.server.js";
+import { assignArm } from "./ab-assignment.server.js";
+import { applyTagAction } from "./tag-action.server.js";
 import { evaluateSplit } from "./split-conditions.server.js";
 
 /**
@@ -71,11 +84,6 @@ export async function advanceEnrollment(enrollmentId) {
   });
   if (!enrollment) return done("skipped", "enrollment gone");
 
-  // Eager enrollments are pre-materialized and finish on their own schedule.
-  // Touching one here would be scheduling the same sends twice.
-  if (enrollment.schedulingMode !== "lazy") {
-    return done("skipped", "eager enrollment");
-  }
   if (enrollment.exitReason) {
     // Exited between the claim and now. Clear the wake time so it is not picked
     // up again, and so the stall reaper does not count it.
@@ -148,17 +156,33 @@ export async function advanceEnrollment(enrollmentId) {
         return settle(enrollmentId, "completed");
 
       // ── Split ──────────────────────────────────────────────────────────
-      // Reads what is true on arrival. Waiting for something to become true is
-      // the merchant's Wait node placed in front of this one — see the split
-      // inspector copy.
+      // Two kinds, one shape. A conditional split reads what is true on
+      // arrival — waiting for something to become true is the merchant's Wait
+      // node placed in front of it. An A/B split assigns by chance instead.
+      // Everything after the decision is identical, which is why they are one
+      // node type rather than two.
       case "split": {
-        const { matched, reason } = await evaluateSplit({
-          shop: enrollment.shop,
-          enrollment,
-          step,
-          graph,
-        });
-        const branch = matched ? YES : NO;
+        let branch;
+        let matched = null;
+        let reason;
+
+        if (step.splitMode === BY_CHANCE) {
+          ({ arm: branch, reason } = assignArm(enrollment, step));
+          // matched stays null: there is no condition, so neither true nor
+          // false would be an honest record of one.
+        } else {
+          ({ matched, reason } = await evaluateSplit({
+            shop: enrollment.shop,
+            enrollment,
+            step,
+            graph,
+          }));
+          branch = matched ? YES : NO;
+        }
+
+        // Written before the cursor moves, so the decision is on record even
+        // if the walk dies immediately after. Re-deciding on a later tick
+        // would be free to land the other way.
         await prisma.journeyPathEvent.create({
           data: {
             enrollmentId,
@@ -172,6 +196,26 @@ export async function advanceEnrollment(enrollmentId) {
           `[advance] enrollment ${enrollmentId} split ${step.stepNumber} → ${branch} (${reason})`,
         );
         cursor = nextStepId(graph, step.id, branch);
+        continue;
+      }
+
+      // ── Tag ────────────────────────────────────────────────────────────
+      // The only node that writes to the contact record. It schedules
+      // nothing, so the walk continues in the same pass — stopping here would
+      // leave the enrollment with no wake time and no job, which is exactly
+      // what the stall reaper exists to catch.
+      case "tag": {
+        const { ok, action, reason } = await applyTagAction(enrollment, step);
+        // Never fails the enrollment. A missing label does not make the
+        // remaining messages wrong, and ending a flow over one would turn a
+        // bookkeeping loss into a contact who silently stops hearing from the
+        // merchant. Contrast a failed email, which does end the flow.
+        if (!ok) {
+          console.warn(
+            `[advance] enrollment ${enrollmentId} step ${step.stepNumber} — ${action} skipped: ${reason}`,
+          );
+        }
+        cursor = nextStepId(graph, step.id, NEXT);
         continue;
       }
 
@@ -224,9 +268,13 @@ export async function advanceEnrollment(enrollmentId) {
  */
 export async function runEnrollmentAdvanceWorker() {
   const now = new Date();
+  // Deliberately NOT filtered on schedulingMode. Only this module ever sets
+  // nextRunAt, so the filter would have excluded nothing — while quietly
+  // creating a way for an enrollment to be skipped forever if that column ever
+  // held anything unexpected. A worker that silently ignores rows is the exact
+  // failure shape the stall reaper exists to catch; better not to build one.
   const due = await prisma.journeyEnrollment.findMany({
     where: {
-      schedulingMode: "lazy",
       exitReason: "",
       nextRunAt: { lte: now, not: null },
     },

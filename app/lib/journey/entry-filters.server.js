@@ -41,11 +41,7 @@
  */
 import prisma from "../../db.server.js";
 import { evalTreeForContact } from "../segments/evaluator.server.js";
-import {
-  getContactStats,
-  computeLifecycle,
-  normalizeEmail,
-} from "../contacts/contacts.server.js";
+import { normalizeEmail } from "../contacts/contacts.server.js";
 
 /** A tree with no rules in it imposes no restriction. */
 function isEmptyTree(tree) {
@@ -78,9 +74,11 @@ export async function passesEntryFilters(shop, entryFilters, contactEmail) {
   }
 
   try {
-    const stats = await getContactStats(shop, email);
-    const lifecycle = computeLifecycle(contact, stats);
-    const pass = evalTreeForContact(entryFilters, { contact, stats, lifecycle });
+    // No stats aggregate any more: every field a rule can name is a column on
+    // the row already fetched above, lifecycle included. This ran per
+    // enrollment, on the send path, purely to feed a matcher that no longer
+    // needs it.
+    const pass = evalTreeForContact(entryFilters, { contact });
     return { pass, reason: pass ? "" : "did not match entry filters" };
   } catch (err) {
     return { pass: false, reason: `filter evaluation failed: ${err.message}` };

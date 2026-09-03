@@ -62,6 +62,7 @@ export const SOURCE = {
   shopify_customer: "Shopify customer",
   csv_import:       "CSV import",
   push_only:        "Push only",
+  journey_enrollment: "Flow enrollment",
   manual:           "Added manually",
 };
 
@@ -82,6 +83,7 @@ export const EVENT_VISUALS = {
   tagged:           { icon: "Tag",     tint: "tag" },
   untagged:         { icon: "Tag",     tint: "tag" },
   entered_journey:  { icon: "Flow",    tint: "trigger" },
+  split_taken:      { icon: "Split",   tint: "split" },
   exited_journey:   { icon: "Exit",    tint: "exit" },
   added_to_segment: { icon: "Sliders", tint: "trigger" },
   synced_from_shopify: { icon: "Refresh", tint: "delay" },
@@ -104,6 +106,7 @@ export const EVENT_LABEL = {
   tagged:           "Tagged",
   untagged:         "Tag removed",
   entered_journey:  "Entered journey",
+  split_taken:      "Took a branch",
   exited_journey:   "Exited journey",
   added_to_segment: "Added to segment",
   synced_from_shopify: "Synced from Shopify",

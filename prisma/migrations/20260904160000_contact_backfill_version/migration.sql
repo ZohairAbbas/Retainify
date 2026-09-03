@@ -1,0 +1,14 @@
+-- Contact backfill: a version, not just a date.
+--
+-- ── What it closes ─────────────────────────────────────────────────────────
+-- The contacts roll-up was guarded by ShopSettings.contactsBackfilledAt alone,
+-- so it ran once per shop and never again. Any later correction to the routine
+-- therefore reached only shops that installed after it — never the shops whose
+-- data the correction was written for. The roll-up is idempotent by
+-- construction (deterministic ids, ON CONFLICT widening), so re-running it is
+-- safe; what was missing was a reason to.
+--
+-- 0 means "produced by a revision that predates versioning", which is what
+-- every existing row is, backfilled or not. The routine compares against its
+-- own BACKFILL_VERSION constant and re-runs when this is lower.
+ALTER TABLE "ShopSettings" ADD COLUMN "contactsBackfillVersion" INTEGER NOT NULL DEFAULT 0;

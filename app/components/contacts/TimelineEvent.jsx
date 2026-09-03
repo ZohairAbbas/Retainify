@@ -60,8 +60,36 @@ export default function TimelineEvent({ event, last }) {
       context = p.tag ? (
         <>
           Tag: <strong>{p.tag}</strong>
+          {/* Only when a flow applied it. A tag added by a person shows no
+              source, which is the truth rather than a guess. */}
+          {p.byFlow && (
+            <>
+              {" · "}
+              <span className="muted">by {p.byFlow}</span>
+            </>
+          )}
         </>
       ) : null;
+      break;
+    case "split_taken":
+      // Names the split and the side taken. This is the answer to "why did
+      // this person get that email", which is otherwise only reachable by
+      // reading the database.
+      context = (
+        <>
+          <strong>{p.split}</strong>
+          {" → "}
+          <span className={p.branch === "yes" ? "rt-tl-branch-yes" : "rt-tl-branch-no"}>
+            {p.branch === "yes" ? "Yes" : "No"}
+          </span>
+          {p.name && (
+            <>
+              {" · "}
+              <span className="muted">{p.name}</span>
+            </>
+          )}
+        </>
+      );
       break;
     case "entered_journey":
     case "exited_journey":

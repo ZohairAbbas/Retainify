@@ -41,11 +41,56 @@ export const SENDABLE = ["email", "push", "whatsapp"];
 /** How deep splits may nest. Beyond this the canvas is unreadable. */
 export const MAX_SPLIT_DEPTH = 3;
 
-/** The two edges out of a split. */
+/** The two edges out of a conditional split. */
 export const YES = "yes";
 export const NO = "no";
+/**
+ * The two edges out of an A/B split.
+ *
+ * Distinct values rather than reusing yes/no. The branch column is free text
+ * with a unique constraint per step, so this costs nothing at the schema
+ * level — and it means a path event for a random assignment reads "a" rather
+ * than claiming a condition was true. Anyone reading the table later can tell
+ * the two kinds of decision apart without knowing which splits were tests.
+ */
+export const ARM_A = "a";
+export const ARM_B = "b";
 /** The single edge out of every other node. */
 export const NEXT = "next";
+
+/**
+ * What an A/B test can be judged on.
+ *
+ * Per test rather than fixed: a subject-line test is decided on opens, an
+ * offer test on orders. Reporting significance on the wrong number is worse
+ * than reporting none, because it looks equally authoritative.
+ */
+export const AB_METRICS = ["open", "click", "order", "revenue"];
+
+/** Assignment modes for a split. */
+export const BY_CONDITION = "condition";
+export const BY_CHANCE = "random";
+
+/**
+ * The branches leading out of a step.
+ *
+ * Mode-aware, so every walk, validation and render asks this rather than
+ * hard-coding a pair. Adding a third kind of branching node later means
+ * changing this one function.
+ */
+export function branchesOf(step) {
+  if (!step || step.nodeType !== "split") return [NEXT];
+  return step.splitMode === BY_CHANCE ? [ARM_A, ARM_B] : [YES, NO];
+}
+
+/** Human label for a branch, for error copy and the report. */
+export function branchLabel(branch) {
+  if (branch === YES) return "Yes";
+  if (branch === NO) return "No";
+  if (branch === ARM_A) return "A";
+  if (branch === ARM_B) return "B";
+  return branch;
+}
 
 /**
  * @typedef {{ message: string, stepNumber?: number }} FlowIssue
@@ -166,8 +211,9 @@ export function walkFrom(graph, fromId = rootId(graph)) {
 
     const edges = graph.out.get(id);
     if (!edges) continue;
-    // Pushed in reverse so the pop order is next, yes, no.
-    for (const branch of [NO, YES, NEXT]) {
+    // Pushed in reverse so the pop order is first-branch-first: next, then
+    // Yes before No, or A before B.
+    for (const branch of [...branchesOf(graph.steps.get(id))].reverse()) {
       const to = edges.get(branch);
       if (to && !seen.has(to)) stack.push(to);
     }
@@ -349,24 +395,55 @@ export function validateGraph(graph) {
     const branches = graph.out.get(s.id) || new Map();
 
     if (s.nodeType === "split") {
+      const isTest = s.splitMode === BY_CHANCE;
+      const pair = branchesOf(s);
+
       // A split with one side missing is not a split; whoever takes the empty
       // branch falls out of the flow without being told. Both sides must exist,
       // even if one is only an exit.
-      for (const b of [YES, NO]) {
+      for (const b of pair) {
         if (!branches.get(b)) {
           errors.push({
             stepNumber: s.stepNumber,
-            message: `Step ${s.stepNumber}: the "${b === YES ? "Yes" : "No"}" branch is empty. Add a step to it, or remove the split.`,
+            message: `Step ${s.stepNumber}: the "${branchLabel(b)}" ${isTest ? "variant" : "branch"} is empty. Add a step to it, or remove the split.`,
           });
         }
       }
       if (branches.get(NEXT)) {
         errors.push({
           stepNumber: s.stepNumber,
-          message: `Step ${s.stepNumber}: a split can only lead to its Yes and No branches.`,
+          message: `Step ${s.stepNumber}: a split can only lead to its ${branchLabel(pair[0])} and ${branchLabel(pair[1])} branches.`,
         });
       }
-      if (isEmptyCondition(s.splitCondition)) {
+      // An edge belonging to the OTHER mode. Left behind when a merchant flips
+      // a split between a condition and a test; the walk would follow neither,
+      // so the contact would fall out of the flow with no job and no error.
+      for (const stray of [YES, NO, ARM_A, ARM_B]) {
+        if (!pair.includes(stray) && branches.get(stray)) {
+          errors.push({
+            stepNumber: s.stepNumber,
+            message: `Step ${s.stepNumber}: this split still has a "${branchLabel(stray)}" branch from before it was changed. Reconnect it or remove it.`,
+          });
+        }
+      }
+
+      if (isTest) {
+        // A test that sends everyone one way is not a test, and reports a
+        // winner from a sample of nobody.
+        const w = Number(s.splitWeight);
+        if (!Number.isFinite(w) || w < 1 || w > 99) {
+          errors.push({
+            stepNumber: s.stepNumber,
+            message: `Step ${s.stepNumber}: the split has to send between 1% and 99% down each side. It's currently set to ${s.splitWeight}%.`,
+          });
+        }
+        if (!AB_METRICS.includes(s.splitMetric)) {
+          errors.push({
+            stepNumber: s.stepNumber,
+            message: `Step ${s.stepNumber}: pick which result decides this test.`,
+          });
+        }
+      } else if (isEmptyCondition(s.splitCondition)) {
         errors.push({
           stepNumber: s.stepNumber,
           message: `Step ${s.stepNumber}: this split has no condition, so it can't decide which way to send anyone. Add a condition.`,
@@ -379,7 +456,7 @@ export function validateGraph(graph) {
         });
       }
     } else {
-      for (const b of [YES, NO]) {
+      for (const b of [YES, NO, ARM_A, ARM_B]) {
         if (branches.get(b)) {
           errors.push({
             stepNumber: s.stepNumber,

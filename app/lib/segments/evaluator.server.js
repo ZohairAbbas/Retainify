@@ -1,17 +1,40 @@
 // Segment evaluator.
 //
-// Given a filterTree (root group), produce { count, sample, capped } for the
-// preview pane and the segment list count cache.
+// Given a filterTree (root group), produce { count, sample, lifecycleMix } for
+// the preview pane and the segment list count cache.
 //
-// Strategy:
-//   1. Build a Prisma `where` clause for the rule leaves the DB can handle
-//      directly (subscription status, source, has-tag, firstSeen/lastSeen,
-//      purchase and engagement aggregates). This narrows the candidate set
-//      cheaply, and a tree made only of these is counted exactly in SQL.
-//   2. For leaves that depend on per-contact aggregates the DB can't compare
-//      as columns (cart counts, lifecycle, AOV), load up to MAX_SCAN contacts
-//      and finish the filter in JS using getContactStats + computeLifecycle.
-//   3. Nested groups recurse: AND intersects, OR unions on contact-id sets.
+// ── Every rule is a column comparison ──────────────────────────────────────
+// The whole tree compiles to one Prisma `where`, so a segment costs a COUNT and
+// a paged id query no matter how large the audience is.
+//
+// It was not always so. Fields backed by a per-contact aggregate — purchase
+// totals, engagement rates, cart counts — had no column to compare, so any tree
+// containing one fell back to loading contacts and filtering them in JS, capped
+// at 5,000 rows. That cap read as a performance guard and was actually a
+// correctness bug: a shop above it evaluated a partial audience with no error
+// anywhere, and because the scan was ordered by lastSeenAt DESC, the contacts it
+// skipped were precisely the dormant ones that recency segments exist to find.
+// A 16,472-contact shop counted its "churned" segment from its 5,000 most
+// recently active people.
+//
+// Each of those aggregates now lives on Contact, maintained on write by
+// lib/orders, lib/contacts/engagement and lib/contacts/carts. Two fields are
+// still derived here rather than stored, because their value changes with the
+// clock rather than with a write, so a column would be stale for most of every
+// day:
+//
+//   hasActiveCart   — lastCartAt within 24 hours
+//   lifecycleStage  — date arithmetic over firstSeenAt / lastSeenAt /
+//                     lastOrderAt / lastCartAt
+//
+// Both are expressible as date comparisons in the WHERE, which is why neither
+// needs a column and neither reopens the in-memory path.
+//
+// ── evalTreeJs is for one contact, never for counting ──────────────────────
+// The JS matcher below still exists, reached only through evalTreeForContact:
+// flow entry filters and segment-membership lookups ask "does THIS contact
+// match", where there is no audience to scan. It reads the same columns as the
+// SQL translation, and evaluator.test.js checks the two agree.
 //
 // A field marked unsupported in fields.server.js short-circuits to true — the
 // rule becomes a no-op. Nothing is currently in that state; the mechanism stays
@@ -21,14 +44,21 @@
 
 import prisma from "../../db.server.js";
 import { FIELD_BY_ID } from "./fields.server.js";
-import {
-  computeLifecycle,
-  getContactStatsBatch,
-  emptyContactStats,
-} from "../contacts/contacts.server.js";
+import { computeLifecycle } from "../contacts/contacts.server.js";
 
-const MAX_SCAN = 5000;
+// How many contact ids the enrollment worker can diff in one pass. Not a
+// correctness limit the way MAX_SCAN was — counts are exact regardless; this
+// only bounds the id list handed to segment_entered.
+const MAX_MATCHED_IDS = 50000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_CART_MS = 24 * 60 * 60 * 1000;
+
+// Lifecycle thresholds, in days. Shared by the SQL translation and the JS
+// matcher so the two cannot drift; computeLifecycle in lib/contacts holds the
+// same numbers and the test asserts all three agree.
+const LIFECYCLE_NEW_DAYS = 14;
+const LIFECYCLE_ACTIVE_DAYS = 30;
+const LIFECYCLE_AT_RISK_DAYS = 90;
 
 const PRISMA_SAFE_FIELDS = new Set([
   "subscriptionStatus",
@@ -54,11 +84,22 @@ const PRISMA_SAFE_FIELDS = new Set([
   "clickRate",
   "lastEmailOpenedAt",
   "pushEnabled",
+  // AOV is stored rather than divided at query time purely so it can appear
+  // here — a Prisma WHERE cannot compare one column against another.
+  "aov",
+  // Cart facts, denormalized onto Contact by lib/contacts/carts.
+  "cartAbandonCount",
+  "lastCartAt",
+  "lastCartValue",
+  // Derived at query time from the columns above, not stored: both answers move
+  // with the clock rather than with a write.
+  "hasActiveCart",
+  "lifecycleStage",
 ]);
-// Fields that can only be evaluated in JS, from batched contact stats:
-//   cartAbandonCount, lastCartAt, lastCartValue, hasActiveCart,
-//   lifecycleStage, aov
-//   (aov is derived from two columns, so it has no column of its own to filter)
+// Nothing is missing from this set. Every field in fields.server.js translates,
+// which is what lets evaluateDynamic below be a COUNT rather than a scan. If a
+// future field cannot translate, it must not silently fall back to filtering in
+// memory — see the header.
 
 function isGroup(node) {
   return node && node.type === "group";
@@ -183,7 +224,8 @@ function ruleToPrisma(rule) {
     }
     case "lastOrderAt":
     case "firstSeenAt":
-    case "lastSeenAt": {
+    case "lastSeenAt":
+    case "lastCartAt": {
       const col = rule.field;
       if (rule.op === "in_last")   return { [col]: { gte: dateThreshold(rule.value, rule.unit) } };
       if (rule.op === "more_than") return { [col]: { lt: dateThreshold(rule.value, rule.unit) } };
@@ -192,13 +234,138 @@ function ruleToPrisma(rule) {
       if (rule.op === "empty")     return { [col]: null };
       return null;
     }
+    case "cartAbandonCount":
+    case "lastCartValue":
+    case "aov": {
+      return numericComparison(rule.field, rule);
+    }
+    case "hasActiveCart": {
+      // Not a column: "active" means abandoned in the last 24 hours, an answer
+      // that changes as time passes rather than when anything is written. A
+      // stored boolean would be right just after a rollup and wrong for the rest
+      // of the day.
+      const since = new Date(Date.now() - ACTIVE_CART_MS);
+      if (rule.op === "is_true")  return { lastCartAt: { gte: since } };
+      // Never abandoned counts as "no active cart", so the null has to be
+      // spelled out — a bare `lt` would silently drop those contacts.
+      if (rule.op === "is_false") return { OR: [{ lastCartAt: null }, { lastCartAt: { lt: since } }] };
+      return null;
+    }
+    case "lifecycleStage": {
+      return lifecycleToPrisma(rule);
+    }
     default:
       return null;
   }
 }
 
-// Build a Prisma where for the *entire* tree if it's all prisma-safe.
-// Returns { where, allSafe }.
+/**
+ * Lifecycle as a WHERE fragment, mirroring computeLifecycle().
+ *
+ * Derived rather than stored for the same reason as hasActiveCart: a contact
+ * moves from active to at-risk to churned by the calendar advancing, with no
+ * write to trigger a refresh. A stored stage would be wrong for everyone who
+ * simply went quiet — which is the entire population these rules are used to
+ * find.
+ *
+ * computeLifecycle takes the most recent of lastSeenAt, lastOrderAt and
+ * lastCartAt. Postgres has GREATEST for that, but a Prisma WHERE does not, so
+ * "the newest of the three is within N days" is expressed as "any one of the
+ * three is within N days" — which is the same statement, and unlike GREATEST it
+ * needs no COALESCE to handle the nullable two.
+ */
+function lifecycleToPrisma(rule) {
+  const stages = rule.op === "is_one_of"
+    ? (Array.isArray(rule.value) ? rule.value : [rule.value])
+    : [rule.value];
+
+  // "is_not" is expressed as the union of the OTHER stages rather than as a
+  // NOT around this one. The four stages partition the audience exactly, so the
+  // two are logically identical — but a NOT wrapped around a comparison against
+  // a nullable column is not: see nullSafeInactive below.
+  const wanted = rule.op === "is_not"
+    ? ALL_STAGES.filter((st) => !stages.includes(st))
+    : stages;
+
+  const parts = wanted.map(stageToPrisma).filter(Boolean);
+  if (parts.length === 0) return null;
+  if (rule.op !== "is" && rule.op !== "is_not" && rule.op !== "is_one_of") return null;
+  return parts.length === 1 ? parts[0] : { OR: parts };
+}
+
+const ALL_STAGES = ["new", "active", "at_risk", "churned"];
+
+/** Any activity signal newer than `since`. */
+function activeSince(since) {
+  return {
+    OR: [
+      { lastSeenAt: { gte: since } },
+      { lastOrderAt: { gte: since } },
+      { lastCartAt: { gte: since } },
+    ],
+  };
+}
+
+/**
+ * No activity signal newer than `since` — the null-safe inverse of activeSince.
+ *
+ * NOT the same as `{ NOT: activeSince(since) }`, and the difference is a silent
+ * wrong answer rather than an error. lastOrderAt and lastCartAt are nullable, so
+ * for a contact who has never ordered and never abandoned a cart, SQL evaluates
+ * `NOT (lastSeenAt >= x OR NULL >= x OR NULL >= x)` as NOT NULL, which is NULL,
+ * which does not match. Every such contact silently dropped out of the at-risk
+ * and churned segments — and "never ordered, long dormant" is the definition of
+ * the population those segments exist to find. On one shop here that was 2,428
+ * at-risk contacts reported as 614.
+ *
+ * Spelling the null out per column keeps the comparison two-valued.
+ */
+function nullSafeInactive(since) {
+  // Only the two nullable columns get a null branch. lastSeenAt is NOT NULL —
+  // it defaults to now() on insert — so a null test on it is not just redundant,
+  // Prisma rejects it outright.
+  const olderOrAbsent = (col) => ({ OR: [{ [col]: null }, { [col]: { lt: since } }] });
+  return {
+    AND: [
+      { lastSeenAt: { lt: since } },
+      olderOrAbsent("lastOrderAt"),
+      olderOrAbsent("lastCartAt"),
+    ],
+  };
+}
+
+function stageToPrisma(stage) {
+  const newCutoff = new Date(Date.now() - LIFECYCLE_NEW_DAYS * DAY_MS);
+  const activeCutoff = new Date(Date.now() - LIFECYCLE_ACTIVE_DAYS * DAY_MS);
+  const atRiskCutoff = new Date(Date.now() - LIFECYCLE_AT_RISK_DAYS * DAY_MS);
+
+  // "new" wins outright in computeLifecycle — it returns before looking at any
+  // activity — so every other stage excludes it. Written as a direct comparison
+  // rather than NOT(new) because firstSeenAt is non-null and this stays
+  // two-valued.
+  const notNew = { firstSeenAt: { lt: newCutoff } };
+
+  switch (stage) {
+    case "new":
+      return { firstSeenAt: { gte: newCutoff } };
+    case "active":
+      return { AND: [notNew, activeSince(activeCutoff)] };
+    case "at_risk":
+      return { AND: [notNew, nullSafeInactive(activeCutoff), activeSince(atRiskCutoff)] };
+    case "churned":
+      // Everything quieter than the at-risk window, including the no-signal
+      // case: computeLifecycle calls a contact with no usable timestamp churned
+      // rather than inventing a more flattering stage, and a row of three nulls
+      // satisfies every branch of nullSafeInactive.
+      return { AND: [notNew, nullSafeInactive(atRiskCutoff)] };
+    default:
+      return null;
+  }
+}
+
+// Compile the whole tree into one Prisma where. `allSafe` is false if any leaf
+// failed to translate — evaluateDynamic treats that as an error rather than
+// falling back to filtering in memory. See the header.
 function treeToPrisma(node) {
   if (isRule(node)) {
     const w = ruleToPrisma(node);
@@ -221,13 +388,17 @@ function treeToPrisma(node) {
 }
 
 // ── JS predicate ────────────────────────────────────────────────────────
-// Evaluate a single rule against a {contact, stats, lifecycle} row.
+// Evaluate a single rule against a {contact} row. `lifecycle` is optional —
+// supplied by callers that already computed one, derived here otherwise.
 function evalRuleJs(rule, ctx) {
   const field = FIELD_BY_ID[rule.field];
   if (!field) return true;
   if (!field.supported) return true; // unsupported fields are no-ops
 
-  const { contact, stats, lifecycle } = ctx;
+  // No `stats`. Every field this matcher reads is a column on the contact row
+  // now, so callers no longer have to aggregate anything before asking. Extra
+  // keys on ctx are ignored rather than rejected, so old callers still work.
+  const { contact, lifecycle } = ctx;
 
   // Helpers
   const num = (v) => (v == null ? 0 : Number(v));
@@ -267,12 +438,14 @@ function evalRuleJs(rule, ctx) {
       if (rule.op === "has_any") return (Array.isArray(rule.value) ? rule.value : [rule.value]).some((t) => tagIds.includes(t));
       return true;
     }
-    // Purchase. These also translate to Prisma above; the JS versions are used
-    // when a rule tree mixes them with fields that can only run in memory.
+    // Purchase.
     case "totalSpent":  return cmp(num(contact.totalSpent), rule.op, betweenOrNum(rule));
     case "orderCount":  return cmp(num(contact.orderCount), rule.op, betweenOrNum(rule));
     case "aov": {
-      // Derived, so it has no column to filter on and only ever runs here.
+      // Recomputed from its inputs rather than read from contact.aov, so a
+      // single-contact match is correct even for a caller holding a row that
+      // predates the column or selects only part of it. Same definition as the
+      // stored value — see averageOrderValue() in lib/orders.
       const count = num(contact.orderCount);
       const aov = count ? num(contact.totalSpent) / count : 0;
       return cmp(aov, rule.op, betweenOrNum(rule));
@@ -299,22 +472,29 @@ function evalRuleJs(rule, ctx) {
       return true;
     }
     case "lifecycleStage": {
-      if (rule.op === "is") return lifecycle === rule.value;
-      if (rule.op === "is_not") return lifecycle !== rule.value;
-      if (rule.op === "is_one_of") return (Array.isArray(rule.value) ? rule.value : [rule.value]).includes(lifecycle);
+      // Computed here when the caller didn't supply one. Lifecycle used to
+      // require an aggregate fetch, so it was passed in; every input is a column
+      // now, which means a ctx without it is no longer a reason to be wrong.
+      // Callers that do pass one still win, so nothing recomputes needlessly.
+      const stage = lifecycle ?? computeLifecycle(contact);
+      if (rule.op === "is") return stage === rule.value;
+      if (rule.op === "is_not") return stage !== rule.value;
+      if (rule.op === "is_one_of") return (Array.isArray(rule.value) ? rule.value : [rule.value]).includes(stage);
       return true;
     }
-    // Cart stats
-    case "cartAbandonCount": return cmp(num(stats.cartAbandonCount), rule.op, num(rule.value));
-    case "lastCartValue":    return cmp(num(stats.lastCartValue),    rule.op, num(rule.value));
+    // Cart. Columns on Contact now, maintained by lib/contacts/carts.server.js,
+    // so these read the contact row rather than a recomputed stats object —
+    // one source of truth with the SQL translation above.
+    case "cartAbandonCount": return cmp(num(contact.cartAbandonCount), rule.op, betweenOrNum(rule));
+    case "lastCartValue":    return cmp(num(contact.lastCartValue),    rule.op, betweenOrNum(rule));
     case "hasActiveCart": {
-      const recent = stats.lastCartAbandonAt
-        ? Date.now() - new Date(stats.lastCartAbandonAt).getTime() < 24 * 60 * 60 * 1000
+      const recent = contact.lastCartAt
+        ? Date.now() - new Date(contact.lastCartAt).getTime() < ACTIVE_CART_MS
         : false;
       return rule.op === "is_true" ? recent : !recent;
     }
     case "lastCartAt": {
-      const ts = stats.lastCartAbandonAt ? new Date(stats.lastCartAbandonAt).getTime() : null;
+      const ts = contact.lastCartAt ? new Date(contact.lastCartAt).getTime() : null;
       if (rule.op === "empty") return !ts;
       if (ts == null) return false;
       if (rule.op === "in_last")   return ts >= dateThreshold(rule.value, rule.unit).getTime();
@@ -385,20 +565,6 @@ export function evalTreeForContact(tree, ctx) {
   return evalTreeJs(tree, ctx);
 }
 
-// Build a Prisma where-fragment that prefilters to a smaller candidate set
-// before JS evaluation. Conservative: only ANDs in safe positive leaves at
-// the root, so we never over-narrow when the tree contains OR groups.
-function prefilterWhere(tree) {
-  if (!isGroup(tree)) return null;
-  if (tree.match !== "all") return null;
-  const safe = (tree.children || [])
-    .filter(isRule)
-    .map(ruleToPrisma)
-    .filter(Boolean);
-  if (safe.length === 0) return null;
-  return { AND: safe };
-}
-
 // ── Public API ──────────────────────────────────────────────────────────
 
 /**
@@ -428,15 +594,20 @@ export function validateFilterTree(tree) {
  * Evaluate a segment.
  *
  *   segment.kind === "static"  → count + sample come from SegmentMembership.
- *   segment.kind === "dynamic" → evaluate filterTree against contacts.
+ *   segment.kind === "dynamic" → filterTree compiles to one Prisma WHERE.
  *
  * Options:
  *   - sampleSize: how many contact rows to return in `sample` (default 5).
- *   - returnIds:  when true, also returns `matchedIds` — the full set of
- *                 matching Contact.id values (capped at MAX_SCAN). Used by
- *                 the enrollment worker to diff entered/left sets.
+ *   - returnIds:  when true, also returns `matchedIds` — matching Contact.id
+ *                 values, up to MAX_MATCHED_IDS. Used by the enrollment worker
+ *                 to diff entered/left sets.
  *
- * Returns: { count, sample, capped, lifecycleMix, matchedIds? }.
+ * Returns: { count, sample, lifecycleMix, matchedIds? }.
+ *
+ * There is no `capped` any more. It used to mean two different things — "the
+ * count is a sample" on the scan path and, wrongly, "the count exceeds 5,000"
+ * on the SQL path, where the count was exact. Nothing truncates a count now, so
+ * the honest answer is to stop returning a flag about it.
  */
 export async function evaluateSegment(shop, segment, { sampleSize = 5, returnIds = false } = {}) {
   if (!segment || segment.kind === "static") {
@@ -446,132 +617,91 @@ export async function evaluateSegment(shop, segment, { sampleSize = 5, returnIds
 }
 
 async function evaluateStatic(shop, segment, sampleSize, returnIds = false) {
-  if (!segment?.id) return { count: 0, sample: [], capped: false, lifecycleMix: emptyMix() };
+  if (!segment?.id) return emptyResult(returnIds);
   const memberships = await prisma.segmentMembership.findMany({
     where: { segmentId: segment.id },
+    select: { contactId: true },
     orderBy: { addedAt: "desc" },
   });
-  if (memberships.length === 0) {
-    return { count: 0, sample: [], capped: false, lifecycleMix: emptyMix() };
-  }
-  const ids = memberships.map((m) => m.contactId);
-  const contacts = await prisma.contact.findMany({
-    where: { id: { in: ids }, shop, deletedAt: null },
-    include: { tags: { include: { tag: true } } },
-  });
-  const sample = await buildSample(shop, contacts.slice(0, sampleSize));
+  if (memberships.length === 0) return emptyResult(returnIds);
+
+  const where = { id: { in: memberships.map((m) => m.contactId) }, shop, deletedAt: null };
+  const [count, contacts] = await Promise.all([
+    prisma.contact.count({ where }),
+    // Only what the mix and the sample need. This used to load every member row
+    // with its tags in order to count them.
+    prisma.contact.findMany({ where, select: LIFECYCLE_SELECT, orderBy: { lastSeenAt: "desc" } }),
+  ]);
+
   return {
-    count: contacts.length,
-    sample,
-    capped: false,
-    lifecycleMix: await mixFromContacts(shop, contacts.slice(0, MAX_SCAN)),
+    count,
+    sample: buildSample(contacts.slice(0, sampleSize)),
+    lifecycleMix: mixFromContacts(contacts),
+    ...(returnIds ? { matchedIds: contacts.slice(0, MAX_MATCHED_IDS).map((c) => c.id) } : {}),
+  };
+}
+
+/**
+ * The whole tree as one WHERE, so the cost is a COUNT rather than a scan.
+ *
+ * An empty tree means "everyone in the shop", which is just an empty WHERE —
+ * the same code path rather than a special case, so the two cannot disagree.
+ */
+async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
+  const { where: treeWhere, allSafe } = hasRules(tree)
+    ? treeToPrisma(tree)
+    : { where: null, allSafe: true };
+
+  // Every field in the catalog translates, so this is unreachable today. It is
+  // an assertion rather than a fallback on purpose: the alternative — quietly
+  // filtering in memory over a capped page — is the exact silent-wrong-answer
+  // failure this evaluator was rebuilt to remove. Better a visible error on the
+  // segment than a plausible number nobody can tell is wrong.
+  if (!allSafe) {
+    throw new Error("Segment contains a rule that cannot be evaluated in the database");
+  }
+
+  const where = { shop, deletedAt: null, ...(treeWhere || {}) };
+  const [count, contacts] = await Promise.all([
+    prisma.contact.count({ where }),
+    prisma.contact.findMany({
+      where,
+      select: LIFECYCLE_SELECT,
+      orderBy: { lastSeenAt: "desc" },
+      // The mix is drawn from this page rather than the whole audience; the
+      // count beside it is exact.
+      take: returnIds ? MAX_MATCHED_IDS : Math.max(sampleSize, MIX_SAMPLE),
+    }),
+  ]);
+
+  return {
+    count,
+    sample: buildSample(contacts.slice(0, sampleSize)),
+    lifecycleMix: mixFromContacts(contacts),
     ...(returnIds ? { matchedIds: contacts.map((c) => c.id) } : {}),
   };
 }
 
-async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
-  // No tree → treat as "all contacts in shop".
-  if (!tree || !isGroup(tree) || (tree.children || []).length === 0) {
-    const count = await prisma.contact.count({ where: { shop, deletedAt: null } });
-    const sampleRows = await prisma.contact.findMany({
-      where: { shop, deletedAt: null },
-      take: sampleSize,
-      orderBy: { lastSeenAt: "desc" },
-      include: { tags: { include: { tag: true } } },
-    });
-    const sample = await buildSample(shop, sampleRows);
-    let matchedIds;
-    if (returnIds) {
-      const idRows = await prisma.contact.findMany({
-        where: { shop, deletedAt: null },
-        take: MAX_SCAN,
-        orderBy: { lastSeenAt: "desc" },
-        select: { id: true },
-      });
-      matchedIds = idRows.map((r) => r.id);
-    }
-    return {
-      count,
-      sample,
-      capped: count > MAX_SCAN,
-      lifecycleMix: await mixFromContacts(shop, sampleRows),
-      ...(returnIds ? { matchedIds } : {}),
-    };
-  }
-
-  const { where: fullWhere, allSafe } = treeToPrisma(tree);
-
-  // Path A: every leaf is prisma-safe → count + sample with raw queries.
-  if (allSafe && fullWhere) {
-    const finalWhere = { shop, deletedAt: null, ...fullWhere };
-    const [count, sampleRows] = await Promise.all([
-      prisma.contact.count({ where: finalWhere }),
-      prisma.contact.findMany({
-        where: finalWhere,
-        take: sampleSize,
-        orderBy: { lastSeenAt: "desc" },
-        include: { tags: { include: { tag: true } } },
-      }),
-    ]);
-    const sample = await buildSample(shop, sampleRows);
-    let matchedIds;
-    if (returnIds) {
-      const idRows = await prisma.contact.findMany({
-        where: finalWhere,
-        take: MAX_SCAN,
-        orderBy: { lastSeenAt: "desc" },
-        select: { id: true },
-      });
-      matchedIds = idRows.map((r) => r.id);
-    }
-    return {
-      count,
-      sample,
-      capped: count > MAX_SCAN,
-      lifecycleMix: await mixFromContacts(shop, sampleRows),
-      ...(returnIds ? { matchedIds } : {}),
-    };
-  }
-
-  // Path B: needs JS eval. Pre-narrow with whatever safe ANDs we can pull
-  // from the root, then scan up to MAX_SCAN contacts.
-  const prefilter = prefilterWhere(tree);
-  const baseWhere = { shop, deletedAt: null, ...(prefilter || {}) };
-  const candidates = await prisma.contact.findMany({
-    where: baseWhere,
-    take: MAX_SCAN + 1,
-    orderBy: { lastSeenAt: "desc" },
-    include: { tags: { include: { tag: true } } },
-  });
-  const capped = candidates.length > MAX_SCAN;
-  const scanList = capped ? candidates.slice(0, MAX_SCAN) : candidates;
-
-  // One batched stats fetch for the whole scan window — this used to be six
-  // queries per contact, which dominated load time on shops with more than a
-  // few hundred contacts.
-  const statsByEmail = await getContactStatsBatch(shop, scanList.map((c) => c.email));
-
-  const matched = [];
-  for (const c of scanList) {
-    const stats = statsFor(statsByEmail, c);
-    const lifecycle = computeLifecycle(c, stats);
-    if (evalTreeJs(tree, { contact: c, stats, lifecycle })) {
-      matched.push({ contact: c, lifecycle });
-    }
-  }
-
-  const sample = matched.slice(0, sampleSize).map(({ contact, lifecycle }) => ({
-    id: contact.id, email: contact.email, name: contact.name, lifecycle,
-  }));
-  const lifecycleMix = mixFromLifecycles(matched.map((m) => m.lifecycle));
-  return {
-    count: matched.length,
-    sample,
-    capped,
-    lifecycleMix,
-    ...(returnIds ? { matchedIds: matched.map((m) => m.contact.id) } : {}),
-  };
+/** Does this node carry any rules at all? */
+function hasRules(tree) {
+  return Boolean(tree) && isGroup(tree) && (tree.children || []).length > 0;
 }
+
+// Lifecycle needs these four columns and nothing else. lastCartAt joining the
+// set is what removed the batched stats fetch that used to accompany every
+// sample and every mix.
+const LIFECYCLE_SELECT = {
+  id: true,
+  email: true,
+  name: true,
+  firstSeenAt: true,
+  lastSeenAt: true,
+  lastOrderAt: true,
+  lastCartAt: true,
+};
+
+// How many rows the lifecycle mix is drawn from when no id list is requested.
+const MIX_SAMPLE = 500;
 
 // ── Lifecycle mix helpers ───────────────────────────────────────────────
 
@@ -579,31 +709,30 @@ function emptyMix() {
   return { new: 0, active: 0, at_risk: 0, churned: 0 };
 }
 
-function mixFromLifecycles(stages) {
+function emptyResult(returnIds) {
+  return {
+    count: 0,
+    sample: [],
+    lifecycleMix: emptyMix(),
+    ...(returnIds ? { matchedIds: [] } : {}),
+  };
+}
+
+function mixFromContacts(contacts) {
   const mix = emptyMix();
-  for (const s of stages) {
-    if (mix[s] != null) mix[s] += 1;
+  for (const c of contacts) {
+    const stage = computeLifecycle(c);
+    if (mix[stage] != null) mix[stage] += 1;
   }
   return mix;
 }
 
-async function mixFromContacts(shop, contacts) {
-  const statsByEmail = await getContactStatsBatch(shop, contacts.map((c) => c.email));
-  return mixFromLifecycles(contacts.map((c) => computeLifecycle(c, statsFor(statsByEmail, c))));
-}
-
-/** Map lookup with the same normalization getContactStatsBatch keys on. */
-function statsFor(statsByEmail, contact) {
-  return statsByEmail.get(String(contact.email || "").trim().toLowerCase()) || emptyContactStats();
-}
-
-/** Build the sample rows for a set of contacts with one batched stats fetch. */
-async function buildSample(shop, contacts) {
-  const statsByEmail = await getContactStatsBatch(shop, contacts.map((c) => c.email));
+/** Sample rows for the preview pane. No extra query — the columns are here. */
+function buildSample(contacts) {
   return contacts.map((c) => ({
     id: c.id,
     email: c.email,
     name: c.name,
-    lifecycle: computeLifecycle(c, statsFor(statsByEmail, c)),
+    lifecycle: computeLifecycle(c),
   }));
 }

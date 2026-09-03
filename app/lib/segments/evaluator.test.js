@@ -44,6 +44,10 @@ function contactWith(overrides = {}) {
     orderCount: 0,
     totalSpent: 0,
     lastOrderAt: null,
+    lastCartAt: null,
+    cartAbandonCount: 0,
+    lastCartValue: 0,
+    aov: 0,
     emailsSent: 0,
     emailsOpened: 0,
     emailsClicked: 0,
@@ -56,11 +60,17 @@ function contactWith(overrides = {}) {
   };
 }
 
-/** Evaluate one rule against one contact. */
+/**
+ * Evaluate one rule against one contact.
+ *
+ * Deliberately passes no `lifecycle` in the context: it is derived from the
+ * contact's own columns now, and a helper that supplied one would mask whether
+ * that derivation works.
+ */
 function match(rule, contact) {
   return evalTreeForContact(
     { type: "group", match: "all", children: [rule] },
-    { contact, stats: {}, lifecycle: "churned" },
+    { contact, stats: {} },
   );
 }
 
@@ -140,7 +150,7 @@ test("the lapsed-subscriber tree matches the lapsed and nobody else", () => {
       { type: "rule", field: "lastEmailOpenedAt", op: "more_than", value: 90, unit: "days" },
     ],
   };
-  const evaluate = (contact) => evalTreeForContact(tree, { contact, stats: {}, lifecycle: "churned" });
+  const evaluate = (contact) => evalTreeForContact(tree, { contact, stats: {} });
 
   // Emailed, never opened — the case the whole feature is for.
   assert.equal(evaluate(contactWith({ emailsSent: 12, lastEmailOpenedAt: null })), true);
@@ -164,4 +174,61 @@ test("push enabled reads both directions", () => {
   assert.equal(match({ type: "rule", field: "pushEnabled", op: "is_true" }, contactWith({ pushEnabled: true })), true);
   assert.equal(match({ type: "rule", field: "pushEnabled", op: "is_true" }, contactWith({ pushEnabled: false })), false);
   assert.equal(match({ type: "rule", field: "pushEnabled", op: "is_false" }, contactWith({ pushEnabled: false })), true);
+});
+
+
+// ── Cart, AOV and lifecycle ─────────────────────────────────────────────
+// The SQL forms of these are covered in evaluator.db.test.js, which is where
+// the interesting failures live. These pin the JS matcher's own behaviour.
+
+test("hasActiveCart is a 24-hour window, and a contact with no cart is not active", () => {
+  const isTrue = { type: "rule", field: "hasActiveCart", op: "is_true" };
+  const isFalse = { type: "rule", field: "hasActiveCart", op: "is_false" };
+  const hoursAgo = (h) => new Date(Date.now() - h * 60 * 60 * 1000);
+
+  assert.equal(match(isTrue, contactWith({ lastCartAt: hoursAgo(2) })), true);
+  assert.equal(match(isTrue, contactWith({ lastCartAt: hoursAgo(30) })), false);
+  assert.equal(match(isTrue, contactWith({ lastCartAt: null })), false);
+  // Never abandoned counts as "no active cart" rather than as no answer.
+  assert.equal(match(isFalse, contactWith({ lastCartAt: null })), true);
+});
+
+test("cart count and value read the contact columns, including `between`", () => {
+  assert.equal(match({ type: "rule", field: "cartAbandonCount", op: "gt", value: 2 }, contactWith({ cartAbandonCount: 3 })), true);
+  assert.equal(match({ type: "rule", field: "cartAbandonCount", op: "between", value: [2, 4] }, contactWith({ cartAbandonCount: 3 })), true);
+  assert.equal(match({ type: "rule", field: "cartAbandonCount", op: "between", value: [2, 4] }, contactWith({ cartAbandonCount: 9 })), false);
+  assert.equal(match({ type: "rule", field: "lastCartValue", op: "gt", value: 100 }, contactWith({ lastCartValue: 250 })), true);
+});
+
+test("aov is recomputed from its inputs, so a row without the column still matches", () => {
+  const rule = { type: "rule", field: "aov", op: "gt", value: 50 };
+  assert.equal(match(rule, contactWith({ orderCount: 2, totalSpent: 400 })), true);
+  assert.equal(match(rule, contactWith({ orderCount: 4, totalSpent: 40 })), false);
+  // No orders is no average — not a division by zero, and not a match.
+  assert.equal(match(rule, contactWith({ orderCount: 0, totalSpent: 0 })), false);
+});
+
+test("lifecycle is computed from the contact when the caller supplies none", () => {
+  // Callers used to have to precompute this and pass it in ctx, because cart
+  // recency needed an aggregate. It is a column now, so a ctx without a
+  // lifecycle is no longer a reason to answer wrongly.
+  const churned = { type: "rule", field: "lifecycleStage", op: "is", value: "churned" };
+  const contact = contactWith({ firstSeenAt: daysAgo(400), lastSeenAt: daysAgo(300) });
+  assert.equal(evalTreeForContact(
+    { type: "group", match: "all", children: [churned] },
+    { contact, stats: {} },
+  ), true);
+});
+
+test("lifecycle takes the newest signal, not just lastSeenAt", () => {
+  const active = { type: "rule", field: "lifecycleStage", op: "is", value: "active" };
+  // Long unseen, but ordered last week.
+  assert.equal(match(active, contactWith({ firstSeenAt: daysAgo(400), lastSeenAt: daysAgo(300), lastOrderAt: daysAgo(5) })), true);
+  // Long unseen, but abandoned a cart two days ago.
+  assert.equal(match(active, contactWith({ firstSeenAt: daysAgo(400), lastSeenAt: daysAgo(300), lastCartAt: daysAgo(2) })), true);
+});
+
+test("'new' wins over every activity signal", () => {
+  const isNew = { type: "rule", field: "lifecycleStage", op: "is", value: "new" };
+  assert.equal(match(isNew, contactWith({ firstSeenAt: daysAgo(2), lastSeenAt: daysAgo(400) })), true);
 });

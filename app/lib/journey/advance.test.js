@@ -181,9 +181,9 @@ test("a Wait parks the enrollment for its own duration, from now", async () => {
 });
 
 test("a Wait's own delayHours is used, not the send step's cumulative value", async () => {
-  // saveDraft still writes cumulative-from-trigger delayHours onto SEND steps
-  // (phase 5 changes that). If the walk read it, every step would re-serve the
-  // whole flow's waits.
+  // A send step carries no timing of its own — a cumulative figure is a
+  // property of a path, not a step. If the walk ever read one, every step
+  // would re-serve the whole flow's waits.
   const j = await makeFlow([
     { nodeType: "delay", delayHours: 5 },
     email("one"),
@@ -396,17 +396,25 @@ test("two workers ticking together advance an enrollment once, not twice", async
   assert.equal(jobs.length, 1, "the claim must let exactly one worker through");
 });
 
-test("the worker leaves eager enrollments alone", async () => {
-  const j = await makeFlow([email("one")]);
+test("an enrollment holding a live job is never advanced past it", async () => {
+  // This used to be a check on schedulingMode, back when a pre-materialized
+  // enrollment had to be left alone. That scheduler is gone, and the guard
+  // that matters is the general one: whatever the reason an enrollment already
+  // owns queued work, the walk must not run ahead and schedule more.
+  const j = await makeFlow([email("one"), email("two")]);
   const e = await enroll(j);
+  await advanceEnrollment(e.id);
+  assert.equal((await liveJobs(e.id)).length, 1);
+
+  // Force it due again, as a stray settle or a manual poke would.
   await prisma.journeyEnrollment.update({
     where: { id: e.id },
-    data: { schedulingMode: "eager", nextRunAt: new Date() },
+    data: { nextRunAt: new Date() },
   });
-
   const r = await advanceEnrollment(e.id);
   assert.equal(r.verdict, "skipped");
-  assert.equal((await liveJobs(e.id)).length, 0, "eager jobs are pre-materialized — never re-created");
+  assert.match(r.reason, /outstanding/);
+  assert.equal((await liveJobs(e.id)).length, 1, "no second send while one is in flight");
 });
 
 // ── Stall detection ────────────────────────────────────────────────────────

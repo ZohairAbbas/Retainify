@@ -182,8 +182,16 @@ model ShopSettings {
   // any enrolled contact that has a phone number (opt-outs/suppression are
   // ALWAYS honored regardless of this flag).
   whatsappRequireOptIn               Boolean   @default(true)
-  // Contacts feature — one-time backfill flag + Shopify customer sync state
+  // Contacts feature — backfill state + Shopify customer sync state
+  //
+  // contactsBackfilledAt is when the roll-up last completed; the version is
+  // which revision of the roll-up produced what is in the table. A date alone
+  // could only ever answer "has this shop been backfilled", so a correction to
+  // the routine reached new shops and no one else — which is precisely the set
+  // of shops a correction is not for. The routine is idempotent, so bumping
+  // BACKFILL_VERSION in backfill.server.js re-runs it everywhere.
   contactsBackfilledAt               DateTime?
+  contactsBackfillVersion            Int       @default(0)
   lastShopifyCustomerSyncAt          DateTime?
   shopifyCustomerSyncCursor          String?
   shopifyCustomerSyncStatus          String    @default("idle") // idle | running | failed
@@ -288,6 +296,17 @@ model Contact {
   totalSpent         Float     @default(0)
   firstOrderAt       DateTime?
   lastOrderAt        DateTime?
+  // Average order value. Derived from the two columns above, and for a long
+  // time computed on read for exactly that reason -- a stored copy of a
+  // derivable number is a copy that can disagree with its inputs.
+  //
+  // It is stored now because a Prisma WHERE cannot divide one column by
+  // another, so as a derived value it was the single field keeping the segment
+  // evaluator's capped in-memory scan alive. It is written only by
+  // recalcContactOrderStats, in the same statement as the inputs it comes from,
+  // so the two cannot drift apart: there is no code path that updates orderCount
+  // or totalSpent without recomputing this in the same breath.
+  aov                Float     @default(0)
   // ── Email engagement facts, rolled up from JourneyJob ──────────────────
   // Here for exactly the reason the purchase facts above are: a rate or a
   // last-opened date computed per query is a join the evaluator can only run
@@ -318,6 +337,24 @@ model Contact {
   // PushSubscription joins to a contact by email string rather than a foreign
   // key, so there is no relation for a where clause to traverse.
   pushEnabled        Boolean   @default(false)
+  // ── Cart facts, rolled up from AbandonedCart ───────────────────────────
+  // The last group of segment fields that could only be compared by loading
+  // contacts into memory. Maintained by recalcContactCartStats()
+  // (lib/contacts/carts.server.js) on every checkout webhook.
+  //
+  // lastCartValue is the totalPrice of the MOST RECENT abandoned cart, which is
+  // what the field has always been labelled and never previously meant: it was
+  // computed as MAX(totalPrice), so a shopper whose biggest cart was not their
+  // latest reported the wrong figure. 128 contacts were in that state when this
+  // was written.
+  //
+  // There is no hasActiveCart column: "active" means abandoned within the last
+  // 24 hours, so its value changes with the clock rather than with a write. A
+  // stored copy would be wrong for most of every day. It is derived from
+  // lastCartAt at query time instead -- see the evaluator.
+  cartAbandonCount   Int       @default(0)
+  lastCartAt         DateTime?
+  lastCartValue      Float     @default(0)
   // Merchant-defined properties, keyed by ContactPropertyDef.key. Stored as
   // JSONB rather than one column per field so a merchant can add a property
   // without a migration; the definitions table gives the keys type and meaning.
@@ -344,6 +381,9 @@ model Contact {
   @@index([shop, whatsappStatus])
   @@index([shop, lastOrderAt])
   @@index([shop, totalSpent])
+  @@index([shop, aov])
+  @@index([shop, lastCartAt])
+  @@index([shop, cartAbandonCount])
   @@index([shop, openRate])
   @@index([shop, clickRate])
   @@index([shop, lastEmailOpenedAt])
@@ -366,15 +406,26 @@ model Tag {
 
 // Join table — tag membership on a contact.
 model ContactTag {
-  contactId String
-  tagId     String
-  createdAt DateTime @default(now())
+  contactId        String
+  tagId            String
+  createdAt        DateTime @default(now())
+  // Which flow step applied this tag, by its stable key. Null means a person
+  // did — which is every row that predates the tag action node.
+  //
+  // The key, not the step id: saveDraft recreates every step row on an edit,
+  // so an id would go stale the first time the merchant touched the flow.
+  //
+  // This is what makes a flow's tagging undoable. Without it, "remove what
+  // that flow applied" cannot be distinguished from "remove this tag from
+  // everyone", which would also strip the ones a human applied on purpose.
+  appliedByStepKey String?
 
   contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
   tag     Tag     @relation(fields: [tagId], references: [id], onDelete: Cascade)
 
   @@id([contactId, tagId])
   @@index([tagId])
+  @@index([appliedByStepKey])
 }
 
 // Merchant-defined contact property. The schema for one key inside
@@ -696,6 +747,20 @@ model JourneyStep {
   // evaluator, so a rule means what it means everywhere else. Null on every
   // other node type.
   splitCondition Json?
+  // How the branch is chosen. "condition" evaluates splitCondition against the
+  // contact; "random" assigns by chance — an A/B test. Structurally identical
+  // nodes, so everything downstream of the decision is shared.
+  splitMode      String   @default("condition") // condition | random
+  // random mode: percentage of arrivals sent to arm A. 50 is an even split.
+  splitWeight    Int      @default(50)
+  // random mode: which number decides the winner in the report.
+  splitMetric    String   @default("click") // open | click | order | revenue
+  // ── Tag action (nodeType "tag") ────────────────────────────────────────
+  // Which tag this step writes, and whether it adds or removes it. By id
+  // rather than name: a renamed tag keeps working, and a deleted one is
+  // caught at publish instead of silently creating a near-duplicate.
+  tagId          String?
+  tagAction      String   @default("add") // add | remove
   positionY      Int      @default(0)
   delayHours     Float    @default(1)
   subject        String   @default("")
@@ -781,7 +846,10 @@ model JourneyPathEvent {
   stepId       String
   stepKey      String
   branch       String // which edge was taken
-  matched      Boolean
+  // Whether the split's CONDITION was true. Null for a random assignment,
+  // which has no condition — false would claim the rule was evaluated and
+  // failed, which is a different and untrue statement.
+  matched      Boolean?
   evaluatedAt  DateTime @default(now())
 
   enrollment JourneyEnrollment @relation(fields: [enrollmentId], references: [id], onDelete: Cascade)
@@ -817,19 +885,19 @@ model JourneyEnrollment {
   exitReason   String    @default("")
 
   // ── Scheduling ─────────────────────────────────────────────────────────
-  // "eager": every job for the whole flow was created at enrollment, each on
-  // its own absolute schedule. That is how this app has always worked, and it
-  // cannot express a branch — you cannot pre-schedule a path nobody has chosen.
+  // How this enrollment was scheduled. HISTORY ONLY — nothing branches on it.
   //
-  // "lazy": the next node is scheduled only when the current one settles.
-  // currentStepId is where this contact stands in the graph; nextRunAt is when
-  // the advance worker should look at them again (set while parked on a Wait,
-  // null while waiting on an outstanding job).
+  // "eager" means the pre-branching scheduler: every job for the whole flow
+  // created at enrollment, each on its own absolute schedule. That model could
+  // not express a branch — you cannot pre-schedule a path nobody has chosen —
+  // and was retired once its backlog reached zero. Rows written under it keep
+  // saying so, which is worth being able to read later.
   //
-  // Both modes run side by side until the eager backlog drains. Enrollments
-  // created before branching shipped keep their pre-created jobs and finish
-  // exactly as they would have.
-  schedulingMode String    @default("eager") // eager | lazy
+  // "lazy" is the only scheduler now: the next node is scheduled when the
+  // current one settles. currentStepId is where this contact stands in the
+  // graph; nextRunAt is when the advance worker should look at them again —
+  // set while parked on a Wait, null while waiting on an outstanding job.
+  schedulingMode String    @default("lazy") // lazy | eager (historical)
   currentStepId  String?
   // The cursor's stepKey, carried alongside its id.
   //
@@ -850,7 +918,7 @@ model JourneyEnrollment {
   @@index([shop, contactEmail])
   @@index([journeyId])
   // Drives the advance worker's "which enrollments are due" claim.
-  @@index([schedulingMode, nextRunAt])
+  @@index([nextRunAt])
 }
 
 // Scheduled send per step per enrollment

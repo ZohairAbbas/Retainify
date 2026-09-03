@@ -38,15 +38,14 @@ async function makeFlow(steps, rewire) {
   return { journey, rows };
 }
 
-async function makeEnrollment(journey, mode) {
+async function makeEnrollment(journey) {
   const graph = await loadGraph(journey.id);
   return prisma.journeyEnrollment.create({
     data: {
       shop: SHOP,
       journeyId: journey.id,
-      contactEmail: `${mode}-${Math.random().toString(36).slice(2)}@b.co`,
-      schedulingMode: mode,
-      currentStepId: mode === "lazy" ? rootId(graph) : null,
+      contactEmail: `e-${Math.random().toString(36).slice(2)}@b.co`,
+      currentStepId: rootId(graph),
     },
   });
 }
@@ -77,17 +76,17 @@ test("eager still gates on stepNumber", async () => {
   const { journey, rows } = await makeFlow([email("one"), email("two")]);
   const [one, two] = rows;
 
-  const failed = await makeEnrollment(journey, "eager");
+  const failed = await makeEnrollment(journey);
   await job(failed, one, "failed");
   const blocked = await checkStepSequence(failed, two);
   assert.equal(blocked.verdict, CANCEL);
   assert.match(blocked.reason, /never reached the recipient/);
 
-  const ok = await makeEnrollment(journey, "eager");
+  const ok = await makeEnrollment(journey);
   await job(ok, one, "done");
   assert.equal((await checkStepSequence(ok, two)).verdict, PROCEED);
 
-  const waiting = await makeEnrollment(journey, "eager");
+  const waiting = await makeEnrollment(journey);
   await job(waiting, one, "pending");
   assert.equal((await checkStepSequence(waiting, two)).verdict, WAIT);
 });
@@ -95,7 +94,7 @@ test("eager still gates on stepNumber", async () => {
 test("a cancelled earlier step also stops the sequence", async () => {
   // How a closed shop, a stale job, or this gate itself retires work.
   const { journey, rows } = await makeFlow([email("one"), email("two")]);
-  const enr = await makeEnrollment(journey, "eager");
+  const enr = await makeEnrollment(journey);
   await job(enr, rows[0], "cancelled");
   assert.equal((await checkStepSequence(enr, rows[1])).verdict, CANCEL);
 });
@@ -106,7 +105,7 @@ test("lazy gates on ancestors", async () => {
   const { journey, rows } = await makeFlow([email("one"), email("two"), email("three")]);
   const [one, , three] = rows;
 
-  const enr = await makeEnrollment(journey, "lazy");
+  const enr = await makeEnrollment(journey);
   await job(enr, one, "failed");
   const v = await checkStepSequence(enr, three);
   assert.equal(v.verdict, CANCEL, "step one is an ancestor of step three");
@@ -114,7 +113,7 @@ test("lazy gates on ancestors", async () => {
 
 test("lazy proceeds when every ancestor landed", async () => {
   const { journey, rows } = await makeFlow([email("one"), email("two")]);
-  const enr = await makeEnrollment(journey, "lazy");
+  const enr = await makeEnrollment(journey);
   await job(enr, rows[0], "done");
   assert.equal((await checkStepSequence(enr, rows[1])).verdict, PROCEED);
 });
@@ -126,7 +125,7 @@ test("lazy ignores a disabled ancestor", async () => {
     { ...email("off"), isEnabled: false },
     email("on"),
   ]);
-  const enr = await makeEnrollment(journey, "lazy");
+  const enr = await makeEnrollment(journey);
   assert.equal((await checkStepSequence(enr, rows[1])).verdict, PROCEED);
 });
 
@@ -172,7 +171,7 @@ test("a failure on the OTHER branch does not cancel this one", async () => {
   const [one, , yesMail, noMail] = rows;
   assert.ok(yesMail.stepNumber < noMail.stepNumber, "preorder puts Yes above No");
 
-  const enr = await makeEnrollment(journey, "lazy");
+  const enr = await makeEnrollment(journey);
   await job(enr, one, "done");
   // A stray job for the branch this contact never took — a leftover from an
   // earlier run of the flow, or a step that was rewired.
@@ -186,25 +185,29 @@ test("a failure on the OTHER branch does not cancel this one", async () => {
   );
 });
 
-test("the same flow under the eager rule would wrongly cancel", async () => {
-  // Documents exactly what the ancestry rule buys. Not a defect in the eager
-  // path — no eager enrollment can ever be in a branched flow, because
-  // branching shipped after lazy became the default — but it is the reason the
-  // two rules cannot be one rule.
+test("a failure on one branch does not cancel the other", async () => {
+  // The whole point of the ancestry rule. Under the old "any lower stepNumber"
+  // test the No branch would have been cancelled by a failure on the Yes
+  // branch — a message this contact was never going to receive — because
+  // stepNumber is a preorder position, not a path.
   const { journey, rows } = await branchedFlow();
   const [one, , yesMail, noMail] = rows;
 
-  const enr = await makeEnrollment(journey, "eager");
+  const enr = await makeEnrollment(journey);
   await job(enr, one, "done");
   await job(enr, yesMail, "failed");
 
-  assert.equal((await checkStepSequence(enr, noMail)).verdict, CANCEL);
+  assert.equal(
+    (await checkStepSequence(enr, noMail)).verdict,
+    PROCEED,
+    "the Yes branch is not an ancestor of the No branch",
+  );
 });
 
 test("an ancestor failure still cancels on a branch", async () => {
   const { journey, rows } = await branchedFlow();
   const [one, , , noMail] = rows;
-  const enr = await makeEnrollment(journey, "lazy");
+  const enr = await makeEnrollment(journey);
   await job(enr, one, "failed");
   assert.equal((await checkStepSequence(enr, noMail)).verdict, CANCEL, "step one IS an ancestor");
 });
@@ -218,7 +221,7 @@ test("an archived ancestor still gates, matched by stepKey", async () => {
   const { journey, rows } = await makeFlow([email("one"), email("two")]);
   const [one, two] = rows;
 
-  const enr = await makeEnrollment(journey, "lazy");
+  const enr = await makeEnrollment(journey);
   await job(enr, one, "failed");
 
   // Editing archives step one (it has a job) and creates a replacement that
@@ -245,7 +248,7 @@ test("an archived ancestor still gates, matched by stepKey", async () => {
 
 test("a step the merchant deleted outright allows the send rather than cancelling it", async () => {
   const { journey, rows } = await makeFlow([email("one"), email("two")]);
-  const enr = await makeEnrollment(journey, "lazy");
+  const enr = await makeEnrollment(journey);
   const orphan = { id: "step_that_never_existed", stepNumber: 99, stepKey: "sk_gone" };
   const v = await checkStepSequence(enr, orphan);
   // "I cannot tell" is not evidence anything died. Only positive evidence

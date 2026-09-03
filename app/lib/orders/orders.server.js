@@ -106,11 +106,16 @@ export async function recalcContactOrderStats(shop, rawEmail) {
     _max: { processedAt: true },
   });
 
+  const orderCount = agg._count._all || 0;
+  const totalSpent = Number(agg._sum.totalPrice || 0);
   const stats = {
-    orderCount: agg._count._all || 0,
-    totalSpent: Number(agg._sum.totalPrice || 0),
+    orderCount,
+    totalSpent,
     firstOrderAt: agg._min.processedAt || null,
     lastOrderAt: agg._max.processedAt || null,
+    // Written in the same statement as its inputs — see the aov comment on the
+    // Contact model for why a derived value is stored at all.
+    aov: orderCount ? totalSpent / orderCount : 0,
   };
 
   await prisma.contact.updateMany({ where: { shop, email }, data: stats });
@@ -145,22 +150,32 @@ export async function recalcManyContactOrderStats(shop, emails) {
 
   for (const email of list) {
     const r = byEmail.get(email);
+    const orderCount = r?._count._all || 0;
+    const totalSpent = Number(r?._sum.totalPrice || 0);
     await prisma.contact.updateMany({
       where: { shop, email },
       // An email with no surviving orders resets to zero rather than keeping a
       // stale total — that is the refund and cancellation case.
       data: {
-        orderCount: r?._count._all || 0,
-        totalSpent: Number(r?._sum.totalPrice || 0),
+        orderCount,
+        totalSpent,
         firstOrderAt: r?._min.processedAt || null,
         lastOrderAt: r?._max.processedAt || null,
+        aov: orderCount ? totalSpent / orderCount : 0,
       },
     });
   }
   return list.length;
 }
 
-/** Average order value, derived rather than stored so it cannot drift. */
+/**
+ * Average order value from a contact's own columns.
+ *
+ * Contact.aov now holds the same figure, written by the two recalc functions
+ * above so that segment rules can compare it in SQL. This stays as the reader
+ * for callers holding a contact in hand: it needs no aov column to be present on
+ * the row, and it is the definition the stored value is computed from.
+ */
 export function averageOrderValue(contact) {
   const n = Number(contact?.orderCount) || 0;
   if (!n) return 0;

@@ -98,6 +98,40 @@ export const TASKS = [
   },
 ];
 
+/**
+ * The scheduling link behind the "Book an onboarding call" step.
+ *
+ * Hardcoded rather than env-only because an unset env var is what made this
+ * step ship as a disabled "Scheduling link coming soon" button — the last
+ * thing a new merchant saw in onboarding, and a step the checklist could never
+ * resolve. The env var still overrides, so a staging deploy or a different
+ * specialist's calendar needs no code change.
+ *
+ * If this is ever emptied, the call step degrades to a Skip-only panel (see
+ * CallPanel) rather than offering a link to nowhere.
+ */
+export const DEFAULT_ONBOARDING_CALL_URL =
+  "https://calendly.com/preventify/retainify-onboarding";
+
+/**
+ * Resolve the scheduling link. Takes the env value explicitly rather than
+ * reading process.env, because this module is imported by the client bundle.
+ *
+ * Returns "" when there is no link anywhere, which is the only falsy value the
+ * UI has to handle — the old sentinel "#" looked like a URL to every check.
+ */
+export function resolveCallUrl(envValue) {
+  const url = String(envValue || "").trim() || DEFAULT_ONBOARDING_CALL_URL;
+  if (!/^https?:\/\//i.test(url)) {
+    // Not silently swapped for the default: a set-but-unusable value is a
+    // misconfiguration, and quietly serving a different calendar than the one
+    // the deploy asked for is worse than the step going quiet and saying so.
+    if (url) console.warn(`[onboarding] ignoring non-http scheduling link: ${url}`);
+    return "";
+  }
+  return url;
+}
+
 /** Build the theme-editor deep link that highlights the Retainify app embed.
  *  Pure string helper — safe on client + server. */
 export function themeEditorEmbedUrl(shop, apiKey) {

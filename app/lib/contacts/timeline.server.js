@@ -16,6 +16,7 @@ export async function buildTimeline(shop, emailRaw) {
     pushJobs,
     suppressions,
     tagApplications,
+    pathEvents,
   ] = await Promise.all([
     prisma.abandonedCart.findMany({
       where: { shop, customerEmail: email },
@@ -73,12 +74,45 @@ export async function buildTimeline(shop, emailRaw) {
       where: { contact: { shop, email } },
       select: {
         createdAt: true,
+        // Which flow step applied it, if one did. Null means a person did —
+        // and saying so is the point of storing it: "why does this contact
+        // have that tag" is otherwise unanswerable.
+        appliedByStepKey: true,
         tag: { select: { name: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 20,
     }),
+    // Which way this contact went at each split. The jobs alone cannot answer
+    // it: a branch whose side sends nothing leaves no job, and a job that does
+    // exist cannot tell "the split said no" from "not reached yet". This is
+    // what makes "why did they get that email" answerable without a database
+    // session.
+    prisma.journeyPathEvent.findMany({
+      where: { enrollment: { shop, contactEmail: email } },
+      select: {
+        id: true,
+        branch: true,
+        evaluatedAt: true,
+        stepId: true,
+        enrollment: { select: { journey: { select: { name: true } } } },
+      },
+      orderBy: { evaluatedAt: "desc" },
+      take: 50,
+    }),
   ]);
+
+  // Split labels come from the step rows, which the path events reference by
+  // id. Looked up separately rather than joined, because a split the merchant
+  // has since deleted still has decisions worth showing.
+  const splitNames = new Map(
+    (
+      await prisma.journeyStep.findMany({
+        where: { id: { in: [...new Set(pathEvents.map((e) => e.stepId))] } },
+        select: { id: true, emailName: true, stepNumber: true },
+      })
+    ).map((s) => [s.id, s.emailName || `Split ${s.stepNumber}`]),
+  );
 
   const events = [];
 
@@ -139,6 +173,18 @@ export async function buildTimeline(shop, emailRaw) {
     }
   }
 
+  for (const p of pathEvents) {
+    events.push({
+      kind: "split_taken",
+      at: p.evaluatedAt,
+      payload: {
+        name: p.enrollment?.journey?.name || "",
+        split: splitNames.get(p.stepId) || "Split",
+        branch: p.branch,
+      },
+    });
+  }
+
   for (const j of emailJobs) {
     const subject = j.step?.subject || "";
     const journey = j.step?.journey?.name || "";
@@ -192,11 +238,31 @@ export async function buildTimeline(shop, emailRaw) {
     });
   }
 
+  // Flow names for tags a flow applied. Looked up by step key rather than
+  // joined, because the step row a key points at is recreated on every save
+  // and a deleted step still has tags to explain.
+  const tagStepKeys = [...new Set(tagApplications.map((t) => t.appliedByStepKey).filter(Boolean))];
+  const flowByStepKey = new Map();
+  if (tagStepKeys.length) {
+    const steps = await prisma.journeyStep.findMany({
+      where: { stepKey: { in: tagStepKeys }, journey: { shop } },
+      select: { stepKey: true, journey: { select: { name: true } } },
+    });
+    for (const st of steps) {
+      if (!flowByStepKey.has(st.stepKey)) flowByStepKey.set(st.stepKey, st.journey?.name || "");
+    }
+  }
+
   for (const t of tagApplications) {
     events.push({
       kind: "tagged",
       at: t.createdAt,
-      payload: { tag: t.tag.name },
+      payload: {
+        tag: t.tag.name,
+        // Absent for a tag applied by hand, which is the honest reading — the
+        // renderer shows nothing rather than guessing at a source.
+        byFlow: t.appliedByStepKey ? flowByStepKey.get(t.appliedByStepKey) || "a flow" : null,
+      },
     });
   }
 
