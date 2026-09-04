@@ -26,8 +26,12 @@ export const loader = async ({ request }) => {
   });
 
   const ids = campaigns.map((c) => c.id);
-  const stats = ids.length
-    ? await prisma.$queryRaw`
+  // Two queries rather than a union, because the two channels do not report the
+  // same events: email has opens, WhatsApp has reads and no open at all. Each
+  // is mapped onto the table's three columns by the row that renders it.
+  const [emailStats, waStats] = ids.length
+    ? await Promise.all([
+        prisma.$queryRaw`
         SELECT s."journeyId" AS "journeyId",
                COUNT(*) FILTER (WHERE j."sentAt"    IS NOT NULL) AS sent,
                COUNT(*) FILTER (WHERE j."openedAt"  IS NOT NULL) AS opened,
@@ -35,10 +39,20 @@ export const loader = async ({ request }) => {
           FROM "JourneyJob" j
           JOIN "JourneyStep" s ON s.id = j."stepId"
          WHERE s."journeyId" = ANY(${ids})
-         GROUP BY s."journeyId"`
-    : [];
+         GROUP BY s."journeyId"`,
+        prisma.$queryRaw`
+        SELECT s."journeyId" AS "journeyId",
+               COUNT(*) FILTER (WHERE w."sentAt"    IS NOT NULL) AS sent,
+               COUNT(*) FILTER (WHERE w."readAt"    IS NOT NULL) AS opened,
+               COUNT(*) FILTER (WHERE w."clickedAt" IS NOT NULL) AS clicked
+          FROM "WhatsappJob" w
+          JOIN "JourneyStep" s ON s.id = w."stepId"
+         WHERE s."journeyId" = ANY(${ids})
+         GROUP BY s."journeyId"`,
+      ])
+    : [[], []];
   const byId = Object.fromEntries(
-    stats.map((r) => [r.journeyId, {
+    [...emailStats, ...waStats].map((r) => [r.journeyId, {
       sent: Number(r.sent) || 0,
       opened: Number(r.opened) || 0,
       clicked: Number(r.clicked) || 0,
@@ -49,7 +63,9 @@ export const loader = async ({ request }) => {
     campaigns: campaigns.map((c) => ({
       id: c.id,
       name: c.name,
+      channel: c.steps[0]?.nodeType === "whatsapp" ? "whatsapp" : "email",
       subject: c.steps[0]?.subject || "",
+      waTemplateName: c.steps[0]?.waTemplateName || "",
       status: campaignStatus(c),
       scheduledFor: c.scheduledFor,
       dispatchedAt: c.dispatchedAt,
@@ -79,6 +95,9 @@ export const action = async ({ request }) => {
 
   if (intent === "create") {
     const name = String(fd.get("name") || "").trim() || "Untitled campaign";
+    // The channel is the step's node type. Anything but "whatsapp" is email,
+    // so a missing or unrecognised value keeps the previous behaviour.
+    const channel = String(fd.get("channel") || "email") === "whatsapp" ? "whatsapp" : "email";
     const campaign = await prisma.journey.create({
       data: {
         shop,
@@ -94,10 +113,11 @@ export const action = async ({ request }) => {
           create: {
             stepNumber: 1,
             positionY: 0,
-            nodeType: "email",
+            nodeType: channel,
             delayHours: 0,
-            emailName: name,
-            subject: "",
+            ...(channel === "whatsapp"
+              ? { waTemplateName: "", waLanguage: "" }
+              : { emailName: name, subject: "" }),
           },
         },
       },
@@ -129,6 +149,24 @@ export const action = async ({ request }) => {
   }
 
   return { ok: false };
+};
+
+/**
+ * Channel is chosen once, at creation, because it decides what the editor even
+ * is — a subject line and HTML, or an approved template and its variables.
+ * A draft can still be switched on the campaign page; a sent one cannot.
+ */
+const CHANNEL_CHOICE = {
+  label: "Channel",
+  initial: "email",
+  options: [
+    { value: "email", label: "Email", hint: "Subject line, content blocks or your own HTML." },
+    {
+      value: "whatsapp",
+      label: "WhatsApp",
+      hint: "An approved template. Reaches contacts who opted in to WhatsApp — a different audience from your email list.",
+    },
+  ],
 };
 
 const STATUS_LABEL = {
@@ -177,8 +215,9 @@ export default function Campaigns() {
             body="Just for your reference — recipients never see it."
             confirmLabel="Create"
             loading={busy}
+            choices={CHANNEL_CHOICE}
             onCancel={() => setDialog(null)}
-            onConfirm={(name) => { fetcher.submit({ intent: "create", name }, { method: "post" }); setDialog(null); }}
+            onConfirm={(name, channel) => { fetcher.submit({ intent: "create", name, channel }, { method: "post" }); setDialog(null); }}
           />
         )}
       </div>
@@ -224,10 +263,16 @@ export default function Campaigns() {
                 style={{ cursor: "pointer" }}
               >
                 <div className="rt-tcell-name">
-                  <div className="rt-trig-dot rt-tint-email"><Icons.Send size={14} /></div>
+                  <div className={`rt-trig-dot rt-tint-${c.channel}`}>
+                    {c.channel === "whatsapp" ? <Icons.Whatsapp size={14} /> : <Icons.Send size={14} />}
+                  </div>
                   <div>
                     <div className="rt-flow-name">{c.name}</div>
-                    <div className="rt-flow-meta">{c.subject || <em className="faint">No subject yet</em>}</div>
+                    <div className="rt-flow-meta">
+                      {c.channel === "whatsapp"
+                        ? c.waTemplateName || <em className="faint">No template yet</em>
+                        : c.subject || <em className="faint">No subject yet</em>}
+                    </div>
                   </div>
                 </div>
                 <div><span className={`pill ${s.cls}`}>{s.label}</span></div>
@@ -239,7 +284,12 @@ export default function Campaigns() {
                       : "—"}
                 </div>
                 <div className="rt-tnum t-mono">{fmt(c.stats.sent)}</div>
-                <div className="rt-tnum t-mono">{rate(c.stats.opened, c.stats.sent)}</div>
+                {/* Read rate for WhatsApp, open rate for email. Meta reports a
+                    read receipt and no open; the two are close enough in
+                    meaning to share a column and are labelled per row. */}
+                <div className="rt-tnum t-mono" title={c.channel === "whatsapp" ? "Read rate" : "Open rate"}>
+                  {rate(c.stats.opened, c.stats.sent)}
+                </div>
                 <div className="rt-tnum t-mono">{rate(c.stats.clicked, c.stats.sent)}</div>
                 <div className="rt-tactions" onClick={(e) => e.stopPropagation()}>
                   <RowMenu
@@ -264,8 +314,9 @@ export default function Campaigns() {
           body="Just for your reference — recipients never see it."
           confirmLabel="Create"
           loading={busy}
+          choices={CHANNEL_CHOICE}
           onCancel={() => setDialog(null)}
-          onConfirm={(name) => { fetcher.submit({ intent: "create", name }, { method: "post" }); setDialog(null); }}
+          onConfirm={(name, channel) => { fetcher.submit({ intent: "create", name, channel }, { method: "post" }); setDialog(null); }}
         />
       )}
       {dialog?.kind === "cancel" && (

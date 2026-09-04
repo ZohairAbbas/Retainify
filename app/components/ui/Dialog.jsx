@@ -86,6 +86,14 @@ export function ConfirmDialog({
 /**
  * Single-field text prompt. Replaces window.prompt for tag names and segment
  * names, both of which needed validation the native dialog cannot express.
+ *
+ * `choices` optionally adds one radio row beneath the field — for the case
+ * where naming a thing and choosing its kind are the same decision, and asking
+ * twice would be two dialogs for one thought. The chosen value arrives as
+ * onConfirm's second argument, so callers that don't pass `choices` are
+ * unaffected.
+ *
+ * @param {{ label?: string, initial?: string, options: Array<{value: string, label: string, hint?: string}> }} [choices]
  */
 export function PromptDialog({
   title,
@@ -95,16 +103,18 @@ export function PromptDialog({
   initialValue = "",
   confirmLabel = "Save",
   loading = false,
+  choices,
   onConfirm,
   onCancel,
 }) {
   const [value, setValue] = useState(initialValue);
+  const [choice, setChoice] = useState(choices?.initial ?? choices?.options?.[0]?.value ?? "");
   const inputRef = useRef(null);
   useDialogBehaviour(onCancel, inputRef);
 
   const trimmed = value.trim();
   const submit = () => {
-    if (trimmed) onConfirm(trimmed);
+    if (trimmed) onConfirm(trimmed, choice);
   };
 
   return (
@@ -136,6 +146,42 @@ export function PromptDialog({
             }
           }}
         />
+        {choices?.options?.length > 0 && (
+          <div style={{ marginTop: 18 }}>
+            {choices.label && <span className="field-label">{choices.label}</span>}
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 6 }}>
+              {choices.options.map((opt) => (
+                <label
+                  key={opt.value}
+                  className="t-small"
+                  style={{
+                    display: "flex", gap: 10, alignItems: "flex-start", cursor: "pointer",
+                    padding: "10px 12px", borderRadius: 8,
+                    border: `1px solid ${choice === opt.value ? "var(--ink-1)" : "var(--hair-1)"}`,
+                    background: choice === opt.value ? "var(--paper-2)" : "transparent",
+                  }}
+                >
+                  <input
+                    type="radio"
+                    name="rt-prompt-choice"
+                    value={opt.value}
+                    checked={choice === opt.value}
+                    onChange={() => setChoice(opt.value)}
+                    style={{ marginTop: 2, flexShrink: 0 }}
+                  />
+                  <span>
+                    <span style={{ fontWeight: 500, color: "var(--ink-1)" }}>{opt.label}</span>
+                    {opt.hint && (
+                      <span className="muted" style={{ display: "block", marginTop: 2, lineHeight: 1.5 }}>
+                        {opt.hint}
+                      </span>
+                    )}
+                  </span>
+                </label>
+              ))}
+            </div>
+          </div>
+        )}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 24 }}>
           <button className="btn btn-secondary" onClick={onCancel} disabled={loading}>
             Cancel
