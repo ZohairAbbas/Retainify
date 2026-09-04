@@ -22,6 +22,7 @@ import JourneysCard from "../components/contacts/JourneysCard.jsx";
 import CustomPropsCard from "../components/contacts/CustomPropsCard.jsx";
 import { fmtMoney, fmtPctC, relativeTime } from "../components/contacts/constants.js";
 import prisma from "../db.server.js";
+import { recordOptOut } from "../lib/whatsapp/optin.server.js";
 import {
   computeLifecycle,
   getContactById,
@@ -91,6 +92,9 @@ export const loader = async ({ request, params }) => {
       lifecycleStage: computeLifecycle(contact, stats),
       pushEnabled: pushSubs > 0,
       pushDevices: pushSubs,
+      phone: contact.phone || "",
+      whatsappStatus: contact.whatsappStatus,
+      whatsappOptInAt: contact.whatsappOptInAt,
       tags: contact.tags.map((ct) => ({
         id: ct.tag.id,
         name: ct.tag.name,
@@ -149,6 +153,27 @@ export const action = async ({ request, params }) => {
   if (intent === "resubscribe") {
     const contact = await getContactById(shop, contactId);
     if (contact) await resubscribeContact(shop, contact.email);
+    return { ok: true };
+  }
+
+  // Merchant-side WhatsApp opt-out. recordOptOut is the same path the STOP
+  // keyword takes, so it writes all three places consent lives — the
+  // subscription, the suppression list, and the contact — rather than only the
+  // one the merchant happens to be looking at.
+  if (intent === "whatsapp-opt-out") {
+    const contact = await getContactById(shop, contactId);
+    const sub = contact
+      ? await prisma.whatsappSubscription.findFirst({
+          where: { shop, contactEmail: contact.email, status: "subscribed" },
+          select: { phoneNumber: true },
+        })
+      : null;
+    // Fall back to the contact's phone: the "require opt-in off" mode messages
+    // contacts that have a phone but no subscription row, and those are
+    // precisely the people a merchant most needs to be able to stop.
+    const phoneNumber = sub?.phoneNumber || contact?.phone || "";
+    if (!phoneNumber) return { ok: false, error: "This contact has no WhatsApp number." };
+    await recordOptOut({ shop, phoneNumber, reason: "opt_out" });
     return { ok: true };
   }
 

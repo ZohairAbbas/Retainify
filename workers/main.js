@@ -19,6 +19,12 @@
  * and waits `kill_timeout` before SIGKILL, so that window is configured to
  * match. A second SIGTERM exits immediately, for when waiting is not wanted.
  */
+// First, and by side effect: the send paths read process.env at module scope,
+// so this has to be evaluated before them. Until now the worker's Resend, web
+// push and WhatsApp credentials arrived only as an accident of @prisma/client
+// loading .env on import — see load-env.js.
+import "../load-env.js";
+
 import prisma from "../app/db.server.js";
 import {
   startWorkers,

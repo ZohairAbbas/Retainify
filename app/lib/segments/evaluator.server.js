@@ -62,6 +62,7 @@ const LIFECYCLE_AT_RISK_DAYS = 90;
 
 const PRISMA_SAFE_FIELDS = new Set([
   "subscriptionStatus",
+  "whatsappStatus",
   "source",
   "hasTag",
   "firstSeenAt",
@@ -155,6 +156,15 @@ function ruleToPrisma(rule) {
       if (rule.op === "is_one_of") {
         const arr = Array.isArray(rule.value) ? rule.value : [rule.value];
         return { subscriptionStatus: { in: arr } };
+      }
+      return null;
+    }
+    case "whatsappStatus": {
+      if (rule.op === "is")     return { whatsappStatus: rule.value };
+      if (rule.op === "is_not") return { NOT: { whatsappStatus: rule.value } };
+      if (rule.op === "is_one_of") {
+        const arr = Array.isArray(rule.value) ? rule.value : [rule.value];
+        return { whatsappStatus: { in: arr } };
       }
       return null;
     }
@@ -419,6 +429,13 @@ function evalRuleJs(rule, ctx) {
     // Profile (also handled in Prisma; kept here for in-memory union/intersect)
     case "subscriptionStatus": {
       const v = contact.subscriptionStatus;
+      if (rule.op === "is") return v === rule.value;
+      if (rule.op === "is_not") return v !== rule.value;
+      if (rule.op === "is_one_of") return (Array.isArray(rule.value) ? rule.value : [rule.value]).includes(v);
+      return true;
+    }
+    case "whatsappStatus": {
+      const v = contact.whatsappStatus;
       if (rule.op === "is") return v === rule.value;
       if (rule.op === "is_not") return v !== rule.value;
       if (rule.op === "is_one_of") return (Array.isArray(rule.value) ? rule.value : [rule.value]).includes(v);

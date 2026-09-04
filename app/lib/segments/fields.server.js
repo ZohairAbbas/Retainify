@@ -52,6 +52,17 @@ export const FIELDS = [
       { id: "complained",     label: "Complained" },
       { id: "never_opted_in", label: "Never opted in" },
     ] },
+  // The WhatsApp consent state, mirroring subscriptionStatus for email. Meta
+  // requires opt-in before messaging, so "who may I actually reach on
+  // WhatsApp" is a targeting question in its own right — without this a
+  // merchant building a WhatsApp flow can only guess at its audience.
+  { id: "whatsappStatus",     label: "WhatsApp status",     group: "Profile", type: "enum", supported: true,
+    options: [
+      { id: "subscribed",     label: "Subscribed" },
+      { id: "unsubscribed",   label: "Unsubscribed" },
+      { id: "invalid",        label: "Invalid number" },
+      { id: "never_opted_in", label: "Never opted in" },
+    ] },
   { id: "lifecycleStage",     label: "Lifecycle stage",     group: "Profile", type: "enum", supported: true,
     options: [
       { id: "new",             label: "New" },

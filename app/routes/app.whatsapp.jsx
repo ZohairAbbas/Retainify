@@ -7,11 +7,19 @@ import { connectWhatsappAccount, resubscribeWebhooks } from "../lib/whatsapp/emb
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
 import { sendWhatsapp, sendWhatsappText, registerWhatsappNumber } from "../lib/whatsapp/index.server.js";
 import { toE164 } from "../lib/contacts/contacts.server.js";
+import { recordOptOut } from "../lib/whatsapp/optin.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
+
+/** Subscription states in the merchant's language. */
+const SUB_STATUS = {
+  subscribed: "Subscribed",
+  unsubscribed: "Opted out",
+  invalid: "Invalid number",
+};
 
 /** Whether a Meta component spec contains at least one URL button. */
 function hasUrlButton(components) {
@@ -30,10 +38,23 @@ export const loader = async ({ request }) => {
   if (!ctx.isShopify) return { storefrontOnly: true };
   const { shop } = ctx;
 
-  const [account, settings, subCount, templates, popup] = await Promise.all([
+  const [account, settings, subCount, subscribers, templates, popup] = await Promise.all([
     prisma.whatsappAccount.findUnique({ where: { shop } }),
     prisma.shopSettings.findUnique({ where: { shop } }),
     prisma.whatsappSubscription.count({ where: { shop, status: "subscribed" } }),
+    // Newest first, capped. A merchant with 40,000 subscribers does not need
+    // them paginated on a settings page — they need to see that capture is
+    // working and be able to remove someone who asked in person. Contacts is
+    // where the whole audience is browsed and segmented.
+    prisma.whatsappSubscription.findMany({
+      where: { shop },
+      orderBy: { optInAt: "desc" },
+      take: 25,
+      select: {
+        id: true, phoneNumber: true, contactEmail: true, status: true,
+        optInMethod: true, confirmedAt: true, optInAt: true,
+      },
+    }),
     prisma.whatsappTemplate.findMany({
       where: { shop },
       orderBy: [{ status: "asc" }, { name: "asc" }],
@@ -72,6 +93,12 @@ export const loader = async ({ request }) => {
     popupOptIn: popup?.config?.whatsappOptIn === true,
     whatsappRequireOptIn: settings?.whatsappRequireOptIn ?? true,
     subCount,
+    subscribers: subscribers.map((sub) => ({
+      ...sub,
+      optInAt: sub.optInAt.toISOString(),
+      confirmed: !!sub.confirmedAt,
+      confirmedAt: undefined,
+    })),
     // `untracked` means the template has a link button whose taps we can never
     // see: it was authored in Meta Business Manager, so its URL goes straight to
     // the merchant instead of through our redirect. Templates without any link
@@ -153,6 +180,17 @@ export const action = async ({ request }) => {
     const res = await connectWhatsappAccount({ shop, code, wabaId, businessId });
     if (!res.ok) return { ok: false, error: res.error || "Failed to connect." };
     return { ok: true, connected: true, warning: res.warning };
+  }
+
+  // Remove one subscriber by hand. Same path as a STOP message, so consent is
+  // withdrawn everywhere it is recorded rather than in the one table this page
+  // happens to read. Not plan-gated: a merchant must always be able to honour
+  // an opt-out, whatever they are paying.
+  if (intent === "remove-subscriber") {
+    const phoneNumber = String(fd.get("phoneNumber") || "");
+    if (!phoneNumber) return { ok: false, error: "Missing phone number." };
+    await recordOptOut({ shop, phoneNumber, reason: "opt_out" });
+    return { ok: true, removed: true };
   }
 
   if (intent === "resubscribe-webhooks") {
@@ -265,7 +303,7 @@ export const action = async ({ request }) => {
 };
 
 function WhatsappPageInner() {
-  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, templates, metaAppId, esConfigId } = useLoaderData();
+  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, metaAppId, esConfigId } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -274,6 +312,7 @@ function WhatsappPageInner() {
   const optInFetcher = useFetcher();
   const registerFetcher = useFetcher();
   const subscribeFetcher = useFetcher();
+  const removeFetcher = useFetcher();
 
   const isConnected = account?.status === "connected";
   // Optimistic: reflect a just-completed registration immediately, since a
@@ -764,6 +803,61 @@ function WhatsappPageInner() {
             <div className="t-small muted" style={{ marginTop: 6 }}>
               Contacts who explicitly opted in to WhatsApp.
             </div>
+
+            {subscribers.length > 0 && (
+              <div style={{ marginTop: 16, borderTop: "1px solid var(--line)", paddingTop: 16 }}>
+                <div className="t-micro muted" style={{ marginBottom: 10 }}>
+                  Most recent{subCount > subscribers.length ? ` · showing ${subscribers.length} of ${subCount}` : ""}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+                  {subscribers.map((sub) => (
+                    <div
+                      key={sub.id}
+                      style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        gap: 12, padding: "6px 0",
+                      }}
+                    >
+                      <div className="t-small" style={{ minWidth: 0 }}>
+                        <span className="t-mono" style={{ color: "var(--ink-1)" }}>+{sub.phoneNumber}</span>
+                        {sub.contactEmail && <span className="muted"> · {sub.contactEmail}</span>}
+                        <div className="t-micro muted" style={{ marginTop: 2 }}>
+                          {SUB_STATUS[sub.status] || sub.status}
+                          {sub.optInMethod ? ` · via ${sub.optInMethod.replace(/_/g, " ")}` : ""}
+                          {" · "}
+                          {new Date(sub.optInAt).toLocaleDateString()}
+                          {/* An unconfirmed row cannot be sent to when the
+                              shop requires opt-in — the worker checks
+                              confirmedAt, not status — so it must be visible
+                              here rather than looking like a live subscriber. */}
+                          {sub.status === "subscribed" && !sub.confirmed ? " · unconfirmed" : ""}
+                        </div>
+                      </div>
+                      {sub.status === "subscribed" && (
+                        <button
+                          className="btn"
+                          style={{ flexShrink: 0, padding: "2px 10px" }}
+                          onClick={() =>
+                            removeFetcher.submit(
+                              { intent: "remove-subscriber", phoneNumber: sub.phoneNumber },
+                              { method: "post" },
+                            )
+                          }
+                          disabled={removeFetcher.state !== "idle"}
+                        >
+                          Opt out
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {removeFetcher.data?.ok === false && (
+                  <div className="t-small" style={{ marginTop: 8, color: "var(--danger-ink)" }}>
+                    {removeFetcher.data.error}
+                  </div>
+                )}
+              </div>
+            )}
             {/* Storefront capture used to say "coming soon" — recordOptIn had no
                 caller anywhere, so this count could never leave zero and no
                 WhatsApp step in any flow could send. */}

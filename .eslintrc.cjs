@@ -109,6 +109,10 @@ module.exports = {
         // The dedicated worker process — a plain Node program, run by pm2 as
         // `node workers/main.js` rather than through the react-router build.
         "workers/**/*.{js,mjs,cjs}",
+        // The web entrypoint — loads .env, then hands off to react-router-serve
+        // — and the shared .env loader both entrypoints import first.
+        "server.js",
+        "load-env.js",
         // pm2's process definition, which is CommonJS and uses __dirname.
         "ecosystem.config.cjs",
       ],
