@@ -311,7 +311,11 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-view-toggle button { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; background: transparent; border: 0; border-radius: var(--r-2); font-size: 12.5px; color: var(--ink-2); cursor: pointer; }
 .rt-view-toggle button.rt-vt-on { background: var(--paper-3); color: var(--brand-700); box-shadow: var(--sh-1); font-weight: 500; }
 
-.rt-builder-body { flex: 1; display: grid; grid-template-columns: 1fr 380px; min-height: 0; overflow: hidden; }
+/* 440px, not 380px: the inspector hosts the rule-tree editor for split
+   conditions and flow filters, and the extra 60px is what makes the stacked
+   operator/value line comfortable rather than merely legible. The email builder
+   overrides this grid with its own columns below. */
+.rt-builder-body { flex: 1; display: grid; grid-template-columns: 1fr 440px; min-height: 0; overflow: hidden; }
 .rt-builder-canvas {
   background:
     radial-gradient(circle at 1px 1px, rgba(20,32,26,0.08) 1px, transparent 1.5px);

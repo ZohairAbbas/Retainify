@@ -340,24 +340,58 @@ function ValueControlEnum({ field, rule, onChange }) {
   );
 }
 
+/**
+ * Operators that need no value at all — the control would render a lone em-dash.
+ * Worth a whole column when there is room; in the inspector it is a column the
+ * operator needs more.
+ */
+function isValueless(field, rule) {
+  if (!field) return true;
+  if (field.type === "boolean") return true;
+  return field.type === "date" && rule.op === "empty";
+}
+
 // ── Rule + Group ──────────────────────────────────────────────────────
-function RuleRow({ idx, rule, fields, fieldsById, operators, tags, onChange, onRemove }) {
+function RuleRow({ idx, rule, fields, fieldsById, operators, tags, onChange, onRemove, compact }) {
   const field = fieldsById[rule.field];
   const ops = field ? operators[field.type] || [] : [];
+  // Compact drops the placeholder and lets the operator span the value column.
+  const hideValue = compact && isValueless(field, rule);
+  // `between` is two inputs and a joining word in one slot — half a row is not
+  // enough for it, so it gets a line of its own.
+  const wideValue = compact && !hideValue && rule.op === "between";
   return (
-    <div className="rt-rule">
+    <div
+      className={
+        "rt-rule" +
+        (compact ? " rt-rule-compact" : "") +
+        (hideValue ? " rt-rule-novalue" : "") +
+        (wideValue ? " rt-rule-widevalue" : "")
+      }
+    >
       <div className="rt-rule-num">{String(idx + 1).padStart(2, "0")}</div>
-      <FieldPicker
-        fields={fields}
-        value={rule.field}
-        onChange={(f) => onChange(defaultRuleFor(f, tags?.[0]?.id || null))}
-      />
-      <OperatorPicker
-        ops={ops}
-        value={rule.op}
-        onChange={(opId) => onChange({ ...rule, op: opId })}
-      />
-      <ValueControl field={field} rule={rule} onChange={onChange} tags={tags} />
+      {/* Each control is wrapped so the row can be placed by grid area: the
+          same three slots sit on one line at segment width and on two in the
+          flow inspector, without the pickers knowing which layout they are in. */}
+      <div className="rt-rule-field">
+        <FieldPicker
+          fields={fields}
+          value={rule.field}
+          onChange={(f) => onChange(defaultRuleFor(f, tags?.[0]?.id || null))}
+        />
+      </div>
+      <div className="rt-rule-op">
+        <OperatorPicker
+          ops={ops}
+          value={rule.op}
+          onChange={(opId) => onChange({ ...rule, op: opId })}
+        />
+      </div>
+      {!hideValue && (
+        <div className="rt-rule-value">
+          <ValueControl field={field} rule={rule} onChange={onChange} tags={tags} />
+        </div>
+      )}
       <button
         type="button"
         className="rt-rule-x"
@@ -370,6 +404,14 @@ function RuleRow({ idx, rule, fields, fieldsById, operators, tags, onChange, onR
   );
 }
 
+/**
+ * @param {boolean} [props.compact] - lay the tree out for a narrow container.
+ *   The flow inspector is 440px against the segment builder's ~850px, which
+ *   leaves a single-line rule row about 60px per control: enough to render
+ *   "is mo" and a truncated field name. Compact stacks the operator and value
+ *   under the field and trims the indents; it changes no behaviour, so a rule
+ *   built in a flow and a rule built in a segment stay the same rule.
+ */
 export function GroupBlock({
   node,
   depth = 0,
@@ -380,6 +422,7 @@ export function GroupBlock({
   onChange,
   onRemove,
   canRemove,
+  compact = false,
 }) {
   const isAny = node.match === "any";
   const setMatch = (m) => onChange({ ...node, match: m });
@@ -408,6 +451,7 @@ export function GroupBlock({
     <div
       className={
         "rt-grp" +
+        (compact ? " rt-grp-compact" : "") +
         (depth > 0 ? " rt-grp-sub" + (isAny ? " rt-any-rail" : "") : "")
       }
     >
@@ -468,6 +512,7 @@ export function GroupBlock({
                   fieldsById={fieldsById}
                   operators={operators}
                   tags={tags}
+                  compact={compact}
                   onChange={(next) => setChild(i, next)}
                   onRemove={() => removeChild(i)}
                 />
@@ -479,6 +524,7 @@ export function GroupBlock({
                   fieldsById={fieldsById}
                   operators={operators}
                   tags={tags}
+                  compact={compact}
                   onChange={(next) => setChild(i, next)}
                   onRemove={() => removeChild(i)}
                   canRemove

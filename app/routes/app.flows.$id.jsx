@@ -1890,6 +1890,7 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
               tags={filterTags}
               onChange={setEntryFilters}
               canRemove={false}
+              compact
             />
           </div>
         )}
@@ -2319,6 +2320,7 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
             tags={filterTags}
             onChange={(tree) => onChange({ splitCondition: tree })}
             canRemove={false}
+            compact
           />
           {/* The single likeliest way to misuse this feature: a split placed
               straight after a send evaluates before anyone could have opened

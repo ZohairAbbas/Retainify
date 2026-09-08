@@ -434,9 +434,15 @@
 .rt-rule {
   display: grid;
   grid-template-columns: 24px minmax(0, 1.8fr) minmax(0, 1.2fr) minmax(0, 1.4fr) 28px;
+  grid-template-areas: "num field op val del";
   gap: 8px; align-items: center;
   padding: 6px 0;
 }
+.rt-rule-field { grid-area: field; min-width: 0; }
+.rt-rule-op { grid-area: op; min-width: 0; }
+.rt-rule-value { grid-area: val; min-width: 0; }
+.rt-rule .rt-rule-num { grid-area: num; }
+.rt-rule .rt-rule-x { grid-area: del; }
 .rt-rule-num {
   font-family: var(--font-mono); font-size: 10.5px;
   color: var(--ink-4); font-weight: 500;
@@ -527,6 +533,48 @@
 .rt-add-btn:hover { border-color: var(--brand-700); color: var(--brand-700); background: var(--brand-50); border-style: solid; }
 .rt-add-btn-sub { color: var(--ink-3); }
 .rt-add-btn-sub:hover { color: var(--brand-700); background: var(--brand-50); }
+
+/* ── Compact tree (flow inspector) ───────────────────────────────────── */
+/* The same tree in a 440px panel instead of the builder's ~850px column. On one
+   line each control would get ~60px, which is where "is more than" renders as
+   "is mo". Here the field takes the full width and the operator and value sit
+   under it, so both are readable at any nesting depth. */
+.rt-rule-compact {
+  grid-template-columns: 24px minmax(0, 1.15fr) minmax(0, 1fr) 28px;
+  grid-template-areas:
+    "num field field del"
+    ".   op    val   .";
+  row-gap: 6px;
+  align-items: center;
+}
+/* Nothing to fill the value slot — the operator takes the whole line. */
+.rt-rule-compact.rt-rule-novalue {
+  grid-template-areas:
+    "num field field del"
+    ".   op    op    .";
+}
+/* "between" is two inputs and a joining word: it gets the full width. */
+.rt-rule-compact.rt-rule-widevalue {
+  grid-template-areas:
+    "num field field del"
+    ".   op    op    ."
+    ".   val   val   .";
+}
+.rt-rule-compact .rt-rule-num,
+.rt-rule-compact .rt-rule-x { align-self: center; }
+
+/* Menus are anchored to a control that is now half the row wide, so they get an
+   explicit minimum and the right-hand one opens leftwards to stay in the panel. */
+.rt-grp-compact .rt-sel-menu { min-width: 200px; max-width: 300px; }
+.rt-rule-compact .rt-rule-value .rt-sel-menu { left: auto; right: 0; }
+
+/* Indents cost more than they explain at this width: the rail still shows the
+   nesting, at a third of the horizontal budget the full indent takes. */
+.rt-grp-compact.rt-grp-sub { margin-left: 6px; padding-left: 10px; }
+.rt-grp-compact > .rt-grp-body { padding: 12px; }
+.rt-grp-compact > .rt-grp-head { padding: 9px 12px; gap: 8px; flex-wrap: wrap; row-gap: 6px; }
+.rt-grp-compact > .rt-grp-head .rt-grp-toggle button { padding: 3px 10px; }
+.rt-grp-compact .rt-grp-add-row { flex-wrap: wrap; }
 
 /* ── Static segment manual additions ─────────────────────────────────── */
 .rt-stm-add {
