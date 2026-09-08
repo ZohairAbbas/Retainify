@@ -11,6 +11,7 @@
  */
 import prisma from "../../db.server.js";
 import { encryptSecret, decryptSecret } from "../crypto/secrets.server.js";
+import { syncTemplates } from "./templates.server.js";
 
 const GRAPH_VERSION = process.env.WHATSAPP_GRAPH_VERSION || "v21.0";
 
@@ -155,7 +156,8 @@ export async function resubscribeWebhooks(shop) {
 /**
  * Full provisioning: exchange code, resolve phone number, store encrypted token.
  * @param {{ shop: string, code: string, wabaId: string, businessId?: string }} input
- * @returns {Promise<{ ok: boolean, account?: object, error?: string, warning?: string }>}
+ * @returns {Promise<{ ok: boolean, account?: object, error?: string, warning?: string,
+ *   templatesSynced?: number, templateSyncError?: string }>}
  */
 export async function connectWhatsappAccount({ shop, code, wabaId, businessId = "" }) {
   if (!shop) return { ok: false, error: "missing shop" };
@@ -203,7 +205,20 @@ export async function connectWhatsappAccount({ shop, code, wabaId, businessId = 
     update: shared,
   });
 
-  return { ok: true, account, warning };
+  // Pull the WABA's existing templates straight away. A merchant who has just
+  // connected already has approved templates at Meta; leaving the list empty
+  // until they find the Sync button reads as "this account has no templates",
+  // and every downstream picker (flows, campaigns) is empty for the same reason.
+  // Non-fatal on purpose — the connection itself succeeded either way.
+  const syncRes = await syncTemplates(shop).catch((err) => ({ ok: false, error: err.message }));
+
+  return {
+    ok: true,
+    account,
+    warning,
+    templatesSynced: syncRes.ok ? syncRes.synced : undefined,
+    templateSyncError: syncRes.ok ? undefined : syncRes.error,
+  };
 }
 
 async function recordFailure(shop, error) {

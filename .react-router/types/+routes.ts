@@ -17,6 +17,13 @@ type Pages = {
   "/webhooks/customers/data_request": {
     params: {};
   };
+  "/media/:id/:token/:filename": {
+    params: {
+      "id": string;
+      "token": string;
+      "filename": string;
+    };
+  };
   "/webhooks/app/scopes_update": {
     params: {};
   };
@@ -38,14 +45,28 @@ type Pages = {
   "/track/unsubscribe": {
     params: {};
   };
+  "/webhooks/whatsapp": {
+    params: {};
+  };
   "/push-unsubscribe": {
+    params: {};
+  };
+  "/track/push-click": {
     params: {};
   };
   "/webhooks/orders": {
     params: {};
   };
+  "/webhooks/resend": {
+    params: {};
+  };
   "/push-subscribe": {
     params: {};
+  };
+  "/invite/:token": {
+    params: {
+      "token": string;
+    };
   };
   "/track/confirm": {
     params: {};
@@ -56,13 +77,26 @@ type Pages = {
   "/popup-signup": {
     params: {};
   };
-  "/track/click": {
+  "/reset/:token": {
+    params: {
+      "token": string;
+    };
+  };
+  "/webhooks/ses": {
     params: {};
   };
   "/auth/login": {
     params: {};
   };
+  "/w/:token": {
+    params: {
+      "token": string;
+    };
+  };
   "/push-sw": {
+    params: {};
+  };
+  "/welcome": {
     params: {};
   };
   "/auth/*": {
@@ -70,11 +104,77 @@ type Pages = {
       "*": string;
     };
   };
+  "/forgot": {
+    params: {};
+  };
+  "/logout": {
+    params: {};
+  };
+  "/signup": {
+    params: {};
+  };
+  "/login": {
+    params: {};
+  };
   "/app": {
     params: {};
   };
-  "/app/preview/email": {
+  "/app/flows/:id/analytics": {
+    params: {
+      "id": string;
+    };
+  };
+  "/app/flows/:id/analytics/export": {
+    params: {
+      "id": string;
+    };
+  };
+  "/app/segments/:id/export": {
+    params: {
+      "id": string;
+    };
+  };
+  "/app/segments/:id/edit": {
+    params: {
+      "id": string;
+    };
+  };
+  "/app/campaigns": {
     params: {};
+  };
+  "/app/segments/preview": {
+    params: {};
+  };
+  "/app/contacts": {
+    params: {};
+  };
+  "/app/contacts/export": {
+    params: {};
+  };
+  "/app/segments": {
+    params: {};
+  };
+  "/app/segments/search": {
+    params: {};
+  };
+  "/app/campaigns/:id": {
+    params: {
+      "id": string;
+    };
+  };
+  "/app/contacts/sync": {
+    params: {};
+  };
+  "/app/contacts/tags": {
+    params: {};
+  };
+  "/app/api/products": {
+    params: {};
+  };
+  "/app/contacts/:id": {
+    params: {
+      "id": string;
+    };
   };
   "/app/flows": {
     params: {};
@@ -84,7 +184,15 @@ type Pages = {
       "id": string;
     };
   };
-  "/app/additional": {
+  "/app/segments/:id": {
+    params: {
+      "id": string;
+    };
+  };
+  "/app/segments/new": {
+    params: {};
+  };
+  "/app/api/upload": {
     params: {};
   };
   "/app/onboarding": {
@@ -101,13 +209,28 @@ type Pages = {
   "/app/settings": {
     params: {};
   };
+  "/app/whatsapp": {
+    params: {};
+  };
+  "/app/content": {
+    params: {};
+  };
   "/app/journey": {
+    params: {};
+  };
+  "/app/plans": {
     params: {};
   };
   "/app/popup": {
     params: {};
   };
+  "/app/setup": {
+    params: {};
+  };
   "/app/push": {
+    params: {};
+  };
+  "/app/team": {
     params: {};
   };
 };
@@ -115,11 +238,15 @@ type Pages = {
 type RouteFiles = {
   "root.jsx": {
     id: "root";
-    page: "/" | "/webhooks/customers/data_request" | "/webhooks/app/scopes_update" | "/webhooks/customers/create" | "/webhooks/customers/redact" | "/webhooks/app/uninstalled" | "/webhooks/shop/redact" | "/webhooks/checkouts" | "/track/unsubscribe" | "/push-unsubscribe" | "/webhooks/orders" | "/push-subscribe" | "/track/confirm" | "/popup-config" | "/popup-signup" | "/track/click" | "/auth/login" | "/push-sw" | "/auth/*" | "/app" | "/app/preview/email" | "/app/flows" | "/app/playbook/:id" | "/app/additional" | "/app/onboarding" | "/app/flows/:id" | "/app/playbooks" | "/app/settings" | "/app/journey" | "/app/popup" | "/app/push";
+    page: "/" | "/webhooks/customers/data_request" | "/media/:id/:token/:filename" | "/webhooks/app/scopes_update" | "/webhooks/customers/create" | "/webhooks/customers/redact" | "/webhooks/app/uninstalled" | "/webhooks/shop/redact" | "/webhooks/checkouts" | "/track/unsubscribe" | "/webhooks/whatsapp" | "/push-unsubscribe" | "/track/push-click" | "/webhooks/orders" | "/webhooks/resend" | "/push-subscribe" | "/invite/:token" | "/track/confirm" | "/popup-config" | "/popup-signup" | "/reset/:token" | "/webhooks/ses" | "/auth/login" | "/w/:token" | "/push-sw" | "/welcome" | "/auth/*" | "/forgot" | "/logout" | "/signup" | "/login" | "/app" | "/app/flows/:id/analytics" | "/app/flows/:id/analytics/export" | "/app/segments/:id/export" | "/app/segments/:id/edit" | "/app/campaigns" | "/app/segments/preview" | "/app/contacts" | "/app/contacts/export" | "/app/segments" | "/app/segments/search" | "/app/campaigns/:id" | "/app/contacts/sync" | "/app/contacts/tags" | "/app/api/products" | "/app/contacts/:id" | "/app/flows" | "/app/playbook/:id" | "/app/segments/:id" | "/app/segments/new" | "/app/api/upload" | "/app/onboarding" | "/app/flows/:id" | "/app/playbooks" | "/app/settings" | "/app/whatsapp" | "/app/content" | "/app/journey" | "/app/plans" | "/app/popup" | "/app/setup" | "/app/push" | "/app/team";
   };
   "routes/webhooks.customers.data_request.jsx": {
     id: "routes/webhooks.customers.data_request";
     page: "/webhooks/customers/data_request";
+  };
+  "routes/media.$id.$token.$filename.jsx": {
+    id: "routes/media.$id.$token.$filename";
+    page: "/media/:id/:token/:filename";
   };
   "routes/webhooks.app.scopes_update.jsx": {
     id: "routes/webhooks.app.scopes_update";
@@ -149,17 +276,33 @@ type RouteFiles = {
     id: "routes/track.unsubscribe";
     page: "/track/unsubscribe";
   };
+  "routes/webhooks.whatsapp.jsx": {
+    id: "routes/webhooks.whatsapp";
+    page: "/webhooks/whatsapp";
+  };
   "routes/push-unsubscribe.jsx": {
     id: "routes/push-unsubscribe";
     page: "/push-unsubscribe";
+  };
+  "routes/track.push-click.jsx": {
+    id: "routes/track.push-click";
+    page: "/track/push-click";
   };
   "routes/webhooks.orders.jsx": {
     id: "routes/webhooks.orders";
     page: "/webhooks/orders";
   };
+  "routes/webhooks.resend.jsx": {
+    id: "routes/webhooks.resend";
+    page: "/webhooks/resend";
+  };
   "routes/push-subscribe.jsx": {
     id: "routes/push-subscribe";
     page: "/push-subscribe";
+  };
+  "routes/invite.$token.jsx": {
+    id: "routes/invite.$token";
+    page: "/invite/:token";
   };
   "routes/track.confirm.jsx": {
     id: "routes/track.confirm";
@@ -173,33 +316,117 @@ type RouteFiles = {
     id: "routes/popup-signup";
     page: "/popup-signup";
   };
-  "routes/track.click.jsx": {
-    id: "routes/track.click";
-    page: "/track/click";
+  "routes/reset.$token.jsx": {
+    id: "routes/reset.$token";
+    page: "/reset/:token";
+  };
+  "routes/webhooks.ses.jsx": {
+    id: "routes/webhooks.ses";
+    page: "/webhooks/ses";
   };
   "routes/auth.login/route.jsx": {
     id: "routes/auth.login";
     page: "/auth/login";
   };
+  "routes/w.$token.jsx": {
+    id: "routes/w.$token";
+    page: "/w/:token";
+  };
   "routes/push-sw.jsx": {
     id: "routes/push-sw";
     page: "/push-sw";
   };
-  "routes/auth.$.jsx": {
-    id: "routes/auth.$";
-    page: "/auth/*";
+  "routes/welcome.jsx": {
+    id: "routes/welcome";
+    page: "/welcome";
   };
   "routes/_index/route.jsx": {
     id: "routes/_index";
     page: "/";
   };
+  "routes/auth.$.jsx": {
+    id: "routes/auth.$";
+    page: "/auth/*";
+  };
+  "routes/forgot.jsx": {
+    id: "routes/forgot";
+    page: "/forgot";
+  };
+  "routes/logout.jsx": {
+    id: "routes/logout";
+    page: "/logout";
+  };
+  "routes/signup.jsx": {
+    id: "routes/signup";
+    page: "/signup";
+  };
+  "routes/login.jsx": {
+    id: "routes/login";
+    page: "/login";
+  };
   "routes/app.jsx": {
     id: "routes/app";
-    page: "/app" | "/app/preview/email" | "/app/flows" | "/app/playbook/:id" | "/app/additional" | "/app/onboarding" | "/app/flows/:id" | "/app/playbooks" | "/app/settings" | "/app/journey" | "/app/popup" | "/app/push";
+    page: "/app" | "/app/flows/:id/analytics" | "/app/flows/:id/analytics/export" | "/app/segments/:id/export" | "/app/segments/:id/edit" | "/app/campaigns" | "/app/segments/preview" | "/app/contacts" | "/app/contacts/export" | "/app/segments" | "/app/segments/search" | "/app/campaigns/:id" | "/app/contacts/sync" | "/app/contacts/tags" | "/app/api/products" | "/app/contacts/:id" | "/app/flows" | "/app/playbook/:id" | "/app/segments/:id" | "/app/segments/new" | "/app/api/upload" | "/app/onboarding" | "/app/flows/:id" | "/app/playbooks" | "/app/settings" | "/app/whatsapp" | "/app/content" | "/app/journey" | "/app/plans" | "/app/popup" | "/app/setup" | "/app/push" | "/app/team";
   };
-  "routes/app.preview.email.jsx": {
-    id: "routes/app.preview.email";
-    page: "/app/preview/email";
+  "routes/app.flows.$id_.analytics.jsx": {
+    id: "routes/app.flows.$id_.analytics";
+    page: "/app/flows/:id/analytics" | "/app/flows/:id/analytics/export";
+  };
+  "routes/app.flows.$id_.analytics.export.jsx": {
+    id: "routes/app.flows.$id_.analytics.export";
+    page: "/app/flows/:id/analytics/export";
+  };
+  "routes/app.segments.$id_.export.jsx": {
+    id: "routes/app.segments.$id_.export";
+    page: "/app/segments/:id/export";
+  };
+  "routes/app.segments.$id_.edit.jsx": {
+    id: "routes/app.segments.$id_.edit";
+    page: "/app/segments/:id/edit";
+  };
+  "routes/app.campaigns._index.jsx": {
+    id: "routes/app.campaigns._index";
+    page: "/app/campaigns";
+  };
+  "routes/app.segments.preview.jsx": {
+    id: "routes/app.segments.preview";
+    page: "/app/segments/preview";
+  };
+  "routes/app.contacts._index.jsx": {
+    id: "routes/app.contacts._index";
+    page: "/app/contacts";
+  };
+  "routes/app.contacts.export.jsx": {
+    id: "routes/app.contacts.export";
+    page: "/app/contacts/export";
+  };
+  "routes/app.segments._index.jsx": {
+    id: "routes/app.segments._index";
+    page: "/app/segments";
+  };
+  "routes/app.segments.search.jsx": {
+    id: "routes/app.segments.search";
+    page: "/app/segments/search";
+  };
+  "routes/app.campaigns.$id.jsx": {
+    id: "routes/app.campaigns.$id";
+    page: "/app/campaigns/:id";
+  };
+  "routes/app.contacts.sync.jsx": {
+    id: "routes/app.contacts.sync";
+    page: "/app/contacts/sync";
+  };
+  "routes/app.contacts.tags.jsx": {
+    id: "routes/app.contacts.tags";
+    page: "/app/contacts/tags";
+  };
+  "routes/app.api.products.jsx": {
+    id: "routes/app.api.products";
+    page: "/app/api/products";
+  };
+  "routes/app.contacts.$id.jsx": {
+    id: "routes/app.contacts.$id";
+    page: "/app/contacts/:id";
   };
   "routes/app.flows._index.jsx": {
     id: "routes/app.flows._index";
@@ -209,9 +436,17 @@ type RouteFiles = {
     id: "routes/app.playbook.$id";
     page: "/app/playbook/:id";
   };
-  "routes/app.additional.jsx": {
-    id: "routes/app.additional";
-    page: "/app/additional";
+  "routes/app.segments.$id.jsx": {
+    id: "routes/app.segments.$id";
+    page: "/app/segments/:id";
+  };
+  "routes/app.segments.new.jsx": {
+    id: "routes/app.segments.new";
+    page: "/app/segments/new";
+  };
+  "routes/app.api.upload.jsx": {
+    id: "routes/app.api.upload";
+    page: "/app/api/upload";
   };
   "routes/app.onboarding.jsx": {
     id: "routes/app.onboarding";
@@ -229,6 +464,14 @@ type RouteFiles = {
     id: "routes/app.settings";
     page: "/app/settings";
   };
+  "routes/app.whatsapp.jsx": {
+    id: "routes/app.whatsapp";
+    page: "/app/whatsapp";
+  };
+  "routes/app.content.jsx": {
+    id: "routes/app.content";
+    page: "/app/content";
+  };
   "routes/app.journey.jsx": {
     id: "routes/app.journey";
     page: "/app/journey";
@@ -237,19 +480,32 @@ type RouteFiles = {
     id: "routes/app._index";
     page: "/app";
   };
+  "routes/app.plans.jsx": {
+    id: "routes/app.plans";
+    page: "/app/plans";
+  };
   "routes/app.popup.jsx": {
     id: "routes/app.popup";
     page: "/app/popup";
   };
+  "routes/app.setup.jsx": {
+    id: "routes/app.setup";
+    page: "/app/setup";
+  };
   "routes/app.push.jsx": {
     id: "routes/app.push";
     page: "/app/push";
+  };
+  "routes/app.team.jsx": {
+    id: "routes/app.team";
+    page: "/app/team";
   };
 };
 
 type RouteModules = {
   "root": typeof import("./app/root.jsx");
   "routes/webhooks.customers.data_request": typeof import("./app/routes/webhooks.customers.data_request.jsx");
+  "routes/media.$id.$token.$filename": typeof import("./app/routes/media.$id.$token.$filename.jsx");
   "routes/webhooks.app.scopes_update": typeof import("./app/routes/webhooks.app.scopes_update.jsx");
   "routes/webhooks.customers.create": typeof import("./app/routes/webhooks.customers.create.jsx");
   "routes/webhooks.customers.redact": typeof import("./app/routes/webhooks.customers.redact.jsx");
@@ -257,28 +513,60 @@ type RouteModules = {
   "routes/webhooks.shop.redact": typeof import("./app/routes/webhooks.shop.redact.jsx");
   "routes/webhooks.checkouts": typeof import("./app/routes/webhooks.checkouts.jsx");
   "routes/track.unsubscribe": typeof import("./app/routes/track.unsubscribe.jsx");
+  "routes/webhooks.whatsapp": typeof import("./app/routes/webhooks.whatsapp.jsx");
   "routes/push-unsubscribe": typeof import("./app/routes/push-unsubscribe.jsx");
+  "routes/track.push-click": typeof import("./app/routes/track.push-click.jsx");
   "routes/webhooks.orders": typeof import("./app/routes/webhooks.orders.jsx");
+  "routes/webhooks.resend": typeof import("./app/routes/webhooks.resend.jsx");
   "routes/push-subscribe": typeof import("./app/routes/push-subscribe.jsx");
+  "routes/invite.$token": typeof import("./app/routes/invite.$token.jsx");
   "routes/track.confirm": typeof import("./app/routes/track.confirm.jsx");
   "routes/popup-config": typeof import("./app/routes/popup-config.jsx");
   "routes/popup-signup": typeof import("./app/routes/popup-signup.jsx");
-  "routes/track.click": typeof import("./app/routes/track.click.jsx");
+  "routes/reset.$token": typeof import("./app/routes/reset.$token.jsx");
+  "routes/webhooks.ses": typeof import("./app/routes/webhooks.ses.jsx");
   "routes/auth.login": typeof import("./app/routes/auth.login/route.jsx");
+  "routes/w.$token": typeof import("./app/routes/w.$token.jsx");
   "routes/push-sw": typeof import("./app/routes/push-sw.jsx");
-  "routes/auth.$": typeof import("./app/routes/auth.$.jsx");
+  "routes/welcome": typeof import("./app/routes/welcome.jsx");
   "routes/_index": typeof import("./app/routes/_index/route.jsx");
+  "routes/auth.$": typeof import("./app/routes/auth.$.jsx");
+  "routes/forgot": typeof import("./app/routes/forgot.jsx");
+  "routes/logout": typeof import("./app/routes/logout.jsx");
+  "routes/signup": typeof import("./app/routes/signup.jsx");
+  "routes/login": typeof import("./app/routes/login.jsx");
   "routes/app": typeof import("./app/routes/app.jsx");
-  "routes/app.preview.email": typeof import("./app/routes/app.preview.email.jsx");
+  "routes/app.flows.$id_.analytics": typeof import("./app/routes/app.flows.$id_.analytics.jsx");
+  "routes/app.flows.$id_.analytics.export": typeof import("./app/routes/app.flows.$id_.analytics.export.jsx");
+  "routes/app.segments.$id_.export": typeof import("./app/routes/app.segments.$id_.export.jsx");
+  "routes/app.segments.$id_.edit": typeof import("./app/routes/app.segments.$id_.edit.jsx");
+  "routes/app.campaigns._index": typeof import("./app/routes/app.campaigns._index.jsx");
+  "routes/app.segments.preview": typeof import("./app/routes/app.segments.preview.jsx");
+  "routes/app.contacts._index": typeof import("./app/routes/app.contacts._index.jsx");
+  "routes/app.contacts.export": typeof import("./app/routes/app.contacts.export.jsx");
+  "routes/app.segments._index": typeof import("./app/routes/app.segments._index.jsx");
+  "routes/app.segments.search": typeof import("./app/routes/app.segments.search.jsx");
+  "routes/app.campaigns.$id": typeof import("./app/routes/app.campaigns.$id.jsx");
+  "routes/app.contacts.sync": typeof import("./app/routes/app.contacts.sync.jsx");
+  "routes/app.contacts.tags": typeof import("./app/routes/app.contacts.tags.jsx");
+  "routes/app.api.products": typeof import("./app/routes/app.api.products.jsx");
+  "routes/app.contacts.$id": typeof import("./app/routes/app.contacts.$id.jsx");
   "routes/app.flows._index": typeof import("./app/routes/app.flows._index.jsx");
   "routes/app.playbook.$id": typeof import("./app/routes/app.playbook.$id.jsx");
-  "routes/app.additional": typeof import("./app/routes/app.additional.jsx");
+  "routes/app.segments.$id": typeof import("./app/routes/app.segments.$id.jsx");
+  "routes/app.segments.new": typeof import("./app/routes/app.segments.new.jsx");
+  "routes/app.api.upload": typeof import("./app/routes/app.api.upload.jsx");
   "routes/app.onboarding": typeof import("./app/routes/app.onboarding.jsx");
   "routes/app.flows.$id": typeof import("./app/routes/app.flows.$id.jsx");
   "routes/app.playbooks": typeof import("./app/routes/app.playbooks.jsx");
   "routes/app.settings": typeof import("./app/routes/app.settings.jsx");
+  "routes/app.whatsapp": typeof import("./app/routes/app.whatsapp.jsx");
+  "routes/app.content": typeof import("./app/routes/app.content.jsx");
   "routes/app.journey": typeof import("./app/routes/app.journey.jsx");
   "routes/app._index": typeof import("./app/routes/app._index.jsx");
+  "routes/app.plans": typeof import("./app/routes/app.plans.jsx");
   "routes/app.popup": typeof import("./app/routes/app.popup.jsx");
+  "routes/app.setup": typeof import("./app/routes/app.setup.jsx");
   "routes/app.push": typeof import("./app/routes/app.push.jsx");
+  "routes/app.team": typeof import("./app/routes/app.team.jsx");
 };

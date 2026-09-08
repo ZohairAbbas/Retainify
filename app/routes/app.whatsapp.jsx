@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
@@ -10,6 +10,7 @@ import { toE164 } from "../lib/contacts/contacts.server.js";
 import { recordOptOut } from "../lib/whatsapp/optin.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
+import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
@@ -30,6 +31,15 @@ function hasUrlButton(components) {
       Array.isArray(c.buttons) &&
       c.buttons.some((b) => b?.type === "URL"),
   );
+}
+
+/** How long a synced template list stays trustworthy before we refresh it. */
+const TEMPLATE_TTL_MS = 15 * 60 * 1000;
+
+/** Never synced, or synced longer ago than the TTL. */
+function isStale(syncedAt) {
+  if (!syncedAt) return true;
+  return Date.now() - new Date(syncedAt).getTime() > TEMPLATE_TTL_MS;
 }
 
 export const loader = async ({ request }) => {
@@ -65,6 +75,7 @@ export const loader = async ({ request }) => {
         // straight to the merchant and its taps never reach us.
         buttonUrls: true,
         components: true,
+        bodyText: true,
       },
     }),
     prisma.popupSettings.findUnique({ where: { shop }, select: { config: true } }),
@@ -73,6 +84,7 @@ export const loader = async ({ request }) => {
   // WhatsApp is a Growth-tier feature (Meta bills per conversation). In shadow
   // mode `locked` is false, so the page stays fully usable until enforcement is on.
   const gate = await featureState(shop, "whatsapp");
+  const isConnected = account?.status === "connected";
 
   return {
     gate,
@@ -103,10 +115,20 @@ export const loader = async ({ request }) => {
     // see: it was authored in Meta Business Manager, so its URL goes straight to
     // the merchant instead of through our redirect. Templates without any link
     // button are not flagged — there is nothing to track either way.
+    //
+    // `components` and `buttonUrls` ride along for the preview: the body alone
+    // hides the header, footer and buttons, which is most of what a merchant
+    // wants to check before putting a template in a flow.
     templates: templates.map(({ buttonUrls, components, ...t }) => ({
       ...t,
+      components: components ?? null,
+      buttonUrls: buttonUrls ?? null,
       untracked: hasUrlButton(components) && !(buttonUrls && Object.keys(buttonUrls).length),
     })),
+    // Drives the one-shot refresh on load. Templates change at Meta (approval,
+    // rejection, edits made in Business Manager) with no webhook for shops whose
+    // subscription is off, so a list last pulled an hour ago can be wrong.
+    templatesStale: isConnected && isStale(account?.templatesSyncedAt),
     // eslint-disable-next-line no-undef
     metaAppId: process.env.META_APP_ID || "",
     // eslint-disable-next-line no-undef
@@ -179,7 +201,16 @@ export const action = async ({ request }) => {
     }
     const res = await connectWhatsappAccount({ shop, code, wabaId, businessId });
     if (!res.ok) return { ok: false, error: res.error || "Failed to connect." };
-    return { ok: true, connected: true, warning: res.warning };
+    return {
+      ok: true,
+      connected: true,
+      warning: res.warning,
+      // Connecting pulls templates automatically; say what came back so an
+      // empty list after connecting reads as "this WABA has none" rather than
+      // "the sync never ran".
+      templatesSynced: res.templatesSynced,
+      templateSyncError: res.templateSyncError,
+    };
   }
 
   // Remove one subscriber by hand. Same path as a STOP message, so consent is
@@ -303,7 +334,7 @@ export const action = async ({ request }) => {
 };
 
 function WhatsappPageInner() {
-  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, metaAppId, esConfigId } = useLoaderData();
+  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, metaAppId, esConfigId } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -323,6 +354,19 @@ function WhatsappPageInner() {
   const webhooksLive = !!account?.webhooksSubscribed || subscribeFetcher.data?.ok === true;
   const approvedTemplates = templates.filter((t) => t.status === "APPROVED");
   const [pin, setPin] = useState("");
+  const [openPreview, setOpenPreview] = useState(null); // template id
+
+  // Refresh the list from Meta when it is stale, once per mount. Approval,
+  // rejection and edits all happen at Meta, and a shop whose webhook
+  // subscription is off hears about none of them — so the button alone meant
+  // the list could sit wrong indefinitely. The fetcher shows the same
+  // "Syncing…" state as a manual press, so this is visible rather than magic.
+  const autoSynced = useRef(false);
+  useEffect(() => {
+    if (!templatesStale || autoSynced.current) return;
+    autoSynced.current = true;
+    syncFetcher.submit({ intent: "sync-templates" }, { method: "post" });
+  }, [templatesStale, syncFetcher]);
 
   const [testPhone, setTestPhone] = useState("");
   const [testTemplate, setTestTemplate] = useState("");
@@ -527,6 +571,107 @@ function WhatsappPageInner() {
             )}
           </section>
 
+          {/* Test — deliberately the first thing after Connection. Proving the
+              number can actually deliver a message is what a merchant wants to
+              do the moment they connect, not after configuring consent,
+              templates and a popup. It does not need the channel toggle on:
+              a test send goes through the Cloud API directly. */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 16 }}>Send a test</div>
+            {!canSend && (
+              <div className="t-small muted" style={{ marginBottom: 16 }}>
+                {!isConnected
+                  ? "Connect a WhatsApp account above to send a test."
+                  : "Register your number above to send a test."}
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              {/* Mode switch */}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button
+                  type="button"
+                  className={`btn${testMode === "template" ? " btn-primary" : ""}`}
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => setTestMode("template")}
+                >
+                  Approved template
+                </button>
+                <button
+                  type="button"
+                  className={`btn${testMode === "text" ? " btn-primary" : ""}`}
+                  style={{ flex: 1, justifyContent: "center" }}
+                  onClick={() => setTestMode("text")}
+                >
+                  Free text
+                </button>
+              </div>
+
+              {testMode === "template" ? (
+                <div>
+                  <label className="field-label">Template</label>
+                  <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value)}>
+                    <option value="">Select an approved template…</option>
+                    {approvedTemplates.map((t) => (
+                      <option key={t.id} value={t.name}>{t.name} ({t.language})</option>
+                    ))}
+                  </select>
+                  {approvedTemplates.length === 0 && (
+                    <div className="field-help">
+                      No approved templates yet. They appear here once Meta approves them —
+                      or switch to Free text to test delivery now.
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div>
+                  <label className="field-label">Message</label>
+                  <textarea
+                    className="input"
+                    rows={3}
+                    value={testText}
+                    onChange={(e) => setTestText(e.target.value)}
+                    placeholder="Type a test message…"
+                  />
+                  <div className="field-help">
+                    Free text only works if this number has messaged your WhatsApp number in the last 24 hours.
+                    Text your business number first, then send the test.
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="field-label">Test phone (E.164)</label>
+                <input className="input" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+1 555 123 4567" />
+              </div>
+              {testFetcher.data?.ok && (
+                <div className="t-small" style={{ background: "var(--success-bg)", color: "var(--success-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
+                  Test sent.
+                </div>
+              )}
+              {testFetcher.data?.ok === false && (
+                <div className="t-small" style={{ background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
+                  {testFetcher.data.error}
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={sendTest}
+                  disabled={
+                    testFetcher.state !== "idle" ||
+                    !canSend ||
+                    !testPhone ||
+                    (testMode === "template" && approvedTemplates.length === 0) ||
+                    (testMode === "text" && !testText.trim())
+                  }
+                >
+                  {Icons.Send && <Icons.Send size={14} />}
+                  {testFetcher.state !== "idle" ? "Sending…" : "Send test"}
+                </button>
+              </div>
+            </div>
+          </section>
+
           {/* Channel status */}
           <section className="rt-form-section">
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -608,28 +753,71 @@ function WhatsappPageInner() {
             {syncFetcher.data?.ok === false && (
               <div className="t-small" style={{ marginBottom: 12, color: "var(--danger-ink)" }}>{syncFetcher.data.error}</div>
             )}
+            {/* Connecting syncs automatically; if that call failed the list can
+                look empty for a reason that has nothing to do with the WABA. */}
+            {connectFetcher.data?.templateSyncError && (
+              <div className="t-small" style={{ marginBottom: 12, color: "var(--danger-ink)" }}>
+                Couldn&rsquo;t pull templates on connect: {connectFetcher.data.templateSyncError}
+              </div>
+            )}
             {templates.length === 0 ? (
-              <div className="t-small muted">No templates yet. Sync after connecting to pull your approved templates from Meta.</div>
+              <div className="t-small muted">
+                {syncFetcher.state !== "idle"
+                  ? "Syncing templates from Meta…"
+                  : isConnected
+                    ? "No templates on this WhatsApp Business account yet. Create one below, or make one in Meta Business Manager and sync."
+                    : "Connect an account above — your Meta-approved templates sync automatically."}
+              </div>
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                {templates.map((t) => (
-                  <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
-                    <div className="t-small" style={{ minWidth: 0 }}>
-                      <strong style={{ color: "var(--ink-1)" }}>{t.name}</strong>
-                      <span className="muted"> · {t.language} · {t.category}</span>
-                      {t.untracked && (
-                        <div className="t-micro muted" style={{ marginTop: 2 }}>
-                          Link clicks and revenue aren&rsquo;t measured — this template was
-                          made in Meta Business Manager. Recreate it here to track it.
+                {templates.map((t) => {
+                  const open = openPreview === t.id;
+                  return (
+                    <div key={t.id} style={{ borderTop: "1px solid var(--line)", paddingTop: 8 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+                        <div className="t-small" style={{ minWidth: 0 }}>
+                          <strong style={{ color: "var(--ink-1)" }}>{t.name}</strong>
+                          <span className="muted"> · {t.language} · {t.category}</span>
+                          {t.untracked && (
+                            <div className="t-micro muted" style={{ marginTop: 2 }}>
+                              Link clicks and revenue aren&rsquo;t measured — this template was
+                              made in Meta Business Manager. Recreate it here to track it.
+                            </div>
+                          )}
+                        </div>
+                        <span className="t-micro" style={{
+                          flexShrink: 0,
+                          color: t.status === "APPROVED" ? "var(--node-whatsapp-ink)" : "var(--ink-3)",
+                        }}>{t.status}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn"
+                        style={{ padding: "2px 10px", marginTop: 6 }}
+                        aria-expanded={open}
+                        onClick={() => setOpenPreview(open ? null : t.id)}
+                      >
+                        {open ? "Hide preview" : "Preview"}
+                      </button>
+                      {open && (
+                        <div style={{ marginTop: 10, marginBottom: 4 }}>
+                          <TemplatePreview
+                            components={t.components}
+                            bodyText={t.bodyText}
+                            buttonUrls={t.buttonUrls}
+                          />
+                          {/* Variables stay as {{1}} here on purpose: this page
+                              has no contact to merge, and the values are chosen
+                              per flow or campaign, not per template. */}
+                          <div className="t-micro muted" style={{ marginTop: 8 }}>
+                            Variables show as {"{{1}}"}, {"{{2}}"}… — real values are set on the
+                            flow step or campaign that sends this template.
+                          </div>
                         </div>
                       )}
                     </div>
-                    <span className="t-micro" style={{
-                      flexShrink: 0,
-                      color: t.status === "APPROVED" ? "var(--node-whatsapp-ink)" : "var(--ink-3)",
-                    }}>{t.status}</span>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </section>
@@ -893,89 +1081,6 @@ function WhatsappPageInner() {
             </label>
           </section>
 
-          {/* Test */}
-          <section className="rt-form-section">
-            <div className="t-micro muted" style={{ marginBottom: 16 }}>Send a test</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {/* Mode switch */}
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  type="button"
-                  className={`btn${testMode === "template" ? " btn-primary" : ""}`}
-                  style={{ flex: 1, justifyContent: "center" }}
-                  onClick={() => setTestMode("template")}
-                >
-                  Approved template
-                </button>
-                <button
-                  type="button"
-                  className={`btn${testMode === "text" ? " btn-primary" : ""}`}
-                  style={{ flex: 1, justifyContent: "center" }}
-                  onClick={() => setTestMode("text")}
-                >
-                  Free text
-                </button>
-              </div>
-
-              {testMode === "template" ? (
-                <div>
-                  <label className="field-label">Template</label>
-                  <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value)}>
-                    <option value="">Select an approved template…</option>
-                    {approvedTemplates.map((t) => (
-                      <option key={t.id} value={t.name}>{t.name} ({t.language})</option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div>
-                  <label className="field-label">Message</label>
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={testText}
-                    onChange={(e) => setTestText(e.target.value)}
-                    placeholder="Type a test message…"
-                  />
-                  <div className="field-help">
-                    Free text only works if this number has messaged your WhatsApp number in the last 24 hours.
-                    Text your business number first, then send the test.
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label className="field-label">Test phone (E.164)</label>
-                <input className="input" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+1 555 123 4567" />
-              </div>
-              {testFetcher.data?.ok && (
-                <div className="t-small" style={{ background: "var(--success-bg)", color: "var(--success-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
-                  Test sent.
-                </div>
-              )}
-              {testFetcher.data?.ok === false && (
-                <div className="t-small" style={{ background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
-                  {testFetcher.data.error}
-                </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  className="btn btn-primary"
-                  onClick={sendTest}
-                  disabled={
-                    testFetcher.state !== "idle" ||
-                    !canSend ||
-                    !testPhone ||
-                    (testMode === "template" && approvedTemplates.length === 0) ||
-                    (testMode === "text" && !testText.trim())
-                  }
-                >
-                  {Icons.Send && <Icons.Send size={14} />}
-                  {testFetcher.state !== "idle" ? "Sending…" : "Send test"}
-                </button>
-              </div>
-            </div>
-          </section>
         </div>
 
         {/* Right: how it works */}
@@ -983,8 +1088,8 @@ function WhatsappPageInner() {
           <section className="rt-form-section">
             <div className="t-micro muted" style={{ marginBottom: 16 }}>How it works</div>
             <ol style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 10 }} className="t-small">
-              <li className="muted">Connect your WhatsApp Business account with the button.</li>
-              <li className="muted">Sync your Meta-approved message templates.</li>
+              <li className="muted">Connect your WhatsApp Business account with the button. Your Meta-approved templates sync automatically.</li>
+              <li className="muted">Send yourself a test to confirm the number delivers.</li>
               <li className="muted">Add a <strong style={{ color: "var(--ink-1)" }}>WhatsApp</strong> step to any flow and pick a template.</li>
               <li className="muted">Enable the channel — sends go to opted-in contacts only.</li>
             </ol>

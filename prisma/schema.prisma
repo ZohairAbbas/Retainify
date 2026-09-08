@@ -1044,6 +1044,10 @@ model WhatsappAccount {
   webhooksSubscribedAt DateTime?
   // When the granted token lapses; null for a non-expiring business token.
   tokenExpiresAt       DateTime?
+  // Last successful template pull from Meta. Distinct from any template's own
+  // lastSyncedAt: a WABA with no templates at all still needs to record that we
+  // looked, or every page load would re-sync a shop that simply has none.
+  templatesSyncedAt    DateTime?
   lastError            String    @default("")
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt

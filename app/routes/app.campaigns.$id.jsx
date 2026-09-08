@@ -13,6 +13,7 @@ import prisma from "../db.server.js";
 import Icons from "../components/ui/Icons.jsx";
 import { ConfirmDialog, Toast } from "../components/ui/Dialog.jsx";
 import EmailEditor from "../components/EmailEditor.jsx";
+import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
 import {
   previewAudienceCount,
@@ -76,7 +77,10 @@ export const loader = async ({ request, params }) => {
         ? prisma.whatsappTemplate.findMany({
             where: { shop, status: "APPROVED" },
             orderBy: { name: "asc" },
-            select: { id: true, name: true, language: true, bodyText: true, components: true },
+            select: {
+              id: true, name: true, language: true, bodyText: true,
+              components: true, buttonUrls: true,
+            },
           })
         : [],
       channel === "whatsapp"
@@ -109,9 +113,11 @@ export const loader = async ({ request, params }) => {
           !!waAccount.registeredAt &&
           settings?.whatsappEnabled === true,
     whatsappBlocker: whatsappBlocker(channel, waAccount, settings),
-    waTemplates: waTemplates.map(({ components, ...t }) => ({
+    // `components` stays on the row for the preview: header, footer and buttons
+    // are as much of the message as the body is.
+    waTemplates: waTemplates.map((t) => ({
       ...t,
-      imageHeader: hasImageHeader(components),
+      imageHeader: hasImageHeader(t.components),
     })),
     unreachableSubscribers: unreachable,
     step: step && {
@@ -656,13 +662,16 @@ export default function CampaignEditor() {
 
                   {selectedTemplate && (
                     <>
-                      <div
-                        className="t-small"
-                        style={{ marginTop: 14, padding: "12px 14px", borderRadius: "var(--r-2)", background: "var(--node-whatsapp-bg)", color: "var(--ink-1)", whiteSpace: "pre-wrap", lineHeight: 1.5 }}
-                      >
-                        {(selectedTemplate.bodyText || "").replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) =>
-                          waVariables[n] ? `[${waVariables[n]}]` : m,
-                        )}
+                      <div style={{ marginTop: 14 }}>
+                        <TemplatePreview
+                          components={selectedTemplate.components}
+                          bodyText={selectedTemplate.bodyText}
+                          buttonUrls={selectedTemplate.buttonUrls}
+                          mediaUrl={waMediaUrl}
+                          renderVar={(n) =>
+                            waVariables[String(n)] ? `[${waVariables[String(n)]}]` : `{{${n}}}`
+                          }
+                        />
                       </div>
 
                       {templateVars.length > 0 && (

@@ -280,5 +280,12 @@ export async function syncTemplates(shop) {
     synced += 1;
   }
 
+  // Marks that we looked, not that we found anything. A WABA with no templates
+  // yet writes no row above, and without this the auto-sync would fire again on
+  // every single page load for exactly the shops that have nothing to sync.
+  await prisma.whatsappAccount
+    .update({ where: { shop }, data: { templatesSyncedAt: now } })
+    .catch(() => {});
+
   return { ok: true, synced };
 }

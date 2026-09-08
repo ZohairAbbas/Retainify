@@ -19,6 +19,7 @@ import { GroupBlock } from "../components/segments/FilterTree.jsx";
 import { emptyGroup } from "../components/segments/constants.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
 import TagChip from "../components/contacts/TagChip.jsx";
+import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
 import {
   TRIGGER_ID,
   NEXT,
@@ -90,7 +91,9 @@ export const loader = async ({ request, params }) => {
     prisma.whatsappTemplate.findMany({
       where: { shop, status: "APPROVED" },
       orderBy: { name: "asc" },
-      select: { id: true, name: true, language: true, bodyText: true },
+      // `components` carries the header, footer and buttons the preview needs —
+      // the body alone is a fraction of what the recipient actually sees.
+      select: { id: true, name: true, language: true, bodyText: true, components: true, buttonUrls: true },
     }),
   ]);
 
@@ -2529,10 +2532,16 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
         <div className="field-help">Only if the template has a media header.</div>
       </div>
 
-      {selectedTpl?.bodyText && (
+      {selectedTpl && (selectedTpl.bodyText || selectedTpl.components) && (
         <div className="rt-ins-section">
           <div className="t-micro muted" style={{ marginBottom: 12 }}>Preview</div>
-          <WhatsappPreview bodyText={selectedTpl.bodyText} vars={vars} mediaUrl={node.waMediaUrl} />
+          <TemplatePreview
+            components={selectedTpl.components}
+            bodyText={selectedTpl.bodyText}
+            buttonUrls={selectedTpl.buttonUrls}
+            mediaUrl={node.waMediaUrl}
+            renderVar={(n) => waVarLabel(vars, n)}
+          />
         </div>
       )}
 
@@ -2556,51 +2565,17 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
   );
 }
 
-// A lightweight WhatsApp chat-bubble preview. Substitutes {{n}} in the template
-// body with a readable label for the mapped variable so merchants see the shape
-// of the message as they configure it.
-function WhatsappPreview({ bodyText, vars = {}, mediaUrl }) {
-  // Bracketed placeholders rather than invented sample values, matching the
-  // email test send. A name like "Alex" in a preview reads as real data and
-  // leaves the merchant wondering where it came from.
-  const labelFor = (num) => {
-    const ref = vars[String(num)];
-    if (ref === "contactName") return "[Contact name]";
-    if (ref === "recoveryUrl") return "[Cart link]";
-    if (ref && String(ref).trim()) return String(ref);
-    return `{{${num}}}`;
-  };
-  const rendered = String(bodyText).replace(/\{\{\s*(\d+)\s*\}\}/g, (_, n) => labelFor(Number(n)));
-
-  return (
-    <div style={{ background: "#E5DDD5", borderRadius: "var(--r-3)", padding: 16 }}>
-      <div
-        style={{
-          background: "#FFFFFF",
-          borderRadius: 8,
-          padding: mediaUrl ? 0 : "8px 10px",
-          maxWidth: 260,
-          boxShadow: "0 1px 1px rgba(0,0,0,.12)",
-          overflow: "hidden",
-          fontFamily: "var(--font-ui)",
-        }}
-      >
-        {mediaUrl && (
-          // eslint-disable-next-line jsx-a11y/img-redundant-alt
-          <img
-            src={mediaUrl}
-            alt="header"
-            style={{ width: "100%", maxHeight: 140, objectFit: "cover", display: "block" }}
-            onError={(e) => { e.currentTarget.style.display = "none"; }}
-          />
-        )}
-        <div style={{ padding: mediaUrl ? "8px 10px" : 0 }}>
-          <div style={{ fontSize: 13, color: "#111", lineHeight: 1.4, whiteSpace: "pre-wrap" }}>{rendered}</div>
-          <div style={{ fontSize: 10, color: "#9aa0a6", textAlign: "right", marginTop: 4 }}>now</div>
-        </div>
-      </div>
-    </div>
-  );
+// How a mapped variable reads inside the preview bubble.
+//
+// Bracketed placeholders rather than invented sample values, matching the email
+// test send. A name like "Alex" in a preview reads as real data and leaves the
+// merchant wondering where it came from.
+function waVarLabel(vars, num) {
+  const ref = vars?.[String(num)];
+  if (ref === "contactName") return "[Contact name]";
+  if (ref === "recoveryUrl") return "[Cart link]";
+  if (ref && String(ref).trim()) return String(ref);
+  return `{{${num}}}`;
 }
 
 function RadioOption({ checked, onClick, label, sub }) {
