@@ -50,6 +50,26 @@ export default async function handleRequest(
           const stream = createReadableStreamFromReadable(body);
 
           responseHeaders.set("Content-Type", "text/html");
+
+          // Tell any cache or proxy in the path to deliver this byte-for-byte.
+          // A rewriter that injects into a streamed response has to parse across
+          // chunk boundaries it does not control; when one lands mid-token it
+          // strands a character (the leading "$" of React's $RC/$RS/$RX boundary
+          // scripts) as a text node under <body>. The same mis-parse a few bytes
+          // earlier truncates the hydration payload instead.
+          //
+          // Appended rather than assigned, and only once, so a Cache-Control set
+          // by addDocumentResponseHeaders or a route survives.
+          const cacheControl = responseHeaders.get("Cache-Control");
+          if (!cacheControl) {
+            responseHeaders.set("Cache-Control", "no-transform");
+          } else if (!/(?:^|,)\s*no-transform\s*(?:,|$)/i.test(cacheControl)) {
+            responseHeaders.set(
+              "Cache-Control",
+              `${cacheControl}, no-transform`,
+            );
+          }
+
           resolve(
             new Response(stream, {
               headers: responseHeaders,

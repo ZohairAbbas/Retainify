@@ -316,6 +316,33 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
    operator/value line comfortable rather than merely legible. The email builder
    overrides this grid with its own columns below. */
 .rt-builder-body { flex: 1; display: grid; grid-template-columns: 1fr 440px; min-height: 0; overflow: hidden; }
+/* Folded away, the panel leaves a 40px rail. A split needs 816px of canvas
+   (two 360px branch columns + the 48px fork gap + padding), which the embedded
+   admin cannot give alongside a 440px panel on a laptop. */
+.rt-builder-body.rt-inspector-collapsed { grid-template-columns: 1fr 40px; }
+.rt-builder-rail {
+  background: var(--paper-2); border-left: 1px solid var(--hair-2);
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 10px 0;
+  overflow: hidden;
+}
+.rt-rail-btn {
+  width: 28px; height: 28px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--paper-3); border: 1px solid var(--hair-2);
+  border-radius: var(--r-2); color: var(--ink-2); cursor: pointer;
+  transition: all var(--t-fast) var(--ease);
+}
+.rt-rail-btn:hover { color: var(--ink-1); border-color: var(--ink-3); }
+/* Vertical so the selected step still has a name at 40px wide. */
+.rt-rail-label {
+  writing-mode: vertical-rl;
+  font-family: var(--font-mono); font-size: 10.5px;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-height: 0;
+}
 .rt-builder-canvas {
   background:
     radial-gradient(circle at 1px 1px, rgba(20,32,26,0.08) 1px, transparent 1.5px);

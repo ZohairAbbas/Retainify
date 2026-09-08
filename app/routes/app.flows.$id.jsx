@@ -533,6 +533,13 @@ export default function FlowBuilder() {
   const [selectedId, setSelectedId] = useState("trigger");
   const [viewMode, setViewMode] = useState("canvas");
   const [showPreview, setShowPreview] = useState(true);
+  // The inspector is 440px of a canvas that needs 816px for a single split
+  // (two 360px branch columns + the fork gap). On a laptop-width embedded
+  // admin those do not both fit, so the panel folds away to a rail. Manual
+  // only: a panel that opens or closes itself while a merchant is arranging a
+  // flow moves the cards under their cursor.
+  const [inspectorOpen, setInspectorOpen] = useState(true);
+  const inspectorCollapsed = viewMode === "canvas" && !inspectorOpen;
   const [showAnalytics, setShowAnalytics] = useState(journey.status === "published");
   const [showPublishModal, setShowPublishModal] = useState(false);
   const [toast, setToast] = useState(null);
@@ -931,6 +938,14 @@ export default function FlowBuilder() {
                   <Icons.Chart size={14} /> Inline stats
                 </button>
               )}
+              <button
+                className={`btn btn-ghost${inspectorOpen ? " rt-toggle-on" : ""}`}
+                onClick={() => setInspectorOpen((v) => !v)}
+                title={inspectorOpen ? "Hide the settings panel for a wider canvas" : "Show the settings panel"}
+                aria-pressed={inspectorOpen}
+              >
+                <Icons.Sliders size={14} /> Panel
+              </button>
               <span className="rt-bt-divider" />
             </>
           )}
@@ -973,8 +988,10 @@ export default function FlowBuilder() {
         </div>
       </div>
 
-      {/* Body */}
-      <div className="rt-builder-body">
+      {/* Body. The collapse applies to the canvas only: its toggle lives in the
+          canvas toolbar, so honouring it in form view would hide the panel with
+          no control left to bring it back. */}
+      <div className={`rt-builder-body${inspectorCollapsed ? " rt-inspector-collapsed" : ""}`}>
         {/* Canvas / Form */}
         <div className="rt-builder-canvas">
           {viewMode === "canvas" ? (
@@ -1022,7 +1039,29 @@ export default function FlowBuilder() {
           )}
         </div>
 
-        {/* Inspector */}
+        {/* Inspector, or the rail that brings it back. The rail names whatever
+            is selected: collapsed, the only other sign that a click on a card
+            did anything is the selection ring. */}
+        {inspectorCollapsed ? (
+          <div className="rt-builder-rail">
+            <button
+              type="button"
+              className="rt-rail-btn"
+              onClick={() => setInspectorOpen(true)}
+              title="Show the settings panel"
+              aria-label="Show the settings panel"
+            >
+              <Icons.Chevron size={14} style={{ transform: "rotate(180deg)" }} />
+            </button>
+            <span className="rt-rail-label">
+              {!selected
+                ? "Flow settings"
+                : selected.kind === "trigger"
+                  ? "Trigger"
+                  : formViewTitle(selected)}
+            </span>
+          </div>
+        ) : (
         <div className="rt-builder-inspector">
           <Inspector
             node={selected}
@@ -1061,6 +1100,7 @@ export default function FlowBuilder() {
             }}
           />
         </div>
+        )}
       </div>
 
       {dialog?.kind === "unpublish" && (
