@@ -13,7 +13,7 @@
  */
 import prisma from "../../db.server.js";
 import { authenticate } from "../../shopify.server.js";
-import { getSession } from "./session.server.js";
+import { getSession, SESSION_COOKIE } from "./session.server.js";
 import { ensureShopifyAccount } from "./accounts.server.js";
 
 /**
@@ -84,7 +84,10 @@ export async function requireAccount(request, opts = {}) {
 
   // ── Our own session ──────────────────────────────────────────────────────
   const session = await getSession(request);
-  if (!session) throw redirectToLogin(request);
+  if (!session) {
+    logUnidentifiedRequest(request);
+    throw redirectToLogin(request);
+  }
 
   const memberships = session.user?.memberships || [];
   if (memberships.length === 0) {
@@ -145,6 +148,54 @@ export async function getAccount(request) {
     return await requireAccount(request);
   } catch {
     return null;
+  }
+}
+
+/**
+ * Diagnostic for "the login screen appeared inside the Shopify admin".
+ *
+ * That symptom has exactly one source: looksLikeShopify() returned false for a
+ * request that really was embedded, so the caller fell through to the cookie
+ * path and found no cookie. It is rare and has resisted reproduction, so this
+ * records enough to tell the candidate causes apart the next time it fires.
+ *
+ * Read `dest` first — it splits the field in one step:
+ *
+ *   empty          → a fetch/.data request with no Authorization header. App
+ *                    Bridge either never loaded (CDN blocked or failed) or had
+ *                    not yet patched window.fetch when this went out.
+ *   document|iframe→ a full document load whose Shopify query params were
+ *                    missing. Compare `url` against `referer`.
+ *   (absent)       → a client too old to send Fetch Metadata; fall back to
+ *                    `referer` and `ua`.
+ *
+ * A `referer` on admin.shopify.com with no session cookie is near-conclusive
+ * that the caller was embedded and we misread it.
+ *
+ * No cookie values or tokens are logged — only whether a session cookie was
+ * present at all.
+ */
+function logUnidentifiedRequest(request) {
+  try {
+    const h = request.headers;
+    const cookie = h.get("cookie") || "";
+    console.warn(
+      "[auth] unidentified request → /login",
+      JSON.stringify({
+        url: request.url,
+        method: request.method,
+        dest: h.get("sec-fetch-dest") || null,
+        site: h.get("sec-fetch-site") || null,
+        mode: h.get("sec-fetch-mode") || null,
+        referer: h.get("referer") || null,
+        hasAuth: !!h.get("authorization"),
+        hasAnyCookie: cookie.length > 0,
+        hasSessionCookie: cookie.includes(`${SESSION_COOKIE}=`),
+        ua: (h.get("user-agent") || "").slice(0, 120),
+      }),
+    );
+  } catch {
+    // Diagnostics must never be the reason a request fails.
   }
 }
 
