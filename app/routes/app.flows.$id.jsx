@@ -938,14 +938,6 @@ export default function FlowBuilder() {
                   <Icons.Chart size={14} /> Inline stats
                 </button>
               )}
-              <button
-                className={`btn btn-ghost${inspectorOpen ? " rt-toggle-on" : ""}`}
-                onClick={() => setInspectorOpen((v) => !v)}
-                title={inspectorOpen ? "Hide the settings panel for a wider canvas" : "Show the settings panel"}
-                aria-pressed={inspectorOpen}
-              >
-                <Icons.Sliders size={14} /> Panel
-              </button>
               <span className="rt-bt-divider" />
             </>
           )}
@@ -1043,16 +1035,19 @@ export default function FlowBuilder() {
             is selected: collapsed, the only other sign that a click on a card
             did anything is the selection ring. */}
         {inspectorCollapsed ? (
-          <div className="rt-builder-rail">
-            <button
-              type="button"
-              className="rt-rail-btn"
-              onClick={() => setInspectorOpen(true)}
-              title="Show the settings panel"
-              aria-label="Show the settings panel"
-            >
+          /* The whole rail is the button: at 40px wide a merchant should not
+             have to hit a 24px target to get their settings back. */
+          <button
+            type="button"
+            className="rt-builder-rail"
+            onClick={() => setInspectorOpen(true)}
+            title="Show settings"
+            aria-label="Show settings"
+            aria-expanded={false}
+          >
+            <span className="rt-rail-btn" aria-hidden="true">
               <Icons.Chevron size={14} style={{ transform: "rotate(180deg)" }} />
-            </button>
+            </span>
             <span className="rt-rail-label">
               {!selected
                 ? "Flow settings"
@@ -1060,8 +1055,22 @@ export default function FlowBuilder() {
                   ? "Trigger"
                   : formViewTitle(selected)}
             </span>
-          </div>
+          </button>
         ) : (
+        <div className="rt-inspector-col">
+          {/* The control sits on the panel's own edge rather than in the
+              toolbar: a chevron pointing at the border it closes says "this
+              bar hides" without needing a label to explain it. */}
+          <button
+            type="button"
+            className="rt-ins-collapse"
+            onClick={() => setInspectorOpen(false)}
+            title="Hide settings"
+            aria-label="Hide settings"
+            aria-expanded
+          >
+            <Icons.Chevron size={14} />
+          </button>
         <div className="rt-builder-inspector">
           <Inspector
             node={selected}
@@ -1099,6 +1108,7 @@ export default function FlowBuilder() {
               return true;
             }}
           />
+        </div>
         </div>
         )}
       </div>

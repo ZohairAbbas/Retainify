@@ -320,20 +320,44 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
    (two 360px branch columns + the 48px fork gap + padding), which the embedded
    admin cannot give alongside a 440px panel on a laptop. */
 .rt-builder-body.rt-inspector-collapsed { grid-template-columns: 1fr 40px; }
-.rt-builder-rail {
-  background: var(--paper-2); border-left: 1px solid var(--hair-2);
-  display: flex; flex-direction: column; align-items: center; gap: 12px;
-  padding: 10px 0;
-  overflow: hidden;
-}
-.rt-rail-btn {
-  width: 28px; height: 28px; flex: none;
+/* The expanded panel and the tab that closes it. The tab straddles the panel's
+   left border, so the affordance is attached to the bar it hides rather than
+   sitting in a toolbar where it needs a word to explain itself. */
+.rt-inspector-col { position: relative; min-height: 0; display: flex; flex-direction: column; }
+.rt-inspector-col > .rt-builder-inspector { flex: 1; min-height: 0; }
+.rt-ins-collapse {
+  position: absolute; top: 18px; left: 0; transform: translateX(-50%);
+  width: 26px; height: 26px; z-index: 5;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--paper-3); border: 1px solid var(--hair-2);
-  border-radius: var(--r-2); color: var(--ink-2); cursor: pointer;
+  border-radius: 50%; color: var(--ink-2); cursor: pointer;
+  box-shadow: var(--sh-1);
   transition: all var(--t-fast) var(--ease);
 }
-.rt-rail-btn:hover { color: var(--ink-1); border-color: var(--ink-3); }
+.rt-ins-collapse:hover { color: var(--ink-1); border-color: var(--ink-3); box-shadow: var(--sh-2); }
+
+/* Collapsed: the rail is one button, so the whole 40px strip reopens it. */
+.rt-builder-rail {
+  background: var(--paper-2);
+  /* It is a <button>: clear the UA border and box before restoring the seam. */
+  border: 0; border-left: 1px solid var(--hair-2);
+  font: inherit; text-align: center; appearance: none;
+  display: flex; flex-direction: column; align-items: center; gap: 12px;
+  padding: 18px 0 10px;
+  overflow: hidden;
+  cursor: pointer;
+  transition: background var(--t-fast) var(--ease);
+}
+.rt-builder-rail:hover { background: var(--paper-3); }
+.rt-rail-btn {
+  width: 26px; height: 26px; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--paper-3); border: 1px solid var(--hair-2);
+  border-radius: 50%; color: var(--ink-2);
+  box-shadow: var(--sh-1);
+  transition: all var(--t-fast) var(--ease);
+}
+.rt-builder-rail:hover .rt-rail-btn { color: var(--ink-1); border-color: var(--ink-3); }
 /* Vertical so the selected step still has a name at 40px wide. */
 .rt-rail-label {
   writing-mode: vertical-rl;
@@ -667,8 +691,15 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
    is inert (shell defaults to display:block), so its grid collapses to content
    width — which crushed the custom-HTML panes into a narrow strip. Match the
    main .rt-builder pattern so the body fills width and the canvas scrolls
-   internally as its overflow rules already intend. */
-.rt-builder-shell { display: flex; flex-direction: column; height: 100vh; min-height: 0; overflow: hidden; }
+   internally as its overflow rules already intend.
+
+   height:100%, not 100vh: the takeover sits inside the fixed-height /app shell
+   (app.jsx), which is already exactly one viewport tall. Measuring the viewport
+   a second time from in here ignores whatever chrome sits above the shell and
+   makes this pane taller than the space it occupies — which is what left dead
+   space under an unscrollable canvas. The parent <main> has a definite height,
+   so the percentage resolves. */
+.rt-builder-shell { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }
 .rt-emb-builder .rt-builder-body { grid-template-columns: 240px 1fr 380px; }
 .rt-emb-builder .rt-builder-canvas { background: var(--paper-0); display: flex; flex-direction: column; }
 /* Custom-HTML body is a plain 2-column grid: [editor | 380px inspector].
@@ -1189,7 +1220,10 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-pop-card-active-mark::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--brand-500); }
 
 /* ── Editor layout ────────────────────────────────────────────────────── */
-.rt-pop-editor-wrap { height: 100vh; display: flex; flex-direction: column; background: var(--paper-1); overflow: hidden; }
+/* height:100%, not 100vh — see the note on .rt-builder-shell. This is the same
+   kind of full-height takeover inside the fixed-height /app shell, and measuring
+   the viewport from in here has the same failure. */
+.rt-pop-editor-wrap { height: 100%; display: flex; flex-direction: column; background: var(--paper-1); overflow: hidden; }
 .rt-pop-editor { flex: 1; display: grid; grid-template-columns: 340px minmax(0, 1fr); min-height: 0; }
 .rt-pop-editor-side {
   background: var(--paper-3);

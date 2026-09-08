@@ -143,19 +143,15 @@ function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces }
       borderRight: "1px solid var(--hair-1)",
       display: "flex",
       flexDirection: "column",
-      // Sticky at exactly one viewport tall, NOT minHeight:100vh.
+      // Full height of the shell, which is itself exactly one viewport tall.
       //
-      // As a flex child, minHeight let the sidebar stretch to match the tallest
-      // sibling — so on a long page (Settings is the worst offender) the nav
-      // grew to the full scroll height of the content. That pushed the account
-      // block, which sits at the bottom, hundreds of pixels below the fold, and
-      // left a long empty column beside the page.
-      //
-      // height + sticky pins it to the viewport instead, and overflowY lets the
-      // nav itself scroll on a short screen rather than clipping items.
-      position: "sticky",
-      top: 0,
-      height: "100vh",
+      // This used to be sticky at height:100vh, to stop the nav growing to the
+      // full scroll height of a long page (Settings was the worst offender) and
+      // pushing the account block hundreds of pixels below the fold. The parent
+      // no longer scrolls, so plain stretch gives the same result: the nav is
+      // the height of the shell and never taller. overflowY still lets the nav
+      // itself scroll on a short screen rather than clipping items.
+      height: "100%",
       overflowY: "auto",
       overflowX: "hidden",
       padding: "12px 4px",
@@ -344,12 +340,33 @@ export default function App() {
   const isOnboarding = location.pathname.startsWith("/app/onboarding");
   const showSetup = activated && !setupComplete;
 
+  // The document does not scroll; <main> does. ScrollRestoration only ever
+  // touches window scroll, so with the scroll moved into an element it silently
+  // stops working and every navigation lands wherever the previous page was
+  // left. Reset it by hand on each route change.
+  const mainRef = useRef(null);
+  useEffect(() => {
+    if (mainRef.current) mainRef.current.scrollTop = 0;
+  }, [location.pathname]);
+
   const shell = isOnboarding ? (
     <main style={{ minHeight: "100vh", background: "var(--paper-1)" }}>
       <Outlet />
     </main>
   ) : (
-    <div style={{ display: "flex", minHeight: "100vh", alignItems: "flex-start" }}>
+    // Fixed-height shell, not minHeight:100vh.
+    //
+    // The shell is not necessarily flush with the top of the viewport — inside
+    // the embedded admin there is chrome above it. A viewport-height child
+    // (.rt-builder-shell was height:100vh) is then exactly that offset too
+    // tall, so the document scrolls by the offset and, because the builder
+    // clips its own overflow, scrolling down reveals dead space below a canvas
+    // that has nothing left to scroll.
+    //
+    // Sizing the shell to the viewport once, here, and having everything below
+    // it size to its container removes the whole class of bug. dvh rather than
+    // vh so a mobile URL bar does not reintroduce the same offset.
+    <div style={{ display: "flex", height: "100dvh", overflow: "hidden" }}>
       <AppNav
         currentPath={location.pathname}
         showSetup={showSetup}
@@ -358,7 +375,16 @@ export default function App() {
         user={user}
         workspaces={workspaces}
       />
-      <main style={{ flex: 1, minWidth: 0, background: "var(--paper-1)" }}>
+      <main
+        ref={mainRef}
+        style={{
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          overflowY: "auto",
+          background: "var(--paper-1)",
+        }}
+      >
         <Outlet />
       </main>
     </div>
