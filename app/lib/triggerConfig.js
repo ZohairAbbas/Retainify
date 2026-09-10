@@ -39,6 +39,18 @@ export const TRIGGER_CONFIG = {
     desc: "Starts when a customer has not purchased in 90 days.",
     subLabel: "Lifecycle",
   },
+  // Enrolment comes from outside the app: another service POSTs to
+  // /internal/enroll naming this flow by its journeyKey. Not marked `commerce`,
+  // so a workspace with no store can choose it — which is the whole point, since
+  // the internal Growzar tenant is exactly such a workspace.
+  api_event: {
+    label: "Enrolled by API",
+    tint: "trigger",
+    icon: "Trigger",
+    desc: "Starts when another app enrolls someone through the internal API.",
+    subLabel: "External",
+    requiresJourneyKey: true,
+  },
   segment_entered: {
     label: "Entered a segment",
     tint: "segment",
@@ -70,6 +82,34 @@ export function triggersFor(isShopify) {
   return Object.fromEntries(
     Object.entries(TRIGGER_CONFIG).filter(([, cfg]) => isShopify || !cfg.commerce),
   );
+}
+
+/**
+ * Shape check for a flow's external key and for an event key sent to
+ * /internal/event. Both are identifiers another codebase hardcodes, so the
+ * grammar is deliberately narrow: lowercase, digits and underscores.
+ *
+ * Rejects rather than repairs. Silently slugifying "Courierify Onboarding" into
+ * "courierify_onboarding" would leave the calling app posting the string it was
+ * given and getting no enrollments, with nothing anywhere saying why. An error
+ * at the moment of typing costs one correction; a silent fix costs a debugging
+ * session in someone else's repo.
+ *
+ * @param {string} raw
+ * @param {string} [label] what to call it in the error message
+ * @returns {{ ok: true, key: string } | { ok: false, error: string }}
+ */
+export function validateExternalKey(raw, label = "Key") {
+  const key = String(raw ?? "").trim();
+  if (!key) return { ok: false, error: `${label} is required.` };
+  if (key.length > 64) return { ok: false, error: `${label} must be 64 characters or fewer.` };
+  if (!/^[a-z0-9_]+$/.test(key)) {
+    return {
+      ok: false,
+      error: `${label} can use lowercase letters, numbers and underscores only — for example courierify_onboarding.`,
+    };
+  }
+  return { ok: true, key };
 }
 
 export const STATUS_PILL = {

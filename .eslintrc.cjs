@@ -102,6 +102,10 @@ module.exports = {
         "app/routes/**/*.{js,jsx,ts,tsx}",
         "app/root.{js,jsx,ts,tsx}",
         "app/entry.server.{js,jsx,ts,tsx}",
+        // Tests are plain Node programs too, run by `node --test`. They read
+        // process.env to stand up fixtures (an app secret, a feature flag), and
+        // without this every one of those is the same false `no-undef`.
+        "**/*.test.{js,jsx,ts,tsx}",
         // Maintenance scripts are plain Node programs run with `node --env-file`.
         // Without this they report `process is not defined` on every use, which
         // is the same false-positive noise the override above exists to remove.

@@ -83,6 +83,16 @@ export async function validateFlowForPublish(journeyId) {
     errors.push({ message: "Pick the segment that starts this flow." });
   }
 
+  // An API-triggered flow with no key cannot be named by the app that is meant
+  // to enroll into it: /internal/enroll resolves the flow by journeyKey, so this
+  // would publish something nothing can reach.
+  if (journey.trigger === "api_event" && !journey.journeyKey) {
+    errors.push({
+      message: "Give this flow a key so the calling app can enroll people into it.",
+    });
+  }
+
+
   // ── Shape ────────────────────────────────────────────────────────────────
   const graph = await loadGraph(journeyId);
   errors.push(...validateGraph(graph).errors);

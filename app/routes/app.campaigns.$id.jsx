@@ -93,6 +93,7 @@ export const loader = async ({ request, params }) => {
   const { from } = resolveFrom({ settings, provider });
 
   return {
+    isShopify: ctx.isShopify,
     campaign: {
       id: campaign.id,
       name: campaign.name,
@@ -401,6 +402,7 @@ export default function CampaignEditor() {
     campaign, step, segmentChoices, audienceCount,
     senderName, sendingFrom, testEmailDefault,
     channel, waTemplates = [], whatsappBlocker: waBlocker, unreachableSubscribers = 0,
+    isShopify = true,
   } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
@@ -492,6 +494,7 @@ export default function CampaignEditor() {
         testEmailDefault={testEmailDefault}
         senderName={senderName}
         sendingFrom={sendingFrom}
+        isShopify={isShopify}
         onBack={() => setEditing(false)}
         onSave={(updated) => {
           setNode((n) => ({ ...n, ...updated }));

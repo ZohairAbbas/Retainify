@@ -105,6 +105,40 @@ export async function sendWhatsappMessage({
 }
 
 /**
+ * Whether this number is already registered with the Cloud API.
+ *
+ * Meta reports it as `status` on the phone number: CONNECTED means registered
+ * and able to send. A test number from the app dashboard arrives that way, and
+ * so does any number a merchant registered elsewhere before connecting here.
+ *
+ * Worth a round trip before asking for a PIN, because the failure without it is
+ * a dead end rather than an error: re-registering an already-registered number
+ * requires the two-step PIN that was set when it was first registered, and a
+ * merchant who never chose one has nothing to type. They are told "Incorrect
+ * PIN" about a PIN that does not exist, for a step they did not need.
+ *
+ * @param {{ phoneNumberId: string, accessToken: string }} opts
+ * @returns {Promise<{ ok: boolean, registered?: boolean, status?: string, error?: string }>}
+ */
+export async function getRegistrationStatus({ phoneNumberId, accessToken }) {
+  if (!phoneNumberId || !accessToken) {
+    return { ok: false, error: "missing WABA phoneNumberId or accessToken" };
+  }
+  const url = `https://graph.facebook.com/${GRAPH_VERSION}/${phoneNumberId}?fields=status`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      return { ok: false, error: json?.error?.message || `HTTP ${res.status}` };
+    }
+    const status = String(json?.status || "");
+    return { ok: true, registered: status.toUpperCase() === "CONNECTED", status };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+/**
  * Register a phone number for the Cloud API. Required once before the number
  * can send any message (else Meta returns #133010 "Account not registered").
  *
@@ -136,10 +170,22 @@ export async function registerPhoneNumber({ phoneNumberId, accessToken, pin }) {
     const err = json?.error || {};
     const code = Number(err.code);
     // 133005 = wrong PIN; 133006 = PIN needs reset via 2FA; 133004 = server busy.
-    // Already-registered numbers return an error we can treat as success.
     if (/already/i.test(err.message || "")) return { ok: true, alreadyRegistered: true };
     let message = err.error_user_msg || err.message || `HTTP ${res.status}`;
-    if (code === 133005) message = "Incorrect PIN for this number's two-step verification.";
+    if (code === 133005) {
+      // Almost always means the number was already registered rather than that
+      // the merchant mistyped: re-registering demands the PIN set at first
+      // registration, which for a pre-registered or test number nobody chose.
+      // The caller checks the real status before showing this, so by the time
+      // it is read the number is genuinely unregistered and the PIN genuinely
+      // wrong.
+      message =
+        "Incorrect PIN for this number's two-step verification. If you never set one, reset it in WhatsApp Manager under Two-step verification.";
+    }
+    if (code === 133006) {
+      message =
+        "This number's PIN must be reset before it can be registered. Do that in WhatsApp Manager under Two-step verification, then try again.";
+    }
     return { ok: false, error: message };
   } catch (err) {
     return { ok: false, error: err.message };

@@ -276,7 +276,7 @@ model Contact {
   name               String    @default("")
   firstSeenAt        DateTime  @default(now())
   lastSeenAt         DateTime  @default(now())
-  source             String    @default("manual") // popup | cart_abandoned | shopify_customer | csv_import | push_only | manual
+  source             String    @default("manual") // popup | cart_abandoned | shopify_customer | csv_import | push_only | journey_enrollment | internal_api | manual
   subscriptionStatus String    @default("never_opted_in") // subscribed | unsubscribed | bounced | complained | never_opted_in
   marketingConsentAt DateTime?
   shopifyCustomerId  String?
@@ -678,7 +678,19 @@ model Journey {
   id                 String    @id @default(cuid())
   shop               String
   name               String
-  trigger            String // cart_abandoned | customer_created | order_placed | win_back | segment_entered
+  // Stable external identifier, so a caller outside the app can name a flow
+  // without knowing its cuid. Null for every merchant-authored flow — only
+  // api_event flows need one.
+  //
+  // Not the cuid, because a flow deleted and rebuilt gets a new one and the
+  // calling app would then enroll nobody, with nothing to notice it by. Not the
+  // name either: that is free text someone edits in the builder, and a rename
+  // would break enrollment just as quietly.
+  //
+  // Postgres counts NULLs as distinct in a unique index, so the constraint below
+  // does not force merchant flows to invent a key.
+  journeyKey         String?
+  trigger            String // cart_abandoned | customer_created | order_placed | win_back | segment_entered | api_event
   isActive           Boolean   @default(false)
   status             String    @default("draft") // draft | published | paused
   publishedAt        DateTime?
@@ -722,6 +734,7 @@ model Journey {
   edges       JourneyEdge[]
   enrollments JourneyEnrollment[]
 
+  @@unique([shop, journeyKey])
   @@index([shop, trigger])
   @@index([shop, status])
   @@index([trigger, status, lastEnrollmentAt])

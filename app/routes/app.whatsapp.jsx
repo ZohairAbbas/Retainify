@@ -5,7 +5,12 @@ import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
 import { connectWhatsappAccount, resubscribeWebhooks } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
-import { sendWhatsapp, sendWhatsappText, registerWhatsappNumber } from "../lib/whatsapp/index.server.js";
+import {
+  sendWhatsapp,
+  sendWhatsappText,
+  registerWhatsappNumber,
+  syncRegistrationState,
+} from "../lib/whatsapp/index.server.js";
 import { toE164 } from "../lib/contacts/contacts.server.js";
 import { recordOptOut } from "../lib/whatsapp/optin.server.js";
 import Icons from "../components/ui/Icons.jsx";
@@ -84,6 +89,16 @@ export const loader = async ({ request }) => {
   // WhatsApp is a Growth-tier feature (Meta bills per conversation). In shadow
   // mode `locked` is false, so the page stays fully usable until enforcement is on.
   const gate = await featureState(shop, "whatsapp");
+
+  // Reconcile registration with Meta before rendering. A number that is already
+  // CONNECTED — every test number, and any registered in WhatsApp Manager — was
+  // otherwise shown a PIN prompt it could not satisfy, because re-registering
+  // demands the PIN set at first registration. One Graph call, and only while
+  // our own stamp is missing.
+  const registration =
+    account && account.status === "connected" && !account.registeredAt
+      ? await syncRegistrationState(shop).catch(() => ({ registered: false }))
+      : { registered: !!account?.registeredAt };
   const isConnected = account?.status === "connected";
 
   return {
@@ -93,7 +108,7 @@ export const loader = async ({ request }) => {
           status: account.status,
           wabaId: account.wabaId,
           displayPhoneNumber: account.displayPhoneNumber,
-          registered: !!account.registeredAt,
+          registered: !!account.registeredAt || registration.registered === true,
           // Null means Meta sends us no events for this shop at all: sends
           // work, but delivery, reads, replies and STOP never come back.
           webhooksSubscribed: !!account.webhooksSubscribedAt,

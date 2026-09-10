@@ -12,6 +12,7 @@ import {
   sendWhatsappMessage as sendViaMeta,
   sendSessionText,
   registerPhoneNumber,
+  getRegistrationStatus,
 } from "./cloud-api.server.js";
 
 /**
@@ -110,6 +111,14 @@ export async function registerWhatsappNumber(shop, pin) {
     return { ok: false, error: `token decrypt failed: ${err.message}` };
   }
 
+  // Ask Meta before asking the merchant. A number that is already CONNECTED
+  // needs no registration, and trying anyway fails on a two-step PIN that was
+  // set at first registration — which for a test number, or one registered in
+  // WhatsApp Manager, nobody here ever chose. That presented as "Incorrect PIN"
+  // for a PIN that does not exist, with no way forward.
+  const already = await checkAndStampRegistration(shop, account.phoneNumberId, accessToken);
+  if (already.registered) return { ok: true, alreadyRegistered: true };
+
   const result = await registerPhoneNumber({
     phoneNumberId: account.phoneNumberId,
     accessToken,
@@ -122,4 +131,54 @@ export async function registerWhatsappNumber(shop, pin) {
       .catch(() => {});
   }
   return result;
+}
+
+/**
+ * Reconcile our `registeredAt` with the number's real state at Meta.
+ *
+ * registeredAt is our bookkeeping, not Meta's — nothing in the send path reads
+ * it, only the admin UI does — so it can be false while the number is perfectly
+ * able to send, which locks the merchant out of their own working channel. This
+ * settles it from the authority rather than from our record.
+ *
+ * Never clears the stamp: Meta briefly reports a number as PENDING or
+ * MIGRATING, and dropping the flag on a transient status would put the merchant
+ * back in front of a PIN prompt for a number they already registered.
+ *
+ * @returns {Promise<{ registered: boolean, status?: string, error?: string }>}
+ */
+export async function checkAndStampRegistration(shop, phoneNumberId, accessToken) {
+  const res = await getRegistrationStatus({ phoneNumberId, accessToken });
+  if (!res.ok) return { registered: false, error: res.error };
+  if (!res.registered) return { registered: false, status: res.status };
+
+  await prisma.whatsappAccount
+    .updateMany({
+      where: { shop, registeredAt: null },
+      data: { registeredAt: new Date(), lastError: "" },
+    })
+    .catch(() => {});
+  return { registered: true, status: res.status };
+}
+
+/**
+ * Resolve a shop's registration state, stamping it if Meta says it is done.
+ * Used by the WhatsApp page's loader so a pre-registered number is never shown
+ * a PIN prompt in the first place.
+ *
+ * @returns {Promise<{ registered: boolean, status?: string, error?: string }>}
+ */
+export async function syncRegistrationState(shop) {
+  const account = await resolveAccount(shop);
+  if (!account?.phoneNumberId) return { registered: false };
+  if (account.registeredAt) return { registered: true };
+  try {
+    return await checkAndStampRegistration(
+      shop,
+      account.phoneNumberId,
+      decryptSecret(account.accessTokenEnc),
+    );
+  } catch {
+    return { registered: false };
+  }
 }

@@ -9,29 +9,10 @@ import EmailTemplateGallery from "./email-templates/EmailTemplateGallery.jsx";
 import MediaPicker from "./email-templates/MediaPicker.jsx";
 import { TEMPLATES, TEMPLATE_ORDER, cloneBlocks } from "../lib/email-templates/email-templates.js";
 
+import { blocksFor } from "./email-blocks.js";
+
 // ── Block factory ──────────────────────────────────────────────────────────
 const bid = () => "b_" + Math.random().toString(36).slice(2, 7);
-
-const BLOCK_LIBRARY = [
-  { group: "Basic", items: [
-    { type: "heading",   icon: "Heading1",     label: "Heading"   },
-    { type: "paragraph", icon: "Type",         label: "Paragraph" },
-    { type: "button",    icon: "Button",       label: "Button"    },
-    { type: "image",     icon: "Image",        label: "Image"     },
-    { type: "logo",      icon: "Logo",         label: "Logo"      },
-  ]},
-  { group: "Layout", items: [
-    { type: "spacer",  icon: "Spacer",  label: "Spacer"  },
-    { type: "divider", icon: "Divider", label: "Divider" },
-  ]},
-  { group: "Commerce", items: [
-    { type: "product",  icon: "ProductGrid", label: "Product grid"   },
-    { type: "discount", icon: "Discount",    label: "Discount code"  },
-  ]},
-  { group: "Structure", items: [
-    { type: "footer", icon: "Footer", label: "Footer" },
-  ]},
-];
 
 function makeBlock(type, trigger) {
   switch (type) {
@@ -358,7 +339,7 @@ function BlockWrapper({ block, brand, selected, onSelect, onMove, onDuplicate, o
 }
 
 // ── Insert + button between blocks ─────────────────────────────────────────
-function InsertGap({ onAdd, idx, openId, setOpenId }) {
+function InsertGap({ onAdd, idx, openId, setOpenId, isShopify }) {
   const id = `gap-${idx}`;
   const open = openId === id;
   return (
@@ -370,7 +351,7 @@ function InsertGap({ onAdd, idx, openId, setOpenId }) {
         <>
           <div className="rt-emb-veil" onClick={() => setOpenId(null)} />
           <div className="rt-emb-add-pop">
-            {BLOCK_LIBRARY.map((grp) => (
+            {blocksFor(isShopify).map((grp) => (
               <div key={grp.group} className="rt-emb-add-grp">
                 <div className="rt-emb-add-grp-h t-micro muted">{grp.group}</div>
                 <div className="rt-emb-add-list">
@@ -1118,7 +1099,7 @@ function EmailSettings({ node, brand, onNode, onBrand }) {
  */
 const VIEWPORT_WIDTH = { mobile: 390, desktop: 600 };
 
-function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingFrom, onSelect, onInsert, onUpdateBlock, onMove, onDuplicate, onDelete, openGapId, setOpenGapId }) {
+function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingFrom, onSelect, onInsert, onUpdateBlock, onMove, onDuplicate, onDelete, openGapId, setOpenGapId, isShopify }) {
   const width = VIEWPORT_WIDTH[viewport] || VIEWPORT_WIDTH.desktop;
   return (
     <div className="rt-emb-stage" onClick={() => onSelect(null)}>
@@ -1132,7 +1113,7 @@ function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingF
         <div className="rt-emb-inbox-time">11:42 AM</div>
       </div>
       <div className="rt-emb-frame" style={{ width, background: brand.bg }} onClick={(e) => e.stopPropagation()}>
-        <InsertGap idx={0} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} />
+        <InsertGap idx={0} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} isShopify={isShopify} />
         {blocks.map((b, i) => (
           <div key={b.id}>
             <BlockWrapper
@@ -1147,7 +1128,7 @@ function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingF
               canMoveUp={i > 0}
               canMoveDown={i < blocks.length - 1}
             />
-            <InsertGap idx={i + 1} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} />
+            <InsertGap idx={i + 1} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} isShopify={isShopify} />
           </div>
         ))}
         {blocks.length === 0 && (
@@ -1162,13 +1143,13 @@ function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingF
 }
 
 // ── Block library left rail ────────────────────────────────────────────────
-function BlockLibraryRail({ onAdd }) {
+function BlockLibraryRail({ onAdd, isShopify }) {
   return (
     <div className="rt-emb-left">
       <div className="rt-emb-library-head">
         <div className="t-micro muted">Blocks</div>
       </div>
-      {BLOCK_LIBRARY.map((grp) => (
+      {blocksFor(isShopify).map((grp) => (
         <div key={grp.group} className="rt-emb-lib-grp">
           <div className="rt-emb-lib-grp-h">{grp.group}</div>
           <div className="rt-emb-lib-grid">
@@ -1569,7 +1550,7 @@ function SendTestModal({ defaultTo, fetcher, onClose, onSend }) {
   );
 }
 
-export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefault, senderName, sendingFrom }) {
+export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefault, senderName, sendingFrom, isShopify = true }) {
   const [blocks, setBlocks] = useState(() => node.emailBlocks?.length ? node.emailBlocks : defaultBlocks(node, flow?.trigger));
   const [brand, setBrand] = useState(() => node.emailBrand || DEFAULT_BRAND);
   const [nodeMeta, setNodeMeta] = useState({ subject: node.subject || "", previewText: node.previewText || "", emailName: node.emailName || "" });
@@ -1779,7 +1760,7 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
         </div>
       ) : (
       <div className="rt-builder-body rt-emb-builder">
-        <BlockLibraryRail onAdd={addToEnd} />
+        <BlockLibraryRail onAdd={addToEnd} isShopify={isShopify} />
 
         <div className="rt-builder-canvas rt-emb-builder">
           {selected && (
@@ -1824,6 +1805,7 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
             onDelete={deleteBlock}
             openGapId={openGapId}
             setOpenGapId={setOpenGapId}
+            isShopify={isShopify}
           />
         </div>
 

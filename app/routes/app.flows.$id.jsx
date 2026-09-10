@@ -9,7 +9,7 @@ import { sendTestEmail } from "../lib/email/test-send.server.js";
 import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { getJourneyStepStats } from "../lib/journey/journey-analytics.server.js";
 import Icons from "../components/ui/Icons.jsx";
-import { TRIGGER_CONFIG, STATUS_PILL } from "../lib/triggerConfig.js";
+import { TRIGGER_CONFIG, STATUS_PILL, validateExternalKey } from "../lib/triggerConfig.js";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
 import { flowFilterFieldsFor, OPERATORS } from "../lib/segments/fields.server.js";
 import { listTagsForShop } from "../lib/contacts/tags.server.js";
@@ -71,6 +71,13 @@ const EXIT_CRITERIA_OPTIONS = [
 const SEGMENT_EXIT_CRITERIA = [
   { value: "leaves_trigger_segment", label: "Contact leaves the trigger segment" },
 ];
+
+// Everything the app raises itself. An api_event flow may also exit on keys the
+// calling app defines, and this is what separates those from the built-ins when
+// rendering them back — they share one exitCriteria array.
+const BUILT_IN_EXIT_EVENTS = new Set(
+  [...EXIT_CRITERIA_OPTIONS, ...SEGMENT_EXIT_CRITERIA].map((o) => o.value),
+);
 
 export const loader = async ({ request, params }) => {
   const ctx = await requireAccount(request);
@@ -330,6 +337,14 @@ export const action = async ({ request, params }) => {
         // intact; letting it throw would drop them on an error boundary and
         // lose the edit.
         console.error("[flows] draft save rejected:", err.message);
+        // A validation error that knows how to explain itself says so; anything
+        // else is the entry-filter tree, the only other thing here that rejects.
+        if (err.userMessage) return { ok: false, saveError: err.userMessage };
+        // A duplicate flow key trips the unique index rather than our own check,
+        // because "is this key free" is only answerable at write time.
+        if (err.code === "P2002") {
+          return { ok: false, saveError: "Another flow already uses that flow key. Pick a different one." };
+        }
         return { ok: false, saveError: "Those flow filters aren't valid. Remove the last one you added and try again." };
       }
     }
@@ -425,6 +440,23 @@ async function persistDraft({ id, journey, fd }) {
     const rawTrigger = fd.get("trigger");
     const trigger = rawTrigger === null ? undefined : String(rawTrigger);
 
+    // The external name an api_event flow is enrolled by. Same absent/empty
+    // convention as the two above. Validated rather than repaired: the calling
+    // app hardcodes this string, so quietly rewriting it here would leave that
+    // app posting one key while we stored another.
+    const rawJourneyKey = fd.get("journeyKey");
+    let journeyKey;
+    if (rawJourneyKey !== null) {
+      const raw = String(rawJourneyKey);
+      if (!raw.trim()) {
+        journeyKey = null;
+      } else {
+        const check = validateExternalKey(raw, "Flow key");
+        if (!check.ok) throw Object.assign(new Error(check.error), { userMessage: check.error });
+        journeyKey = check.key;
+      }
+    }
+
     // The tree, flattened to preorder steps plus index edges. Order matters:
     // stepNumber is assigned from it, and the edges are positions into it.
     const { steps: stepsForSave, edges } = serializeTree(nodes, (n) => {
@@ -508,7 +540,7 @@ async function persistDraft({ id, journey, fd }) {
         };
     });
 
-    await saveDraft(id, { name, entryFrequency, exitCriteria, entryFilters, steps: stepsForSave, edges, triggerSegmentKey, trigger });
+    await saveDraft(id, { name, entryFrequency, exitCriteria, entryFilters, steps: stepsForSave, edges, triggerSegmentKey, trigger, journeyKey });
 }
 
 export default function FlowBuilder() {
@@ -522,6 +554,10 @@ export default function FlowBuilder() {
   const [entryFrequency, setEntryFrequency] = useState(journey.entryFrequency || "no_reentry");
   const [exitCriteria, setExitCriteria] = useState(journey.exitCriteria || []);
   const [triggerSegmentKey, setTriggerSegmentKey] = useState(journey.triggerSegmentKey || "");
+  // The name another app enrolls into this flow by. Only meaningful for
+  // api_event flows; kept in state regardless so switching trigger back and
+  // forth does not lose what was typed before the save.
+  const [journeyKey, setJourneyKey] = useState(journey.journeyKey || "");
   // Entry filters. Stored as null when empty, but the builder always wants a
   // root group to render into, so the two forms are converted at the edges.
   const [entryFilters, setEntryFilters] = useState(
@@ -565,9 +601,10 @@ export default function FlowBuilder() {
       // applies, so adding a rule and removing it again isn't "dirty".
       JSON.stringify(prunedFilters(entryFilters)) !==
         JSON.stringify(prunedFilters(journey.entryFilters)) ||
-      (triggerDraft === "segment_entered" && triggerSegmentKey !== (journey.triggerSegmentKey || ""))
+      (triggerDraft === "segment_entered" && triggerSegmentKey !== (journey.triggerSegmentKey || "")) ||
+      (triggerDraft === "api_event" && journeyKey !== (journey.journeyKey || ""))
     );
-  }, [name, entryFrequency, exitCriteria, entryFilters, nodes, journey, initialNodes, triggerSegmentKey, triggerDraft]);
+  }, [name, entryFrequency, exitCriteria, entryFilters, nodes, journey, initialNodes, triggerSegmentKey, triggerDraft, journeyKey]);
 
   const selected = nodes.find((n) => n.id === selectedId);
 
@@ -771,6 +808,9 @@ export default function FlowBuilder() {
     if (triggerDraft === "segment_entered") {
       fd.set("triggerSegmentKey", triggerSegmentKey || "");
     }
+    if (triggerDraft === "api_event") {
+      fd.set("journeyKey", journeyKey || "");
+    }
     return fd;
   }
 
@@ -858,6 +898,7 @@ export default function FlowBuilder() {
           testEmailDefault={testEmailDefault}
           senderName={settings?.senderName || ""}
           sendingFrom={sendingFromAddress}
+          isShopify={isShopify}
           onBack={() => setEmailEditorNodeId(null)}
           onSave={(updatedNode) => {
             updateNode(updatedNode.id, {
@@ -1079,6 +1120,8 @@ export default function FlowBuilder() {
             setEntryFrequency={setEntryFrequency}
             exitCriteria={exitCriteria}
             setExitCriteria={setExitCriteria}
+            journeyKey={journeyKey}
+            setJourneyKey={setJourneyKey}
             entryFilters={entryFilters}
             setEntryFilters={setEntryFilters}
             filterFields={filterFields}
@@ -1838,7 +1881,7 @@ function InsertMenu({ open, onClose, onAdd, allowSplit = false }) {
   );
 }
 
-function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, entryFilters, setEntryFilters, filterFields = [], filterOperators = {}, filterTags = [], splitFields = [], triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
+function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, journeyKey, setJourneyKey, entryFilters, setEntryFilters, filterFields = [], filterOperators = {}, filterTags = [], splitFields = [], triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
   const filterFieldsById = useMemo(
     () => Object.fromEntries(filterFields.map((f) => [f.id, f])),
     [filterFields],
@@ -1913,6 +1956,33 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
           {/* The loader already resolves this count for the publish modal's
               backfill offer; showing it here too tells the merchant how large
               the audience is while they're choosing, not after. */}
+          {/* The name another app posts to /internal/enroll to start this flow.
+              Shown inline with the trigger because the two are one decision:
+              choosing "Enrolled by API" without a key leaves a flow nothing can
+              address, and publish validation rejects exactly that. */}
+          {activeTrigger === "api_event" && (
+            <div style={{ marginTop: 12 }}>
+              <label className="field-label" htmlFor="rt-journey-key">Flow key</label>
+              <input
+                id="rt-journey-key"
+                className="input"
+                value={journeyKey}
+                placeholder="courierify_onboarding"
+                onChange={(e) => setJourneyKey(e.target.value)}
+                autoComplete="off"
+                spellCheck={false}
+              />
+              <div className="field-help" style={{ marginTop: 6 }}>
+                Lowercase letters, numbers and underscores. The calling app sends this
+                exact string, so changing it later stops that app enrolling anyone.
+              </div>
+              {journeyKey.trim() && !validateExternalKey(journeyKey, "Flow key").ok && (
+                <div className="field-help" style={{ marginTop: 6, color: "var(--danger, #b42318)" }}>
+                  {validateExternalKey(journeyKey, "Flow key").error}
+                </div>
+              )}
+            </div>
+          )}
           {activeTrigger === "segment_entered" && triggerSegmentKey && triggerSegmentCount !== null && (
             <div className="field-help" style={{ marginTop: 8 }}>
               {triggerSegmentCount.toLocaleString()}{" "}
@@ -2011,6 +2081,13 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
                 />
               ))}
           </div>
+          {activeTrigger === "api_event" && (
+            <CustomExitEvents
+              values={exitCriteria.filter((v) => !BUILT_IN_EXIT_EVENTS.has(v))}
+              onAdd={(v) => setExitCriteria((arr) => [...arr, v])}
+              onRemove={(v) => setExitCriteria((arr) => arr.filter((x) => x !== v))}
+            />
+          )}
         </div>
       </div>
     );
@@ -2628,6 +2705,83 @@ function waVarLabel(vars, num) {
   if (ref === "recoveryUrl") return "[Cart link]";
   if (ref && String(ref).trim()) return String(ref);
   return `{{${num}}}`;
+}
+
+/**
+ * Free-text exit events for an API-triggered flow.
+ *
+ * The three built-in criteria are things this app raises itself. An internal
+ * flow exits on events only the calling app knows about — "setup_completed",
+ * "first_shipment_created" — so the vocabulary cannot be a fixed list here any
+ * more than it can be in the evaluator.
+ *
+ * Its own component because the trigger inspector is one branch of a larger
+ * one, and a hook inside a conditional return would not be a hook for long.
+ */
+function CustomExitEvents({ values, onAdd, onRemove }) {
+  const [draft, setDraft] = useState("");
+  const check = validateExternalKey(draft, "Event");
+  const canAdd = check.ok && !values.includes(check.key);
+
+  function add() {
+    if (!canAdd) return;
+    onAdd(check.key);
+    setDraft("");
+  }
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      {values.length > 0 && (
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+          {values.map((v) => (
+            <span key={v} className="pill" style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <code style={{ fontSize: 11 }}>{v}</code>
+              <button
+                type="button"
+                onClick={() => onRemove(v)}
+                aria-label={`Remove ${v}`}
+                style={{ border: 0, background: "none", cursor: "pointer", lineHeight: 1, padding: 0 }}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      <div style={{ display: "flex", gap: 6 }}>
+        <input
+          className="input"
+          value={draft}
+          placeholder="setup_completed"
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => setDraft(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              add();
+            }
+          }}
+        />
+        <button type="button" className="btn" onClick={add} disabled={!canAdd}>
+          Add
+        </button>
+      </div>
+      <div className="field-help" style={{ marginTop: 6 }}>
+        The event name the calling app posts to <code>/internal/event</code>.
+      </div>
+      {draft.trim() && !check.ok && (
+        <div className="field-help" style={{ marginTop: 6, color: "var(--danger, #b42318)" }}>
+          {check.error}
+        </div>
+      )}
+      {draft.trim() && check.ok && values.includes(check.key) && (
+        <div className="field-help" style={{ marginTop: 6 }}>
+          Already added.
+        </div>
+      )}
+    </div>
+  );
 }
 
 function RadioOption({ checked, onClick, label, sub }) {

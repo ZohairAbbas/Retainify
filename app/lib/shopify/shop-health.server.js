@@ -147,6 +147,35 @@ function loadOfflineSession(shop) {
 }
 
 /**
+ * Is this workspace one we could meaningfully probe at all?
+ *
+ * Every verdict in this module is an answer from Shopify, and only a Shopify
+ * install can give one. A direct workspace — signed up on our own domain, and
+ * the shape the internal Growzar tenant uses — has no store, no offline session
+ * and no Admin API to ask. The probe path reads that missing session as
+ * SHOP_UNINSTALLED, and the workers then cancel its entire queue and pause every
+ * published flow it owns. Nothing about the workspace is unhealthy; there is
+ * simply nobody to ask.
+ *
+ * Keyed on Account.kind rather than on the shape of the key: isShopifyShop() in
+ * ../email/index.server.js matches a .myshopify.com suffix, which is a
+ * display-level guess, and a direct workspace whose key happened to look like a
+ * domain would land straight back in the bug.
+ *
+ * An absent Account row falls through to the probe deliberately. A Shopify shop
+ * that has not been seen since ensureShopifyAccount() shipped has no row yet,
+ * and guessing "healthy" for an unrecognised key is the one error this module
+ * must never make.
+ */
+async function isNonShopifyWorkspace(shop) {
+  const account = await prisma.account.findUnique({
+    where: { key: shop },
+    select: { kind: true },
+  });
+  return !!account && account.kind !== "shopify";
+}
+
+/**
  * Force the library to refresh the stored offline token on its next use.
  *
  * The library refreshes only when the session is within five minutes of its
@@ -192,6 +221,11 @@ export async function checkShopHealth(shop, { force = false } = {}) {
     const hit = cached(shop);
     if (hit) return hit;
   }
+
+  // Settle a storeless workspace before the session check below can mistake its
+  // absent session for a shop that has thrown us out. Cached like any other
+  // verdict, so this costs one lookup per shop per TTL window, not one per job.
+  if (await isNonShopifyWorkspace(shop)) return remember(shop, SHOP_LIVE);
 
   // Cheap local check first: no session at all is a definitive answer that
   // costs no API call. Its inverse is NOT definitive, which is the whole point
