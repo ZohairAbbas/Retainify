@@ -161,6 +161,20 @@
           _templateId = remote.template || "editorial";
           _tplData = remote.config || {};
           _frequency = _tplData.frequency || "session";
+          // Carry the WhatsApp opt-in decision onto `config`, which is where
+          // whatsappFieldsHtml reads it. Without this line it stays undefined
+          // forever — `config` is only ever the object the Liquid block injects
+          // (shop, endpoints, VAPID key), and nothing else from the response was
+          // merged back into it. That is why the phone and consent fields never
+          // appeared on any storefront, on any template.
+          //
+          // Deliberately the TOP-LEVEL remote.whatsappOptIn, not
+          // _tplData.whatsappOptIn. They are different values: the top-level one
+          // is already ANDed with the shop's whatsappEnabled by /popup-config,
+          // while the one inside `config` is the popup's own preference alone.
+          // Reading the inner one would collect consent for a channel that is
+          // switched off and cannot send.
+          config.whatsappOptIn = remote.whatsappOptIn === true;
           loadTemplateFonts(_templateId);
         }
         _configReady = true;
