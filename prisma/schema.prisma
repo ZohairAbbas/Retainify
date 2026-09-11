@@ -678,19 +678,21 @@ model Journey {
   id                 String    @id @default(cuid())
   shop               String
   name               String
-  // Stable external identifier, so a caller outside the app can name a flow
-  // without knowing its cuid. Null for every merchant-authored flow — only
-  // api_event flows need one.
-  //
-  // Not the cuid, because a flow deleted and rebuilt gets a new one and the
-  // calling app would then enroll nobody, with nothing to notice it by. Not the
-  // name either: that is free text someone edits in the builder, and a rename
-  // would break enrollment just as quietly.
-  //
-  // Postgres counts NULLs as distinct in a unique index, so the constraint below
-  // does not force merchant flows to invent a key.
+  // DEPRECATED — v1's external flow name, replaced by triggerApp/triggerEvent.
+  // Nothing reads or writes it. Kept only until the build that stopped using it
+  // is running everywhere: Prisma selects every column by name, so dropping it
+  // while an older build is still serving would fail every Journey query. The
+  // follow-up migration removes the column and its index.
   journeyKey         String?
   trigger            String // cart_abandoned | customer_created | order_placed | win_back | segment_entered | api_event
+  // api_event flows only: the app and lifecycle event that start this flow,
+  // e.g. ("financify", "installed"). Another Growzar app reports the event to
+  // /internal/event and every published flow subscribed to that exact pair
+  // enrolls the person. Bound to an app, not just an event name, because the
+  // apps share one tenant — Courierify's "installed" must not start Financify's
+  // onboarding. Null for every other trigger.
+  triggerApp         String?
+  triggerEvent       String?
   isActive           Boolean   @default(false)
   status             String    @default("draft") // draft | published | paused
   publishedAt        DateTime?
@@ -735,6 +737,8 @@ model Journey {
   enrollments JourneyEnrollment[]
 
   @@unique([shop, journeyKey])
+  // Drives /internal/event's "which flows does this event start" lookup.
+  @@index([shop, trigger, triggerApp, triggerEvent])
   @@index([shop, trigger])
   @@index([shop, status])
   @@index([trigger, status, lastEnrollmentAt])

@@ -19,7 +19,7 @@
  */
 import prisma from "../../db.server.js";
 import { sendEmail, resolveFrom, resolveProvider, resolveCartUrl, resolveStoreUrl } from "./index.server.js";
-import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml } from "./visual-renderer.server.js";
+import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml, mergeSubject } from "./visual-renderer.server.js";
 import { buildTextPart } from "./text.server.js";
 import { buildUnsubscribeUrl, listUnsubscribeHeaders } from "../tracking/links.server.js";
 import { normalizeEmail } from "../contacts/contacts.server.js";
@@ -94,6 +94,9 @@ export async function sendTestEmail({
     discount_code: "[DISCOUNT-CODE]",
     cart_url: resolveCartUrl({ shop, settings }),
     unsubscribeUrl,
+    // No event stands behind a test, so {data.*} tags show as [data.field] —
+    // the same bracketed-placeholder convention as the fields above.
+    previewData: true,
   };
 
   let html;
@@ -128,7 +131,7 @@ export async function sendTestEmail({
 
   const provider = resolveProvider(settings);
   const { from, replyTo } = resolveFrom({ settings, provider });
-  const testSubject = `[Test] ${subject || "(no subject)"}`;
+  const testSubject = `[Test] ${mergeSubject(subject, ctx) || "(no subject)"}`;
 
   const result = await sendEmail(
     {

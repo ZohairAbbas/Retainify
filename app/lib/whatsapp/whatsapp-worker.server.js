@@ -270,21 +270,17 @@ async function processWhatsappJob(job) {
     return;
   }
 
-  // The connection is broken, not this message. Record it on the account so the
-  // WhatsApp page can say what happened — otherwise the merchant's only symptom
-  // is that nothing arrives, with a healthy-looking "Connected" badge above a
-  // queue quietly retrying an unauthorized token for 24 hours.
+  // The connection is broken, not this message. sendWhatsapp has already
+  // recorded it on the account for the WhatsApp page and the campaign screen to
+  // show. What matters here is the class it carries: an account error is OPS,
+  // so the job HOLDS — retried half-hourly without spending an attempt — rather
+  // than failing for good at the end of the 24h transient horizon. A merchant
+  // waiting two days on a Meta display-name review keeps their queued campaign.
   if (result.accountError) {
-    await prisma.whatsappAccount
-      .update({
-        where: { shop: job.shop },
-        data: { lastError: String(result.error || "").slice(0, 500) },
-      })
-      .catch(() => {});
-    console.error(`[whatsapp-worker] shop=${job.shop} connection error — ${result.error}`);
+    console.error(`[whatsapp-worker] shop=${job.shop} connection error, holding job ${job.id} — ${result.error}`);
   }
 
-  await markWhatsappJobFailed(job.id, result.error || "send failed");
+  await markWhatsappJobFailed(job.id, result.error || "send failed", result.errorClass);
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   sendWhatsappText,
   registerWhatsappNumber,
   syncRegistrationState,
+  sendBlockedReason,
 } from "../lib/whatsapp/index.server.js";
 import { toE164 } from "../lib/contacts/contacts.server.js";
 import { recordOptOut } from "../lib/whatsapp/optin.server.js";
@@ -114,6 +115,11 @@ export const loader = async ({ request }) => {
           webhooksSubscribed: !!account.webhooksSubscribedAt,
           tokenExpiresAt: account.tokenExpiresAt ? account.tokenExpiresAt.toISOString() : null,
           lastError: account.lastError,
+          // Meta refusing to send for the whole account — an expired token, an
+          // unregistered number, a display name awaiting review. Shown on a
+          // CONNECTED account, which is exactly when it matters: the connection
+          // looks healthy and nothing arrives.
+          sendBlocked: sendBlockedReason(account),
         }
       : null,
     whatsappEnabled: settings?.whatsappEnabled ?? false,
@@ -518,6 +524,16 @@ function WhatsappPageInner() {
                     This connection expires on{" "}
                     <strong>{new Date(account.tokenExpiresAt).toLocaleDateString()}</strong>.
                     Reconnect before then to keep sending.
+                  </div>
+                )}
+
+                {account.sendBlocked && (
+                  <div className="t-small" style={{ background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "10px 12px", borderRadius: "var(--r-2)", lineHeight: 1.5 }}>
+                    <strong>Sending is blocked.</strong> {account.sendBlocked}
+                    <div style={{ marginTop: 6 }}>
+                      Queued messages are held, not lost. Once it&rsquo;s fixed at Meta, send a
+                      test below — a successful send clears this.
+                    </div>
                   </div>
                 )}
 

@@ -19,6 +19,14 @@
  * plausible identifier before going to the database with it. An event no flow
  * lists still exits nothing — it is simply no longer rejected before anyone
  * gets to say whether they wanted it.
+ *
+ * ── Scoped by app ──────────────────────────────────────────────────────────
+ * Every Growzar app shares one internal tenant, and the same merchant often
+ * uses more than one of them with the same address. An event reported by
+ * Financify must therefore only touch Financify's flows — otherwise a Financify
+ * "setup_completed" would also end that merchant's Courierify onboarding. The
+ * internal API passes the calling app; the webhook and unsubscribe callers pass
+ * none and behave exactly as before.
  */
 import prisma from "../../db.server.js";
 import { exitEnrollment } from "./journey-queue.server.js";
@@ -36,16 +44,22 @@ export const COMMERCE_EXIT_EVENTS = ["order_placed", "unsubscribed", "cart_recov
  * @param {string} shop
  * @param {string} contactEmail
  * @param {string} event
+ * @param {{ app?: string }} [opts] limit to flows triggered by this app's events
  * @returns {Promise<number>} how many enrollments were exited
  */
-export async function evaluateExitCriteria(shop, contactEmail, event) {
+export async function evaluateExitCriteria(shop, contactEmail, event, { app } = {}) {
   if (!shop || !contactEmail) return 0;
   // Shape only. A malformed key cannot match any stored criterion anyway, so
   // this is about not issuing a query for obvious junk, not about vocabulary.
   if (!validateExternalKey(event).ok) return 0;
 
   const enrollments = await prisma.journeyEnrollment.findMany({
-    where: { shop, contactEmail, exitReason: "" },
+    where: {
+      shop,
+      contactEmail,
+      exitReason: "",
+      ...(app ? { journey: { triggerApp: app } } : {}),
+    },
     include: { journey: true },
   });
 

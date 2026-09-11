@@ -32,11 +32,13 @@ export default function TriggerPicker({
   // Commerce triggers (cart abandoned, order placed, win-back) can never fire
   // without a connected store, so they are not offered to a direct workspace.
   isShopify = true,
+  // The App event trigger only ever fires in the internal Growzar tenant.
+  isInternal = false,
 }) {
   const [galleryOpen, setGalleryOpen] = useState(false);
   const triggers = useMemo(
-    () => Object.entries(triggersFor(isShopify)).map(([id, cfg]) => ({ id, ...cfg })),
-    [isShopify],
+    () => Object.entries(triggersFor(isShopify, { isInternal })).map(([id, cfg]) => ({ id, ...cfg })),
+    [isShopify, isInternal],
   );
 
   return (

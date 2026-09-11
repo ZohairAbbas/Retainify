@@ -75,7 +75,7 @@ const VALID_SOURCES = new Set([
   "csv_import",
   "push_only",
   "journey_enrollment",
-  // A Growzar app user handed to us by that app through /internal/enroll.
+  // A Growzar app user reported to us by that app through /internal/event.
   // Distinguishable from "manual" so the internal tenant's list can be read for
   // what it is, and so an internal row is obvious if one ever turns up in a
   // merchant-scoped query.

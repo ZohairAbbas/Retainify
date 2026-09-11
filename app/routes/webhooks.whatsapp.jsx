@@ -8,7 +8,8 @@
  *
  * GET  → verification handshake (echo hub.challenge when the verify token matches).
  * POST → signed status/message events. We verify X-Hub-Signature-256 (HMAC-SHA256
- *        of the raw body with META_APP_SECRET) before trusting anything, then:
+ *        of the raw body) against every accepted app secret — META_APP_SECRET plus
+ *        WHATSAPP_WEBHOOK_EXTRA_SECRETS — before trusting anything, then:
  *
  *   statuses[].status = "delivered" → WhatsappJob.deliveredAt = now (if null)
  *   statuses[].status = "read"      → WhatsappJob.readAt      = now (if null)
@@ -19,12 +20,11 @@
  * Always returns 200 after handling (a code bug shouldn't make Meta hammer us),
  * mirroring webhooks.ses.jsx.
  */
-import { createHmac, timingSafeEqual } from "crypto";
 import prisma from "../db.server.js";
 import { recordOptOut } from "../lib/whatsapp/optin.server.js";
+import { webhookSecrets, verifyWebhookSignature } from "../lib/whatsapp/webhook-signature.server.js";
 
 const VERIFY_TOKEN = process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "";
-const APP_SECRET = process.env.META_APP_SECRET || "";
 
 const STOP_KEYWORDS = new Set(["stop", "unsubscribe", "cancel", "end", "quit", "stopall"]);
 
@@ -43,16 +43,24 @@ export const loader = async ({ request }) => {
 
 // --- POST: signed event delivery --------------------------------------------
 export const action = async ({ request }) => {
-  if (!APP_SECRET) {
-    console.error("[wa-webhook] META_APP_SECRET not set — rejecting");
+  // More than one Meta app routes events here, each signing with its own
+  // secret — see lib/whatsapp/webhook-signature.server.js for which and why.
+  const secrets = webhookSecrets();
+  if (!secrets.length) {
+    console.error("[wa-webhook] no app secret configured (META_APP_SECRET) — rejecting");
     return new Response("misconfigured", { status: 500 });
   }
 
   const raw = await request.text();
   const signature = request.headers.get("x-hub-signature-256") || "";
 
-  if (!verifySignature(raw, signature)) {
-    console.warn("[wa-webhook] signature verification failed");
+  if (!verifyWebhookSignature(raw, signature, secrets)) {
+    // Say which app it claims to be for. A run of these from one WABA is the
+    // signature of an app whose secret is missing from the accepted list —
+    // exactly how every event for weeks was lost without anyone noticing.
+    let waba = "";
+    try { waba = JSON.parse(raw)?.entry?.[0]?.id || ""; } catch { /* not JSON */ }
+    console.warn(`[wa-webhook] signature verification failed (waba=${waba || "?"}, ${secrets.length} secret(s) tried)`);
     return new Response("bad signature", { status: 401 });
   }
 
@@ -71,21 +79,6 @@ export const action = async ({ request }) => {
 
   return new Response(null, { status: 200 });
 };
-
-function verifySignature(raw, header) {
-  if (!header.startsWith("sha256=")) return false;
-  const provided = header.slice("sha256=".length);
-  const expected = createHmac("sha256", APP_SECRET).update(raw, "utf8").digest("hex");
-  // Constant-time compare; lengths must match for timingSafeEqual.
-  const a = Buffer.from(provided, "hex");
-  const b = Buffer.from(expected, "hex");
-  if (a.length !== b.length) return false;
-  try {
-    return timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
-}
 
 async function handlePayload(body) {
   const entries = Array.isArray(body?.entry) ? body.entry : [];
@@ -164,8 +157,16 @@ async function handleInbound(message, phoneNumberId) {
   if (!from) return;
 
   // Find the shop owning this phone number id via the WhatsappAccount.
+  //
+  // Connected accounts only. A number that moved between shops leaves the old
+  // row behind as `disconnected`, still carrying the same phoneNumberId, and an
+  // unfiltered findFirst could hand a STOP to the shop that no longer sends from
+  // it — recording the opt-out where it protects no one.
   const account = phoneNumberId
-    ? await prisma.whatsappAccount.findFirst({ where: { phoneNumberId }, select: { shop: true } })
+    ? await prisma.whatsappAccount.findFirst({
+        where: { phoneNumberId, status: "connected" },
+        select: { shop: true },
+      })
     : null;
   const shop = account?.shop;
 
@@ -269,7 +270,7 @@ async function handleTemplateEvent(field, value, wabaId) {
   // (or rejection) rewrite the status of every other merchant's template of the
   // same name, silently making templates sendable that Meta had never seen.
   const account = wabaId
-    ? await prisma.whatsappAccount.findFirst({ where: { wabaId }, select: { shop: true } })
+    ? await prisma.whatsappAccount.findFirst({ where: { wabaId, status: "connected" }, select: { shop: true } })
     : null;
 
   if (metaTemplateId) {

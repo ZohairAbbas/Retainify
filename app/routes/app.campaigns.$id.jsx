@@ -20,7 +20,7 @@ import {
   dispatchBroadcast,
   countUnreachableWhatsappSubscribers,
 } from "../lib/journey/broadcast.server.js";
-import { sendWhatsapp } from "../lib/whatsapp/index.server.js";
+import { sendWhatsapp, sendBlockedReason } from "../lib/whatsapp/index.server.js";
 import { toE164 } from "../lib/contacts/contacts.server.js";
 import { sendTestEmail } from "../lib/email/test-send.server.js";
 import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
@@ -51,6 +51,14 @@ function whatsappBlocker(channel, account, settings) {
   }
   if (settings?.whatsappEnabled !== true) {
     return "The WhatsApp channel is switched off. Turn it on in WhatsApp settings.";
+  }
+  // Last, because it is the one that can clear itself: every setting above is
+  // fine and Meta is still refusing the number. Scheduling now would enroll the
+  // whole audience into jobs that can only wait. The test send below stays
+  // available, and a successful one lifts this.
+  const blocked = sendBlockedReason(account);
+  if (blocked) {
+    return `${blocked} Once that's fixed, send a test from this page to confirm — a successful test clears this.`;
   }
   return "";
 }
@@ -112,8 +120,12 @@ export const loader = async ({ request, params }) => {
         : !!waAccount &&
           waAccount.status === "connected" &&
           !!waAccount.registeredAt &&
-          settings?.whatsappEnabled === true,
+          settings?.whatsappEnabled === true &&
+          !sendBlockedReason(waAccount),
     whatsappBlocker: whatsappBlocker(channel, waAccount, settings),
+    // What a WhatsApp recipient sees the message come from. The email sender
+    // address means nothing on this channel.
+    whatsappFrom: waAccount?.displayPhoneNumber || "",
     // `components` stays on the row for the preview: header, footer and buttons
     // are as much of the message as the body is.
     waTemplates: waTemplates.map((t) => ({
@@ -402,7 +414,7 @@ export default function CampaignEditor() {
     campaign, step, segmentChoices, audienceCount,
     senderName, sendingFrom, testEmailDefault,
     channel, waTemplates = [], whatsappBlocker: waBlocker, unreachableSubscribers = 0,
-    isShopify = true,
+    isShopify = true, whatsappFrom = "",
   } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
@@ -434,6 +446,29 @@ export default function CampaignEditor() {
     ? [...new Set([...(selectedTemplate.bodyText || "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => m[1]))]
         .sort((a, b) => Number(a) - Number(b))
     : [];
+
+  /**
+   * Why Send can't be pressed yet, or "". One answer per channel.
+   *
+   * This used to be `!subject.trim()` for every campaign. A WhatsApp campaign
+   * has no subject, so its Send button could never enable — the server-side
+   * check had been made channel-aware and this one had not. Mirrors
+   * whatsappStepProblem on the server, which still has the final say.
+   */
+  const notReady = isWhatsapp
+    ? waBlocker ||
+      (!waTemplateName
+        ? "Pick an approved template first."
+        : !selectedTemplate
+          ? "That template is no longer approved. Pick another."
+          : templateVars.some((n) => !String(waVariables[n] ?? "").trim())
+            ? "Fill in every template variable first."
+            : selectedTemplate.imageHeader && !String(waMediaUrl || "").trim()
+              ? "This template needs a header image URL."
+              : "")
+    : subject.trim()
+      ? ""
+      : "Add a subject line first.";
 
   const sent = !!campaign.dispatchedAt;
   const busy = fetcher.state !== "idle";
@@ -559,7 +594,8 @@ export default function CampaignEditor() {
               <button
                 className="btn btn-primary"
                 onClick={() => setConfirm(true)}
-                disabled={busy || !subject.trim() || count === 0}
+                disabled={busy || !!notReady || count === 0}
+                title={notReady || (count === 0 ? "Nobody in this audience would receive it." : undefined)}
               >
                 <Icons.Send size={13} /> {when === "later" ? "Schedule" : "Send now"}
               </button>
@@ -595,7 +631,7 @@ export default function CampaignEditor() {
               disabled={sent}
               onChange={(e) => { setSegmentKey(e.target.value); save({ segmentKey: e.target.value }); }}
             >
-              <option value="">Everyone subscribed</option>
+              <option value="">{isWhatsapp ? "Everyone opted in to WhatsApp" : "Everyone subscribed"}</option>
               {segmentChoices.map((s) => (
                 <option key={s.key} value={s.key}>{s.name}</option>
               ))}
@@ -849,12 +885,18 @@ export default function CampaignEditor() {
               <div className="rt-rail-row-right"><span className="rt-rail-row-val">{count.toLocaleString()}</span></div>
             </div>
             <div className="rt-rail-row">
-              <div className="rt-rail-row-left"><Icons.Mail size={14} /><span>From</span></div>
-              <div className="rt-rail-row-right"><span className="rt-rail-row-val">{sendingFrom}</span></div>
+              <div className="rt-rail-row-left">
+                {isWhatsapp ? <Icons.Whatsapp size={14} /> : <Icons.Mail size={14} />}
+                <span>From</span>
+              </div>
+              <div className="rt-rail-row-right">
+                <span className="rt-rail-row-val">{isWhatsapp ? whatsappFrom || "—" : sendingFrom}</span>
+              </div>
             </div>
             <div className="field-help" style={{ marginTop: 14 }}>
-              Every recipient gets a one-click unsubscribe link, and anyone already
-              unsubscribed is skipped automatically.
+              {isWhatsapp
+                ? "Recipients can reply STOP to opt out, and anyone who has opted out or blocked your number is skipped automatically."
+                : "Every recipient gets a one-click unsubscribe link, and anyone already unsubscribed is skipped automatically."}
             </div>
           </section>
         </div>

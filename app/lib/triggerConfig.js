@@ -39,17 +39,22 @@ export const TRIGGER_CONFIG = {
     desc: "Starts when a customer has not purchased in 90 days.",
     subLabel: "Lifecycle",
   },
-  // Enrolment comes from outside the app: another service POSTs to
-  // /internal/enroll naming this flow by its journeyKey. Not marked `commerce`,
-  // so a workspace with no store can choose it — which is the whole point, since
-  // the internal Growzar tenant is exactly such a workspace.
+  // Enrolment comes from another Growzar app: it reports a lifecycle event
+  // ("installed", "setup_completed"…) to /internal/event, and every published
+  // flow subscribed to that (app, event) pair enrolls the person.
+  //
+  // `internalOnly` because the API only ever acts on the internal Growzar
+  // tenant. Offered to any other workspace it would let someone publish a flow
+  // that can never fire — the failure `commerce` exists to prevent, from the
+  // other direction.
   api_event: {
-    label: "Enrolled by API",
+    label: "App event",
     tint: "trigger",
     icon: "Trigger",
-    desc: "Starts when another app enrolls someone through the internal API.",
-    subLabel: "External",
-    requiresJourneyKey: true,
+    desc: "Starts when a Growzar app reports an event, like an install.",
+    subLabel: "Growzar app",
+    requiresAppEvent: true,
+    internalOnly: true,
   },
   segment_entered: {
     label: "Entered a segment",
@@ -77,21 +82,41 @@ export const TRIGGER_CONFIG = {
 /**
  * Triggers a workspace can actually choose.
  * @param {boolean} isShopify
+ * @param {{ isInternal?: boolean }} [opts] whether this is the internal Growzar tenant
  */
-export function triggersFor(isShopify) {
+export function triggersFor(isShopify, { isInternal = false } = {}) {
   return Object.fromEntries(
-    Object.entries(TRIGGER_CONFIG).filter(([, cfg]) => isShopify || !cfg.commerce),
+    Object.entries(TRIGGER_CONFIG).filter(
+      ([, cfg]) => (isShopify || !cfg.commerce) && (isInternal || !cfg.internalOnly),
+    ),
   );
 }
 
 /**
- * Shape check for a flow's external key and for an event key sent to
- * /internal/event. Both are identifiers another codebase hardcodes, so the
- * grammar is deliberately narrow: lowercase, digits and underscores.
+ * The lifecycle events every Growzar app is expected to send. Offered as
+ * suggestions in the builder, and "uninstalled" carries a guarantee of its own
+ * (see app/lib/internal/events.server.js). Not a whitelist — an app may send
+ * events of its own, and a flow may subscribe to them.
+ */
+export const STANDARD_APP_EVENTS = [
+  { value: "installed", label: "Installed the app" },
+  { value: "setup_completed", label: "Finished setup" },
+  { value: "inactive", label: "Went inactive" },
+  { value: "uninstalled", label: "Uninstalled the app" },
+];
+
+/** Always exits every one of the sending app's flows for that person. */
+export const UNINSTALL_EVENT = "uninstalled";
+
+/**
+ * Shape check for the app and event names sent to /internal/event, and for the
+ * app/event a flow subscribes to. They are identifiers another codebase
+ * hardcodes, so the grammar is deliberately narrow: lowercase, digits and
+ * underscores.
  *
- * Rejects rather than repairs. Silently slugifying "Courierify Onboarding" into
- * "courierify_onboarding" would leave the calling app posting the string it was
- * given and getting no enrollments, with nothing anywhere saying why. An error
+ * Rejects rather than repairs. Silently slugifying "Setup Completed" into
+ * "setup_completed" on one side would leave the calling app posting the string
+ * it was given and matching nothing, with nothing anywhere saying why. An error
  * at the moment of typing costs one correction; a silent fix costs a debugging
  * session in someone else's repo.
  *
@@ -106,7 +131,7 @@ export function validateExternalKey(raw, label = "Key") {
   if (!/^[a-z0-9_]+$/.test(key)) {
     return {
       ok: false,
-      error: `${label} can use lowercase letters, numbers and underscores only — for example courierify_onboarding.`,
+      error: `${label} can use lowercase letters, numbers and underscores only — for example setup_completed.`,
     };
   }
   return { ok: true, key };

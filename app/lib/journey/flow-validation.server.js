@@ -21,6 +21,7 @@
  * fixing a step, republishing, and being told about the shape.
  */
 import prisma from "../../db.server.js";
+import { isConfiguredApp } from "../internal/apps.server.js";
 import {
   loadGraph,
   validateGraph,
@@ -83,15 +84,31 @@ export async function validateFlowForPublish(journeyId) {
     errors.push({ message: "Pick the segment that starts this flow." });
   }
 
-  // An API-triggered flow with no key cannot be named by the app that is meant
-  // to enroll into it: /internal/enroll resolves the flow by journeyKey, so this
-  // would publish something nothing can reach.
-  if (journey.trigger === "api_event" && !journey.journeyKey) {
-    errors.push({
-      message: "Give this flow a key so the calling app can enroll people into it.",
-    });
-  }
+  // An App event flow is started by exactly one (app, event) pair. Without
+  // both, or with an app that has no secret and so can never call in, it would
+  // publish as a flow nothing can start.
+  if (journey.trigger === "api_event") {
+    if (!journey.triggerApp) {
+      errors.push({ message: "Choose which Growzar app's event starts this flow." });
+    } else if (!isConfiguredApp(journey.triggerApp)) {
+      errors.push({
+        message: `The app "${journey.triggerApp}" isn't configured on the server, so it can't send events. Add its INTERNAL_APP_SECRET first.`,
+      });
+    }
+    if (!journey.triggerEvent) {
+      errors.push({ message: "Choose the event that starts this flow, e.g. installed." });
+    }
 
+    // Not wrong, but almost never meant: the event that starts the flow would
+    // also end it, so anyone it re-enrolls leaves again on the same call.
+    let exitsOn = [];
+    try { exitsOn = JSON.parse(journey.exitCriteria || "[]"); } catch { exitsOn = []; }
+    if (journey.triggerEvent && exitsOn.includes(journey.triggerEvent)) {
+      warnings.push({
+        message: `"${journey.triggerEvent}" both starts and ends this flow. It will end the flow for anyone already in it, then start it again.`,
+      });
+    }
+  }
 
   // ── Shape ────────────────────────────────────────────────────────────────
   const graph = await loadGraph(journeyId);

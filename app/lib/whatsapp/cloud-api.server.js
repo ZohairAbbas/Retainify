@@ -10,6 +10,8 @@
  * Both return the canonical SendWhatsappResult. Permanent recipient errors set
  * `invalid` so the worker can suppress the number instead of retrying.
  */
+import { OPS, PERMANENT, TRANSIENT } from "../journey/failure-policy.server.js";
+
 const GRAPH_VERSION = process.env.WHATSAPP_GRAPH_VERSION || "v21.0";
 
 // Meta error codes that mean the recipient can't receive messages — retrying
@@ -21,12 +23,24 @@ const PERMANENT_RECIPIENT_CODES = new Set([131026, 131049, 131051, 131053]);
 // is rejected and a template is required. Transient, not a permanent failure.
 const REENGAGEMENT_CODE = 131047;
 
-// Failures of the CONNECTION rather than of one message. Retrying these across
-// the 24h horizon is pure noise: every send for the shop will fail identically
-// until a human reconnects or registers the number, and nothing in the app says
-// so unless the account row is marked. (190 expired/revoked token, 200 and 10
-// missing permission, 133010 number never registered for the Cloud API.)
-const ACCOUNT_ERROR_CODES = new Set([190, 200, 10, 133010]);
+// Failures of the CONNECTION rather than of one message. Every send for the
+// shop fails identically until a human fixes something at Meta, and nothing in
+// the app says so unless the account row is marked. (190 expired/revoked token,
+// 200 and 10 missing permission, 133010 number never registered for the Cloud
+// API, 131037 a WhatsApp-provided +1 555 number whose display name Meta has
+// not yet approved.)
+//
+// These classify as OPS, not TRANSIENT. The difference is what happens to a
+// queued campaign while the merchant waits on Meta: TRANSIENT retries for 24h
+// and then fails the job for good, so a display-name review that takes two days
+// silently discards every message. OPS holds the job without spending its retry
+// budget, and the queue is still intact when the fix lands — the same treatment
+// a suspended email key already gets.
+const ACCOUNT_ERROR_CODES = new Set([190, 200, 10, 133010, 131037]);
+
+// 131037's text names the problem but not the fix, and "WhatsApp provided
+// number" reads like our jargon rather than Meta's.
+const DISPLAY_NAME_CODE = 131037;
 
 /**
  * Low-level POST to the messages endpoint with shared error handling.
@@ -57,12 +71,19 @@ async function postMessage(phoneNumberId, accessToken, body) {
         message = `WhatsApp connection is no longer authorized (${message}). Reconnect your WhatsApp Business account.`;
       } else if (code === 133010) {
         message = "This number isn't registered for the Cloud API yet. Register it on the WhatsApp page.";
+      } else if (code === DISPLAY_NAME_CODE) {
+        message =
+          "Meta won't let this number send yet: it's a free WhatsApp-provided (+1 555) number, and those need their display name reviewed and approved first. Submit the display name in WhatsApp Manager, or connect a number you own.";
       }
+      const accountError = ACCOUNT_ERROR_CODES.has(code);
+      const invalid = PERMANENT_RECIPIENT_CODES.has(code);
       return {
         ok: false,
         error: message,
-        invalid: PERMANENT_RECIPIENT_CODES.has(code),
-        accountError: ACCOUNT_ERROR_CODES.has(code),
+        invalid,
+        accountError,
+        errorClass: accountError ? OPS : invalid ? PERMANENT : TRANSIENT,
+        errorCode: code || undefined,
       };
     }
 

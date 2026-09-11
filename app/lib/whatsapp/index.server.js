@@ -48,7 +48,7 @@ export async function sendWhatsapp(message, { shop, account } = {}) {
   const creds = await resolveCreds(shop, account);
   if (creds.error) return { ok: false, error: creds.error };
 
-  return sendViaMeta({
+  const result = await sendViaMeta({
     phoneNumberId: creds.phoneNumberId,
     accessToken: creds.accessToken,
     to: message.to,
@@ -56,6 +56,8 @@ export async function sendWhatsapp(message, { shop, account } = {}) {
     language: message.language,
     components: message.components,
   });
+  await recordSendOutcome(shop, result);
+  return result;
 }
 
 /**
@@ -85,12 +87,61 @@ export async function sendWhatsappText(message, { shop, account } = {}) {
   const creds = await resolveCreds(shop, account);
   if (creds.error) return { ok: false, error: creds.error };
 
-  return sendSessionText({
+  const result = await sendSessionText({
     phoneNumberId: creds.phoneNumberId,
     accessToken: creds.accessToken,
     to: message.to,
     text: message.text,
   });
+  await recordSendOutcome(shop, result);
+  return result;
+}
+
+/**
+ * Prefix marking a lastError written because Meta refused to send for the
+ * whole account. lastError also carries connect-time notes (a failed webhook
+ * subscription, a failed token exchange), and those have their own panels and
+ * must survive a successful send — so only a message carrying this prefix is
+ * shown as "sending blocked" and only such a message is cleared by a success.
+ */
+export const SEND_BLOCKED_PREFIX = "Sending blocked: ";
+
+/**
+ * Keep the account's "sending blocked" note in step with reality.
+ *
+ * Recorded here, in the seam, rather than by each caller, because every send
+ * path meets the same wall: the worker, the settings-page test and the
+ * campaign test. Previously only the worker wrote it, so a merchant pressing
+ * "Send test" learned about the block in a toast that vanished and the page
+ * went on showing a healthy channel.
+ *
+ * A success clears it, which is the point of the campaign page telling a
+ * merchant to send a test once they have fixed things at Meta: that test is
+ * what lifts the block from the screen.
+ */
+async function recordSendOutcome(shop, result) {
+  if (!shop) return;
+  if (result?.accountError) {
+    await prisma.whatsappAccount
+      .updateMany({
+        where: { shop },
+        data: { lastError: `${SEND_BLOCKED_PREFIX}${String(result.error || "").slice(0, 450)}` },
+      })
+      .catch(() => {});
+  } else if (result?.ok) {
+    await prisma.whatsappAccount
+      .updateMany({
+        where: { shop, lastError: { startsWith: SEND_BLOCKED_PREFIX } },
+        data: { lastError: "" },
+      })
+      .catch(() => {});
+  }
+}
+
+/** The account's current send block in plain words, or "". */
+export function sendBlockedReason(account) {
+  const note = String(account?.lastError || "");
+  return note.startsWith(SEND_BLOCKED_PREFIX) ? note.slice(SEND_BLOCKED_PREFIX.length) : "";
 }
 
 /**

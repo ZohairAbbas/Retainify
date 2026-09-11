@@ -21,9 +21,42 @@
  * sending, and a flow with an email step would have hard-bounced every message
  * against our own sending domain.
  */
-import { upsertContact } from "../contacts/contacts.server.js";
+import prisma from "../../db.server.js";
+import { upsertContact, toE164 } from "../contacts/contacts.server.js";
 import { recordOptIn } from "../whatsapp/optin.server.js";
 import { INTERNAL_SHOP } from "./tenant.js";
+
+/**
+ * Has this number ever opted out of the internal tenant's WhatsApp?
+ *
+ * recordOptIn treats every call as a fresh opt-in: it re-subscribes the row and
+ * deletes the suppression. That is right when a person opts in themselves — an
+ * explicit re-opt-in wins — and wrong here, where the "opt-in" is a server
+ * repeating a number it already sent. Apps send events for the same person
+ * again and again (every "inactive"), so without this a user who replied STOP
+ * would be quietly re-subscribed by the next event about them.
+ *
+ * So the API may create a subscription or refresh one that is still active, but
+ * never revive one that was stopped. A suppression row, or a subscription in any
+ * state other than "subscribed", means the person said no, and the API leaves it
+ * exactly as it is.
+ */
+async function phoneHasOptedOut(rawPhone) {
+  const check = toE164(rawPhone);
+  // An unusable number is recordOptIn's to reject, with its own log line.
+  if (!check.ok) return false;
+  const [sub, suppressed] = await Promise.all([
+    prisma.whatsappSubscription.findUnique({
+      where: { shop_phoneNumber: { shop: INTERNAL_SHOP, phoneNumber: check.phone } },
+      select: { status: true },
+    }),
+    prisma.whatsappSuppression.findUnique({
+      where: { shop_phoneNumber: { shop: INTERNAL_SHOP, phoneNumber: check.phone } },
+      select: { id: true },
+    }),
+  ]);
+  return Boolean(suppressed) || (Boolean(sub) && sub.status !== "subscribed");
+}
 
 /** Same grammar the rest of the app validates addresses with. */
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
@@ -77,10 +110,10 @@ export async function upsertInternalContact({ email, name, phone, app }) {
   });
 
   let whatsappOptIn = false;
-  if (phone && contact) {
+  if (phone && contact && !(await phoneHasOptedOut(phone))) {
     // recordOptIn does the whole job — normalises to E.164, upserts the
-    // subscription, clears any stale suppression, and writes the phone back
-    // onto the contact. It returns null on a number Meta could never deliver
+    // subscription and writes the phone back onto the contact. The guard above
+    // is what keeps its suppression-clearing from ever undoing a STOP. It returns null on a number Meta could never deliver
     // to, which must not fail the email enrollment that is actually being asked
     // for here.
     const sub = await recordOptIn({

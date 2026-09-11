@@ -121,7 +121,7 @@ export async function archiveJourney(journeyId) {
  * default mints one. Never generate a key for a step that arrived with one, or
  * that step silently detaches from its own send history.
  */
-export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, entryFilters, steps, edges, triggerSegmentKey, trigger, journeyKey }) {
+export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria, entryFilters, steps, edges, triggerSegmentKey, trigger, triggerApp, triggerEvent }) {
   const journey = await prisma.journey.findUnique({ where: { id: journeyId } });
   if (!journey) return null;
 
@@ -407,20 +407,20 @@ export async function saveDraft(journeyId, { name, entryFrequency, exitCriteria,
           // Force one fresh enrollment pass with the new key.
           lastEnrollmentHash: null,
         } : {}),
-        // The external name an api_event flow is enrolled by. undefined leaves
-        // it alone; null clears it. Empty string is treated as null so the
-        // unique index sees "no key" rather than a second flow claiming "".
-        ...(journeyKey !== undefined ? { journeyKey: journeyKey || null } : {}),
+        // The (app, event) an api_event flow subscribes to. undefined leaves a
+        // field alone; null clears it.
+        ...(triggerApp !== undefined ? { triggerApp: triggerApp || null } : {}),
+        ...(triggerEvent !== undefined ? { triggerEvent: triggerEvent || null } : {}),
         // Allow changing the trigger itself from the inspector. When
         // switching away from segment_entered, also wipe the segment key
         // so we don't keep a dangling reference.
         ...(trigger !== undefined ? {
           trigger,
           ...(trigger !== "segment_entered" ? { triggerSegmentKey: null } : {}),
-          // Same reasoning for the external key: a flow that is no longer
-          // API-triggered must not keep answering to its old journeyKey, or the
-          // calling app goes on enrolling into a flow that changed underneath it.
-          ...(trigger !== "api_event" ? { journeyKey: null } : {}),
+          // Same reasoning for the app event: a flow that is no longer
+          // event-triggered must stop answering to its old (app, event), or the
+          // next install would enroll people into a flow that changed underneath it.
+          ...(trigger !== "api_event" ? { triggerApp: null, triggerEvent: null } : {}),
           lastEnrollmentHash: null,
         } : {}),
         draftVersion: journey.draftVersion + 1,

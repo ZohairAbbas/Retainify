@@ -196,8 +196,9 @@ function reportNextSteps(settings) {
         "     damage their deliverability too.",
     );
   }
-  console.log("  2. Build and publish a flow with trigger \"api_event\" and a journeyKey.");
-  console.log("  3. Set INTERNAL_APP_SECRET_<APP> for each calling app.");
+  console.log("  2. Set INTERNAL_APP_SECRET_<APP> for each calling app and restart —");
+  console.log("     the flow builder's app list is read from those variables.");
+  console.log("  3. Build a flow with the \"App event\" trigger, choose the app and event, publish.");
 }
 
 main()

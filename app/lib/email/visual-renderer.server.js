@@ -38,14 +38,78 @@ function escapeAttr(s) {
   return String(s || "").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-function applyMergeTags(html, ctx) {
+const STANDARD_TAG_RE = /\{(first_name|last_name|store_name|discount_code|cart_url|store_url)\}/g;
+
+/**
+ * {data.key} and {data.key|fallback} — fields another Growzar app sent with the
+ * event that started the flow (see app/lib/internal/events.server.js). The key
+ * grammar matches what /internal/event accepts, so any field a caller can send
+ * is addressable and nothing else looks like a tag.
+ */
+const DATA_TAG_RE = /\{data\.([a-z0-9_]{1,64})(?:\|([^{}]*))?\}/g;
+
+/** Full HTML escape — unlike escapeAttr, `&` and `'` too. */
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * Substitute merge tags.
+ *
+ * The standard tags are inserted as they always have been. `data` values are
+ * escaped unless `escape: false`: they originate in another app and are often
+ * text a person typed — a store name, a business name — and inserting them raw
+ * would let one of those carry markup into an email we send under our name.
+ * A fallback is written by the flow's author and is inserted as written.
+ *
+ * Data tags are resolved after the standard ones, so a data value that happens
+ * to contain "{first_name}" arrives as that literal text rather than being
+ * substituted a second time.
+ *
+ * @param {string} html
+ * @param {object} ctx
+ * @param {{ escape?: boolean }} [opts]
+ */
+function applyMergeTags(html, ctx, { escape = true } = {}) {
   if (!html) return { out: "", used: [] };
   const used = [];
-  const out = String(html).replace(/\{(first_name|last_name|store_name|discount_code|cart_url|store_url)\}/g, (_, key) => {
-    used.push(key);
-    return ctx[key] != null ? String(ctx[key]) : "";
-  });
+  const out = String(html)
+    .replace(STANDARD_TAG_RE, (_, key) => {
+      used.push(key);
+      return ctx[key] != null ? String(ctx[key]) : "";
+    })
+    .replace(DATA_TAG_RE, (_, key, fallback) => {
+      used.push(`data.${key}`);
+      // A test send has no event behind it; show where the field lands.
+      if (ctx.previewData) return `[data.${key}]`;
+      const value = ctx.data?.[key];
+      if (value === undefined || value === null || value === "") return fallback ?? "";
+      return escape ? escapeHtml(value) : String(value);
+    });
   return { out, used };
+}
+
+/**
+ * Merge tags in a subject line.
+ *
+ * Subjects were never merged at all, so "{first_name}" in a subject was sent
+ * literally — to merchants' customers as well as internally. Plain text, so no
+ * escaping; line breaks are removed because a subject is a header, and a value
+ * carrying one could otherwise break out of it.
+ *
+ * @param {string} subject
+ * @param {object} ctx
+ * @returns {string}
+ */
+export function mergeSubject(subject, ctx) {
+  return applyMergeTags(subject, ctx, { escape: false })
+    .out.replace(/[\r\n]+/g, " ")
+    .trim();
 }
 
 // Plain-text merge-tag substitution for fields that aren't HTML (logo text,

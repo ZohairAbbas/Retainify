@@ -13,7 +13,7 @@ import {
   resolveStoreUrl,
   sendingDomainTracksClicks,
 } from "../email/index.server.js";
-import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml } from "../email/visual-renderer.server.js";
+import { renderVisualEmail, renderCustomHtmlEmail, brandingFooterHtml, mergeSubject } from "../email/visual-renderer.server.js";
 import { buildTextPart } from "../email/text.server.js";
 import { buildUnsubscribeUrl, listUnsubscribeHeaders } from "../tracking/links.server.js";
 import { createDiscountCode, classifyDiscountError } from "../shopify/discounts.server.js";
@@ -219,6 +219,9 @@ async function processJourneyJob(job) {
     discount_code: discountCode || "",
     cart_url: recoveryUrl || "",
     unsubscribeUrl,
+    // {data.*}: fields a Growzar app sent with the event that started this
+    // enrollment. Absent for every other trigger, which renders those tags empty.
+    data: payload?.data && typeof payload.data === "object" ? payload.data : {},
   };
 
   const html = emailMode === "html"
@@ -232,7 +235,10 @@ async function processJourneyJob(job) {
       })
     : await renderVisualEmail({ blocks: parsedBlocks, brand, ctx, stepId: step.id, shop });
 
-  const subject = step.subject || defaultSubject(journey.trigger, step.stepNumber, settings.senderName);
+  const subject = mergeSubject(
+    step.subject || defaultSubject(journey.trigger, step.stepNumber, settings.senderName),
+    ctx,
+  );
   const provider = resolveProvider(settings);
   const { from, replyTo } = resolveFrom({ settings, provider });
 

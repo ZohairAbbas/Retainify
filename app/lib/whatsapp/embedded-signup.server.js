@@ -104,17 +104,78 @@ export async function fetchPhoneNumber(accessToken, wabaId) {
  */
 export async function subscribeAppToWaba(accessToken, wabaId) {
   if (!wabaId) return { ok: false, error: "missing wabaId" };
+
+  // Route this account's events to Retainify by name rather than relying on the
+  // app's own callback URL. The app-wide callback is set for another product,
+  // and changing it would redirect that product's traffic; a per-account
+  // override (Meta: "Webhook overrides") moves only the accounts connected here.
+  //
+  // Refuse rather than fall back to a plain subscription when this can't be
+  // built: a plain one "succeeds" and delivers every event to the other
+  // product, which is exactly the silent failure this exists to end.
+  const callback = webhookCallbackUrl();
+  const verifyToken = String(process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || "").trim();
+  if (!callback || !verifyToken) {
+    return {
+      ok: false,
+      error:
+        "Can't route WhatsApp events to Retainify: SHOPIFY_APP_URL and WHATSAPP_WEBHOOK_VERIFY_TOKEN must both be set on the server.",
+    };
+  }
+
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${wabaId}/subscribed_apps`;
   try {
+    // Meta verifies the override URL with a GET challenge before accepting it,
+    // answered by the loader in routes/webhooks.whatsapp.jsx with this token.
     const res = await fetch(url, {
       method: "POST",
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ override_callback_uri: callback, verify_token: verifyToken }),
     });
     const json = await res.json().catch(() => ({}));
     if (!res.ok || json?.success === false) {
-      return { ok: false, error: json?.error?.message || `HTTP ${res.status}` };
+      return { ok: false, error: json?.error?.error_user_msg || json?.error?.message || `HTTP ${res.status}` };
     }
-    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+
+  // Trust the account's recorded state, not the POST's reply. A success that
+  // did not record the override would look connected and deliver nothing here.
+  const check = await readOverride(accessToken, wabaId, callback);
+  if (!check.ok) return check;
+  return { ok: true, callback };
+}
+
+/**
+ * Where this deployment receives WhatsApp events.
+ * @returns {string} "" when the app has no public URL configured.
+ */
+export function webhookCallbackUrl(env = process.env) {
+  const base = String(env.SHOPIFY_APP_URL || env.APP_PUBLIC_URL || "")
+    .trim()
+    .replace(/\/+$/, "");
+  return base ? `${base}/webhooks/whatsapp` : "";
+}
+
+/**
+ * Confirm Meta holds an override on this account pointing at `callback`.
+ * @returns {Promise<{ ok: boolean, error?: string }>}
+ */
+async function readOverride(accessToken, wabaId, callback) {
+  try {
+    const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${wabaId}/subscribed_apps`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok) return { ok: false, error: json?.error?.message || `HTTP ${res.status}` };
+    const routed = (json?.data || []).some((app) => app?.override_callback_uri === callback);
+    return routed
+      ? { ok: true }
+      : {
+          ok: false,
+          error: `Meta accepted the subscription but isn't routing this account's events to ${callback}.`,
+        };
   } catch (err) {
     return { ok: false, error: err.message };
   }

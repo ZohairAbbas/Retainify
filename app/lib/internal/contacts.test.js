@@ -39,15 +39,15 @@ test("a .internal placeholder address is refused", () => {
 });
 
 test("an external key accepts the documented grammar", () => {
-  const r = validateExternalKey("courierify_onboarding", "journeyKey");
+  const r = validateExternalKey("setup_completed", "event");
   assert.equal(r.ok, true);
-  assert.equal(r.key, "courierify_onboarding");
+  assert.equal(r.key, "setup_completed");
 });
 
 test("an external key is not silently slugified", () => {
-  // Repairing this would leave the calling app posting "Courierify Onboarding"
-  // forever, enrolling nobody, with no error to go on.
-  const r = validateExternalKey("Courierify Onboarding", "journeyKey");
+  // Repairing this would leave the calling app posting "Setup Completed"
+  // forever, matching no flow, with no error to go on.
+  const r = validateExternalKey("Setup Completed", "event");
   assert.equal(r.ok, false);
   assert.match(r.error, /lowercase/);
 });

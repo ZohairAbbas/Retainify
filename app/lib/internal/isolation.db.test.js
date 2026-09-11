@@ -23,11 +23,11 @@ import { INTERNAL_SHOP } from "./tenant.js";
 const MERCHANT = "__test__merchant.myshopify.com";
 const INTERNAL_EMAIL = "isolation.internal@example.com";
 const MERCHANT_EMAIL = "isolation.merchant@example.com";
-const KEY = "test_isolation_flow";
+const APP = "testisolation";
 
 async function clear() {
   await prisma.journey.deleteMany({
-    where: { OR: [{ shop: MERCHANT }, { shop: INTERNAL_SHOP, journeyKey: KEY }] },
+    where: { OR: [{ shop: MERCHANT }, { shop: INTERNAL_SHOP, triggerApp: APP }] },
   });
   await prisma.contact.deleteMany({
     where: {
@@ -52,7 +52,8 @@ test.before(async () => {
       shop: INTERNAL_SHOP,
       name: "Internal onboarding",
       trigger: "api_event",
-      journeyKey: KEY,
+      triggerApp: APP,
+      triggerEvent: "installed",
       status: "published",
     },
   });
@@ -85,7 +86,7 @@ test("searching cannot reach across into the internal tenant", async () => {
 test("a merchant's flow list does not include internal flows", async () => {
   const flows = await prisma.journey.findMany({
     where: { shop: MERCHANT, archivedAt: null },
-    select: { journeyKey: true },
+    select: { id: true },
   });
   assert.equal(flows.length, 0);
 });

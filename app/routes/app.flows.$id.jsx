@@ -9,7 +9,9 @@ import { sendTestEmail } from "../lib/email/test-send.server.js";
 import { resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { getJourneyStepStats } from "../lib/journey/journey-analytics.server.js";
 import Icons from "../components/ui/Icons.jsx";
-import { TRIGGER_CONFIG, STATUS_PILL, validateExternalKey } from "../lib/triggerConfig.js";
+import { TRIGGER_CONFIG, STATUS_PILL, validateExternalKey, STANDARD_APP_EVENTS, UNINSTALL_EVENT } from "../lib/triggerConfig.js";
+import { isInternalShop } from "../lib/internal/tenant.js";
+import { configuredApps } from "../lib/internal/apps.server.js";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
 import { flowFilterFieldsFor, OPERATORS } from "../lib/segments/fields.server.js";
 import { listTagsForShop } from "../lib/contacts/tags.server.js";
@@ -168,6 +170,10 @@ export const loader = async ({ request, params }) => {
     // Gates the commerce triggers in the picker and the commerce channels
     // below — neither can fire without a connected store.
     isShopify: ctx.isShopify,
+    // The App event trigger and its app dropdown exist only in the internal
+    // Growzar tenant — see triggersFor. Names only; never the secrets.
+    isInternal: isInternalShop(shop),
+    internalApps: isInternalShop(shop) ? configuredApps() : [],
     segmentChoices,
     triggerSegmentCount,
     whatsappTemplates,
@@ -340,11 +346,6 @@ export const action = async ({ request, params }) => {
         // A validation error that knows how to explain itself says so; anything
         // else is the entry-filter tree, the only other thing here that rejects.
         if (err.userMessage) return { ok: false, saveError: err.userMessage };
-        // A duplicate flow key trips the unique index rather than our own check,
-        // because "is this key free" is only answerable at write time.
-        if (err.code === "P2002") {
-          return { ok: false, saveError: "Another flow already uses that flow key. Pick a different one." };
-        }
         return { ok: false, saveError: "Those flow filters aren't valid. Remove the last one you added and try again." };
       }
     }
@@ -440,22 +441,23 @@ async function persistDraft({ id, journey, fd }) {
     const rawTrigger = fd.get("trigger");
     const trigger = rawTrigger === null ? undefined : String(rawTrigger);
 
-    // The external name an api_event flow is enrolled by. Same absent/empty
-    // convention as the two above. Validated rather than repaired: the calling
-    // app hardcodes this string, so quietly rewriting it here would leave that
-    // app posting one key while we stored another.
-    const rawJourneyKey = fd.get("journeyKey");
-    let journeyKey;
-    if (rawJourneyKey !== null) {
-      const raw = String(rawJourneyKey);
-      if (!raw.trim()) {
-        journeyKey = null;
-      } else {
-        const check = validateExternalKey(raw, "Flow key");
-        if (!check.ok) throw Object.assign(new Error(check.error), { userMessage: check.error });
-        journeyKey = check.key;
-      }
-    }
+    // The (app, event) an api_event flow subscribes to. Same absent/empty
+    // convention as the two above. Shape-checked rather than repaired: the
+    // sending app posts these exact strings, so quietly rewriting one here would
+    // leave the flow listening for something that never arrives. Whether the app
+    // is actually configured is a publish-time question — a draft may be saved
+    // before its app's secret exists.
+    const readKey = (field, label) => {
+      const raw = fd.get(field);
+      if (raw === null) return undefined;
+      const value = String(raw);
+      if (!value.trim()) return null;
+      const check = validateExternalKey(value, label);
+      if (!check.ok) throw Object.assign(new Error(check.error), { userMessage: check.error });
+      return check.key;
+    };
+    const triggerApp = readKey("triggerApp", "App");
+    const triggerEvent = readKey("triggerEvent", "Event");
 
     // The tree, flattened to preorder steps plus index edges. Order matters:
     // stepNumber is assigned from it, and the edges are positions into it.
@@ -540,11 +542,11 @@ async function persistDraft({ id, journey, fd }) {
         };
     });
 
-    await saveDraft(id, { name, entryFrequency, exitCriteria, entryFilters, steps: stepsForSave, edges, triggerSegmentKey, trigger, journeyKey });
+    await saveDraft(id, { name, entryFrequency, exitCriteria, entryFilters, steps: stepsForSave, edges, triggerSegmentKey, trigger, triggerApp, triggerEvent });
 }
 
 export default function FlowBuilder() {
-  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [], testEmailDefault = "", sendingFromAddress = "", isShopify = true, filterFields = [], filterOperators = {}, filterTags = [] } = useLoaderData();
+  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [], testEmailDefault = "", sendingFromAddress = "", isShopify = true, isInternal = false, internalApps = [], filterFields = [], filterOperators = {}, filterTags = [] } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -554,10 +556,10 @@ export default function FlowBuilder() {
   const [entryFrequency, setEntryFrequency] = useState(journey.entryFrequency || "no_reentry");
   const [exitCriteria, setExitCriteria] = useState(journey.exitCriteria || []);
   const [triggerSegmentKey, setTriggerSegmentKey] = useState(journey.triggerSegmentKey || "");
-  // The name another app enrolls into this flow by. Only meaningful for
-  // api_event flows; kept in state regardless so switching trigger back and
-  // forth does not lose what was typed before the save.
-  const [journeyKey, setJourneyKey] = useState(journey.journeyKey || "");
+  // The (app, event) an api_event flow subscribes to. Kept in state regardless
+  // of trigger so switching back and forth does not lose what was chosen.
+  const [triggerApp, setTriggerApp] = useState(journey.triggerApp || "");
+  const [triggerEvent, setTriggerEvent] = useState(journey.triggerEvent || "");
   // Entry filters. Stored as null when empty, but the builder always wants a
   // root group to render into, so the two forms are converted at the edges.
   const [entryFilters, setEntryFilters] = useState(
@@ -602,9 +604,10 @@ export default function FlowBuilder() {
       JSON.stringify(prunedFilters(entryFilters)) !==
         JSON.stringify(prunedFilters(journey.entryFilters)) ||
       (triggerDraft === "segment_entered" && triggerSegmentKey !== (journey.triggerSegmentKey || "")) ||
-      (triggerDraft === "api_event" && journeyKey !== (journey.journeyKey || ""))
+      (triggerDraft === "api_event" &&
+        (triggerApp !== (journey.triggerApp || "") || triggerEvent !== (journey.triggerEvent || "")))
     );
-  }, [name, entryFrequency, exitCriteria, entryFilters, nodes, journey, initialNodes, triggerSegmentKey, triggerDraft, journeyKey]);
+  }, [name, entryFrequency, exitCriteria, entryFilters, nodes, journey, initialNodes, triggerSegmentKey, triggerDraft, triggerApp, triggerEvent]);
 
   const selected = nodes.find((n) => n.id === selectedId);
 
@@ -809,7 +812,8 @@ export default function FlowBuilder() {
       fd.set("triggerSegmentKey", triggerSegmentKey || "");
     }
     if (triggerDraft === "api_event") {
-      fd.set("journeyKey", journeyKey || "");
+      fd.set("triggerApp", triggerApp || "");
+      fd.set("triggerEvent", triggerEvent || "");
     }
     return fd;
   }
@@ -1120,8 +1124,12 @@ export default function FlowBuilder() {
             setEntryFrequency={setEntryFrequency}
             exitCriteria={exitCriteria}
             setExitCriteria={setExitCriteria}
-            journeyKey={journeyKey}
-            setJourneyKey={setJourneyKey}
+            triggerApp={triggerApp}
+            setTriggerApp={setTriggerApp}
+            triggerEvent={triggerEvent}
+            setTriggerEvent={setTriggerEvent}
+            internalApps={internalApps}
+            isInternal={isInternal}
             entryFilters={entryFilters}
             setEntryFilters={setEntryFilters}
             filterFields={filterFields}
@@ -1881,7 +1889,7 @@ function InsertMenu({ open, onClose, onAdd, allowSplit = false }) {
   );
 }
 
-function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, journeyKey, setJourneyKey, entryFilters, setEntryFilters, filterFields = [], filterOperators = {}, filterTags = [], splitFields = [], triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
+function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntryFrequency, exitCriteria, setExitCriteria, triggerApp, setTriggerApp, triggerEvent, setTriggerEvent, internalApps = [], isInternal = false, entryFilters, setEntryFilters, filterFields = [], filterOperators = {}, filterTags = [], splitFields = [], triggerSegmentKey, setTriggerSegmentKey, triggerDraft, setTriggerDraft, segmentChoices = [], triggerSegmentCount, settings, whatsappTemplates = [], onChange, onOpenEditor, confirmLeave, isShopify = true }) {
   const filterFieldsById = useMemo(
     () => Object.fromEntries(filterFields.map((f) => [f.id, f])),
     [filterFields],
@@ -1952,37 +1960,23 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
             }}
             confirmLeave={confirmLeave}
             isShopify={isShopify}
+            isInternal={isInternal}
           />
+          {/* Which app's event starts this flow. One decision with the trigger:
+              "App event" with no app or event is a flow nothing can start, and
+              publish validation rejects exactly that. */}
+          {activeTrigger === "api_event" && (
+            <AppEventFields
+              apps={internalApps}
+              app={triggerApp}
+              setApp={setTriggerApp}
+              event={triggerEvent}
+              setEvent={setTriggerEvent}
+            />
+          )}
           {/* The loader already resolves this count for the publish modal's
               backfill offer; showing it here too tells the merchant how large
               the audience is while they're choosing, not after. */}
-          {/* The name another app posts to /internal/enroll to start this flow.
-              Shown inline with the trigger because the two are one decision:
-              choosing "Enrolled by API" without a key leaves a flow nothing can
-              address, and publish validation rejects exactly that. */}
-          {activeTrigger === "api_event" && (
-            <div style={{ marginTop: 12 }}>
-              <label className="field-label" htmlFor="rt-journey-key">Flow key</label>
-              <input
-                id="rt-journey-key"
-                className="input"
-                value={journeyKey}
-                placeholder="courierify_onboarding"
-                onChange={(e) => setJourneyKey(e.target.value)}
-                autoComplete="off"
-                spellCheck={false}
-              />
-              <div className="field-help" style={{ marginTop: 6 }}>
-                Lowercase letters, numbers and underscores. The calling app sends this
-                exact string, so changing it later stops that app enrolling anyone.
-              </div>
-              {journeyKey.trim() && !validateExternalKey(journeyKey, "Flow key").ok && (
-                <div className="field-help" style={{ marginTop: 6, color: "var(--danger, #b42318)" }}>
-                  {validateExternalKey(journeyKey, "Flow key").error}
-                </div>
-              )}
-            </div>
-          )}
           {activeTrigger === "segment_entered" && triggerSegmentKey && triggerSegmentCount !== null && (
             <div className="field-help" style={{ marginTop: 8 }}>
               {triggerSegmentCount.toLocaleString()}{" "}
@@ -2705,6 +2699,81 @@ function waVarLabel(vars, num) {
   if (ref === "recoveryUrl") return "[Cart link]";
   if (ref && String(ref).trim()) return String(ref);
   return `{{${num}}}`;
+}
+
+/**
+ * The (app, event) pair an App event flow subscribes to.
+ *
+ * The app is a dropdown of apps that actually have a secret configured, so a
+ * flow cannot be pointed at an app that could never call in. A saved app that
+ * has since lost its secret is still shown, marked, rather than silently
+ * dropped — the flow is broken either way, and hiding the value would hide why.
+ */
+function AppEventFields({ apps, app, setApp, event, setEvent }) {
+  const options = app && !apps.includes(app) ? [...apps, app] : apps;
+  const check = event.trim() ? validateExternalKey(event, "Event") : null;
+
+  return (
+    <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
+      <div>
+        <label className="field-label" htmlFor="rt-trigger-app">App</label>
+        {options.length === 0 ? (
+          <div className="field-help">
+            No Growzar apps are configured yet. Add an <code>INTERNAL_APP_SECRET_&lt;APP&gt;</code>{" "}
+            variable on the server, restart, and it will appear here.
+          </div>
+        ) : (
+          <select
+            id="rt-trigger-app"
+            className="input"
+            value={app}
+            onChange={(e) => setApp(e.target.value)}
+          >
+            <option value="">Choose an app…</option>
+            {options.map((a) => (
+              <option key={a} value={a}>
+                {a}{apps.includes(a) ? "" : " (not configured)"}
+              </option>
+            ))}
+          </select>
+        )}
+      </div>
+
+      <div>
+        <label className="field-label" htmlFor="rt-trigger-event">Event</label>
+        <input
+          id="rt-trigger-event"
+          className="input"
+          list="rt-standard-app-events"
+          value={event}
+          placeholder="installed"
+          onChange={(e) => setEvent(e.target.value)}
+          autoComplete="off"
+          spellCheck={false}
+        />
+        <datalist id="rt-standard-app-events">
+          {STANDARD_APP_EVENTS.map((e) => (
+            <option key={e.value} value={e.value}>{e.label}</option>
+          ))}
+        </datalist>
+        <div className="field-help" style={{ marginTop: 6 }}>
+          The event name the app sends. The standard ones are installed, setup_completed,
+          inactive and uninstalled; an app may send others.
+        </div>
+        {check && !check.ok && (
+          <div className="field-help" style={{ marginTop: 6, color: "var(--danger, #b42318)" }}>
+            {check.error}
+          </div>
+        )}
+        {event.trim() === UNINSTALL_EVENT && (
+          <div className="field-help" style={{ marginTop: 6 }}>
+            An uninstall first removes the person from every other flow for this app, so this
+            is the place for a win-back or feedback email.
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 /**

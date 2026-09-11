@@ -1,5 +1,5 @@
 /**
- * Shared-secret authentication for the internal enrollment API.
+ * Shared-secret authentication for the internal event API (/internal/event).
  *
  * These routes sit OUTSIDE authenticate.admin deliberately. The Shopify auth
  * path exists to prove a merchant is who they say they are on their own store;

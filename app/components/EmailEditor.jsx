@@ -416,7 +416,7 @@ function AlignToggle({ value, onChange }) {
 }
 
 // ── Merge tags section ─────────────────────────────────────────────────────
-function MergeTagsSection({ onInsert }) {
+function MergeTagsSection({ onInsert, showDataTags }) {
   return (
     <div className="rt-ins-section">
       <div className="t-micro muted" style={{ marginBottom: 10 }}>Merge tags</div>
@@ -426,6 +426,24 @@ function MergeTagsSection({ onInsert }) {
           <button key={t} className="rt-emb-tag-chip" onClick={() => onInsert && onInsert(t)}>{t}</button>
         ))}
       </div>
+      {showDataTags && <DataTagsHint />}
+    </div>
+  );
+}
+
+/**
+ * How to use the fields a Growzar app sent with its event. Shown only in App
+ * event flows — nowhere else is there an event to carry data. Written out
+ * rather than offered as chips, because which fields exist is decided by the
+ * sending app, not known here.
+ */
+function DataTagsHint() {
+  return (
+    <div className="t-small muted" style={{ marginTop: 12, lineHeight: 1.6 }}>
+      Fields the app sends with its event work in the subject and body as{" "}
+      <code>{"{data.field}"}</code>, e.g. <code>{"{data.store_name}"}</code>. Add a fallback for
+      when a field is missing: <code>{"{data.plan|your plan}"}</code>. Test sends show{" "}
+      <code>[data.field]</code> in their place.
     </div>
   );
 }
@@ -818,7 +836,7 @@ function ProductBlockInspector({ block, onUpdate }) {
 }
 
 // ── Block inspector (right rail when block selected) ───────────────────────
-function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
+function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag, showDataTags }) {
   if (!block) return null;
   const label = {
     logo: "Logo", heading: "Heading", paragraph: "Paragraph", button: "Button",
@@ -866,7 +884,7 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
             <ColorField value={block.color} onChange={(v) => onUpdate({ color: v })} presets={TEXT_SWATCHES} allowClear />
             <div className="field-help" style={{ marginTop: 10 }}>Click the heading on the canvas to edit text. Leave color empty to use the brand heading color.</div>
           </div>
-          <MergeTagsSection onInsert={onInsertMergeTag} />
+          <MergeTagsSection onInsert={onInsertMergeTag} showDataTags={showDataTags} />
         </>
       )}
 
@@ -879,7 +897,7 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag }) {
             <ColorField value={block.color} onChange={(v) => onUpdate({ color: v })} presets={TEXT_SWATCHES} allowClear />
             <div className="field-help" style={{ marginTop: 10 }}>Click the paragraph on the canvas to edit. Leave color empty to use the brand body color.</div>
           </div>
-          <MergeTagsSection onInsert={onInsertMergeTag} />
+          <MergeTagsSection onInsert={onInsertMergeTag} showDataTags={showDataTags} />
         </>
       )}
 
@@ -1392,7 +1410,7 @@ function HtmlEditorBody({ html, onChange, viewport }) {
 }
 
 // Right-rail help shown in HTML mode: supported merge tags + unsubscribe note.
-function HtmlHelpInspector({ onInsertTag }) {
+function HtmlHelpInspector({ onInsertTag, showDataTags }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const tags = [...MERGE_TAGS, "{unsubscribe_url}"];
   return (
@@ -1409,6 +1427,7 @@ function HtmlHelpInspector({ onInsertTag }) {
           Paste a complete email (a full <code style={{ fontFamily: "var(--font-mono)" }}>&lt;html&gt;</code> document
           or a body snippet). It's sent as-is, with merge tags filled in at send time.
         </div>
+        {showDataTags && <DataTagsHint />}
         <div className="rt-emb-linked-note" style={{ marginTop: 12 }}>
           <Icons.Bolt size={12} />
           <span>
@@ -1551,6 +1570,8 @@ function SendTestModal({ defaultTo, fetcher, onClose, onSend }) {
 }
 
 export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefault, senderName, sendingFrom, isShopify = true }) {
+  // Only an App event flow has an event whose fields can reach the email.
+  const showDataTags = flow?.trigger === "api_event";
   const [blocks, setBlocks] = useState(() => node.emailBlocks?.length ? node.emailBlocks : defaultBlocks(node, flow?.trigger));
   const [brand, setBrand] = useState(() => node.emailBrand || DEFAULT_BRAND);
   const [nodeMeta, setNodeMeta] = useState({ subject: node.subject || "", previewText: node.previewText || "", emailName: node.emailName || "" });
@@ -1754,6 +1775,7 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
           </div>
           <div className="rt-builder-inspector">
             <HtmlHelpInspector
+              showDataTags={showDataTags}
               onInsertTag={(t) => { try { navigator.clipboard?.writeText(t); } catch { /* noop */ } }}
             />
           </div>
@@ -1816,6 +1838,7 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
               onUpdate={(patch) => updateBlock(selected.id, patch)}
               onDelete={deleteBlock}
               onInsertMergeTag={insertMergeTag}
+              showDataTags={showDataTags}
             />
           ) : (
             <EmailSettings
