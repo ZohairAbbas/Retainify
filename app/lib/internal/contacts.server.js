@@ -113,9 +113,10 @@ export async function upsertInternalContact({ email, name, phone, app }) {
   if (phone && contact && !(await phoneHasOptedOut(phone))) {
     // recordOptIn does the whole job — normalises to E.164, upserts the
     // subscription and writes the phone back onto the contact. The guard above
-    // is what keeps its suppression-clearing from ever undoing a STOP. It returns null on a number Meta could never deliver
-    // to, which must not fail the email enrollment that is actually being asked
-    // for here.
+    // is what keeps its suppression-clearing from ever undoing a STOP.
+    //
+    // recordOptIn returns null on a number Meta could never deliver to, which
+    // must not fail the email enrollment that is actually being asked for here.
     const sub = await recordOptIn({
       shop: INTERNAL_SHOP,
       phoneNumber: phone,

@@ -678,12 +678,6 @@ model Journey {
   id                 String    @id @default(cuid())
   shop               String
   name               String
-  // DEPRECATED — v1's external flow name, replaced by triggerApp/triggerEvent.
-  // Nothing reads or writes it. Kept only until the build that stopped using it
-  // is running everywhere: Prisma selects every column by name, so dropping it
-  // while an older build is still serving would fail every Journey query. The
-  // follow-up migration removes the column and its index.
-  journeyKey         String?
   trigger            String // cart_abandoned | customer_created | order_placed | win_back | segment_entered | api_event
   // api_event flows only: the app and lifecycle event that start this flow,
   // e.g. ("financify", "installed"). Another Growzar app reports the event to
@@ -736,7 +730,6 @@ model Journey {
   edges       JourneyEdge[]
   enrollments JourneyEnrollment[]
 
-  @@unique([shop, journeyKey])
   // Drives /internal/event's "which flows does this event start" lookup.
   @@index([shop, trigger, triggerApp, triggerEvent])
   @@index([shop, trigger])
