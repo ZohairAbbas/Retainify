@@ -264,6 +264,43 @@ export async function discoverWabaIds(accessToken) {
 }
 
 /**
+ * Name and numbers for each granted WhatsApp Business account, so a merchant
+ * choosing between them sees something they recognise rather than an id.
+ *
+ * Best-effort per account: one that cannot be read still appears in the list,
+ * because leaving it out would hide the very account they meant to pick.
+ *
+ * @param {string} accessToken
+ * @param {string[]} wabaIds
+ * @returns {Promise<Array<{ id: string, name: string, numbers: string[] }>>}
+ */
+export async function describeWabas(accessToken, wabaIds) {
+  return Promise.all(
+    wabaIds.map(async (id) => {
+      const describe = async (path) => {
+        try {
+          const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${path}`, {
+            headers: { Authorization: `Bearer ${accessToken}` },
+          });
+          return res.ok ? await res.json() : {};
+        } catch {
+          return {};
+        }
+      };
+      const [waba, phones] = await Promise.all([
+        describe(`${id}?fields=name`),
+        describe(`${id}/phone_numbers?fields=display_phone_number,verified_name`),
+      ]);
+      return {
+        id,
+        name: waba?.name || "",
+        numbers: (phones?.data || []).map((n) => n.display_phone_number).filter(Boolean),
+      };
+    }),
+  );
+}
+
+/**
  * Store a granted token against a shop: resolve its phone number, subscribe to
  * its events, save it encrypted, and pull its templates.
  *

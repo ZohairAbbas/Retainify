@@ -1034,6 +1034,21 @@ model PushJob {
 // Per-shop WhatsApp Business Account, connected via Meta Embedded Signup.
 // accessTokenEnc is AES-256-GCM ciphertext (see app/lib/crypto/secrets.server.js)
 // — the long-lived system-user token is never stored in plaintext.
+// A connect flow that reached Meta but still needs the merchant to say WHICH
+// WhatsApp Business account to attach.
+//
+// Kept apart from WhatsappAccount deliberately: a merchant re-connecting while
+// already live must not have their working account overwritten by a half-made
+// one. This row holds only the granted token, and is deleted the moment a
+// choice is made.
+model WhatsappConnectPending {
+  id             String   @id @default(cuid())
+  shop           String   @unique
+  accessTokenEnc String
+  tokenExpiresAt DateTime?
+  createdAt      DateTime @default(now())
+}
+
 model WhatsappAccount {
   id                   String    @id @default(cuid())
   shop                 String    @unique
