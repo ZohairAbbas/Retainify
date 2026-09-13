@@ -3,7 +3,7 @@ import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
 import prisma from "../db.server.js";
-import { connectWhatsappAccount, resubscribeWebhooks } from "../lib/whatsapp/embedded-signup.server.js";
+import { resubscribeWebhooks } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
 import {
   sendWhatsapp,
@@ -20,6 +20,7 @@ import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
+import { mintConnectToken, appBaseUrl } from "../lib/whatsapp/connect-link.server.js";
 
 /** Subscription states in the merchant's language. */
 const SUB_STATUS = {
@@ -150,10 +151,13 @@ export const loader = async ({ request }) => {
     // rejection, edits made in Business Manager) with no webhook for shops whose
     // subscription is off, so a list last pulled an hour ago can be wrong.
     templatesStale: isConnected && isStale(account?.templatesSyncedAt),
-    // eslint-disable-next-line no-undef
-    metaAppId: process.env.META_APP_ID || "",
-    // eslint-disable-next-line no-undef
-    esConfigId: process.env.META_ES_CONFIG_ID || "",
+    // A signed, short-lived link that starts Meta's flow in a top-level tab.
+    // Minted per page load so it cannot outlive the session that produced it.
+    connectUrl: (() => {
+      const token = mintConnectToken(shop);
+      const base = appBaseUrl();
+      return token && base ? `${base}/whatsapp/connect/${token}` : "";
+    })(),
   };
 };
 
@@ -211,27 +215,6 @@ export const action = async ({ request }) => {
       update: { whatsappRequireOptIn: next },
     });
     return { ok: true, requireOptIn: next };
-  }
-
-  if (intent === "connect") {
-    const code = String(fd.get("code") || "");
-    const wabaId = String(fd.get("wabaId") || "");
-    const businessId = String(fd.get("businessId") || "");
-    if (!code || !wabaId) {
-      return { ok: false, error: "Missing sign-up code or WABA id from Meta." };
-    }
-    const res = await connectWhatsappAccount({ shop, code, wabaId, businessId });
-    if (!res.ok) return { ok: false, error: res.error || "Failed to connect." };
-    return {
-      ok: true,
-      connected: true,
-      warning: res.warning,
-      // Connecting pulls templates automatically; say what came back so an
-      // empty list after connecting reads as "this WABA has none" rather than
-      // "the sync never ran".
-      templatesSynced: res.templatesSynced,
-      templateSyncError: res.templateSyncError,
-    };
   }
 
   // Remove one subscriber by hand. Same path as a STOP message, so consent is
@@ -355,7 +338,7 @@ export const action = async ({ request }) => {
 };
 
 function WhatsappPageInner() {
-  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, metaAppId, esConfigId } = useLoaderData();
+  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -594,7 +577,7 @@ function WhatsappPageInner() {
                 <div className="t-small muted">
                   Connect your WhatsApp Business account through Meta to start sending. Takes a couple of minutes.
                 </div>
-                <EmbeddedSignup appId={metaAppId} configId={esConfigId} fetcher={connectFetcher} />
+                <EmbeddedSignup connectUrl={connectUrl} connected={isConnected} />
                 {account?.status === "disconnected" && account?.lastError && (
                   <div className="t-small muted">Last attempt: {account.lastError}</div>
                 )}
@@ -783,13 +766,6 @@ function WhatsappPageInner() {
             )}
             {syncFetcher.data?.ok === false && (
               <div className="t-small" style={{ marginBottom: 12, color: "var(--danger-ink)" }}>{syncFetcher.data.error}</div>
-            )}
-            {/* Connecting syncs automatically; if that call failed the list can
-                look empty for a reason that has nothing to do with the WABA. */}
-            {connectFetcher.data?.templateSyncError && (
-              <div className="t-small" style={{ marginBottom: 12, color: "var(--danger-ink)" }}>
-                Couldn&rsquo;t pull templates on connect: {connectFetcher.data.templateSyncError}
-              </div>
             )}
             {templates.length === 0 ? (
               <div className="t-small muted">

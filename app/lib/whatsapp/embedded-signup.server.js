@@ -1,13 +1,14 @@
 /**
  * Meta Embedded Signup — token exchange + WABA provisioning.
  *
- * Called by the (deferred) OAuth callback route once the merchant completes the
- * Embedded Signup popup and we receive a short-lived authorization `code`. This
- * module exchanges it for a long-lived token, discovers the WABA + phone-number
- * IDs, and upserts a WhatsappAccount with the token encrypted at rest.
+ * Called by routes/whatsapp.connected.jsx, where Meta returns the merchant
+ * after Embedded Signup with a short-lived authorization `code`. This module
+ * exchanges it for a long-lived token, discovers the WABA and phone-number ids,
+ * and upserts a WhatsappAccount with the token encrypted at rest.
  *
- * The HTTP/redirect route is part of the deferred admin UI; this exchange logic
- * lives here now so it is unit-testable and ready to wire up at approval.
+ * The flow runs in a top-level tab through a plain OAuth redirect rather than
+ * Meta's JavaScript SDK — see components/whatsapp/EmbeddedSignup.jsx for what
+ * the SDK did that made it unusable inside the Shopify admin.
  */
 import prisma from "../../db.server.js";
 import { encryptSecret, decryptSecret } from "../crypto/secrets.server.js";
@@ -215,19 +216,59 @@ export async function resubscribeWebhooks(shop) {
 }
 
 /**
- * Full provisioning: exchange code, resolve phone number, store encrypted token.
- * @param {{ shop: string, code: string, wabaId: string, businessId?: string }} input
- * @returns {Promise<{ ok: boolean, account?: object, error?: string, warning?: string,
- *   templatesSynced?: number, templateSyncError?: string }>}
+ * Which WhatsApp Business accounts a granted token can actually act on.
+ *
+ * The JavaScript SDK used to hand us the WABA id in its WA_EMBEDDED_SIGNUP
+ * postMessage. The redirect flow has no such message, so it is read back from
+ * the token instead: Meta records the assets a business integration token was
+ * granted as granular scopes, and for Embedded Signup that is precisely the
+ * WABA the merchant just selected. Reading it from the token is also the more
+ * trustworthy of the two — a postMessage is client-side and could name any
+ * account, while this comes from Meta about this token.
+ *
+ * @param {string} accessToken
+ * @returns {Promise<{ ok: boolean, wabaIds?: string[], error?: string }>}
  */
-export async function connectWhatsappAccount({ shop, code, wabaId, businessId = "" }) {
-  if (!shop) return { ok: false, error: "missing shop" };
+export async function discoverWabaIds(accessToken) {
+  const appId = process.env.META_APP_ID;
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appId || !appSecret) return { ok: false, error: "META_APP_ID / META_APP_SECRET not configured" };
 
-  const tokenRes = await exchangeCodeForToken(code);
-  if (!tokenRes.ok) {
-    await recordFailure(shop, tokenRes.error);
-    return { ok: false, error: tokenRes.error };
+  const url =
+    `https://graph.facebook.com/${GRAPH_VERSION}/debug_token` +
+    `?input_token=${encodeURIComponent(accessToken)}` +
+    `&access_token=${encodeURIComponent(`${appId}|${appSecret}`)}`;
+  try {
+    const res = await fetch(url);
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json?.data) {
+      return { ok: false, error: json?.error?.message || `HTTP ${res.status}` };
+    }
+    const scopes = json.data.granular_scopes || [];
+    const ids = new Set();
+    for (const entry of scopes) {
+      if (entry?.scope !== "whatsapp_business_management") continue;
+      for (const id of entry.target_ids || []) ids.add(String(id));
+    }
+    return ids.size
+      ? { ok: true, wabaIds: [...ids] }
+      : { ok: false, error: "This account granted no WhatsApp Business account we can manage." };
+  } catch (err) {
+    return { ok: false, error: err.message };
   }
+}
+
+/**
+ * Store a granted token against a shop: resolve its phone number, subscribe to
+ * its events, save it encrypted, and pull its templates.
+ *
+ * Split out of connectWhatsappAccount because the redirect flow has to exchange
+ * the code itself — an authorization code is single-use, so it cannot be handed
+ * on to be exchanged a second time.
+ */
+export async function provisionWhatsappAccount({ shop, accessToken, expiresAt = null, wabaId, businessId = "" }) {
+  if (!shop) return { ok: false, error: "missing shop" };
+  const tokenRes = { accessToken, expiresAt };
 
   const phoneRes = await fetchPhoneNumber(tokenRes.accessToken, wabaId);
   if (!phoneRes.ok) {
