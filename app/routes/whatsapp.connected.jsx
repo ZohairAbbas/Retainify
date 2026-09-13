@@ -11,7 +11,7 @@
  * shop to connect anything to.
  */
 import { useLoaderData } from "react-router";
-import { verifyConnectToken } from "../lib/whatsapp/connect-link.server.js";
+import { verifyConnectToken, connectCallbackUrl } from "../lib/whatsapp/connect-link.server.js";
 import {
   exchangeCodeForToken,
   discoverWabaIds,
@@ -31,7 +31,9 @@ export const loader = async ({ request }) => {
   if (!check.ok) return { ok: false, error: check.error };
   if (!code) return { ok: false, error: "Meta didn't return an authorization code. Please try again." };
 
-  const tokenRes = await exchangeCodeForToken(code);
+  // Must be the same value the dialog was built with. Both come from
+  // connectCallbackUrl(), so they cannot drift apart.
+  const tokenRes = await exchangeCodeForToken(code, { redirectUri: connectCallbackUrl() });
   if (!tokenRes.ok) return { ok: false, error: tokenRes.error };
 
   // The redirect flow carries no WA_EMBEDDED_SIGNUP message, so the account is

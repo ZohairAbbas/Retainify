@@ -27,7 +27,7 @@ const GRAPH_VERSION = process.env.WHATSAPP_GRAPH_VERSION || "v21.0";
  * @param {string} code
  * @returns {Promise<{ ok: boolean, accessToken?: string, expiresAt?: Date|null, error?: string }>}
  */
-export async function exchangeCodeForToken(code) {
+export async function exchangeCodeForToken(code, { redirectUri = "" } = {}) {
   const appId = process.env.META_APP_ID;
   const appSecret = process.env.META_APP_SECRET;
   if (!appId || !appSecret) {
@@ -39,6 +39,11 @@ export async function exchangeCodeForToken(code) {
   url.searchParams.set("client_id", appId);
   url.searchParams.set("client_secret", appSecret);
   url.searchParams.set("code", code);
+  // A code issued through a redirect can only be exchanged by repeating that
+  // redirect_uri byte for byte — Meta binds the two so a code intercepted in
+  // transit cannot be redeemed elsewhere. Codes from the old JavaScript SDK
+  // popup had no redirect, which is why this was never sent.
+  if (redirectUri) url.searchParams.set("redirect_uri", redirectUri);
 
   try {
     const res = await fetch(url, { method: "GET" });

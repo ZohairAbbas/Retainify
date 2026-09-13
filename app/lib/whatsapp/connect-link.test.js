@@ -85,3 +85,28 @@ test("a server missing its Meta config refuses to build a dialog URL", () => {
   assert.equal(buildConnectDialogUrl("s", { META_APP_ID: "1", META_ES_CONFIG_ID: "2" }).ok, false);
   assert.equal(connectCallbackUrl({}), "");
 });
+
+test("the code exchange repeats the dialog's redirect_uri exactly", async () => {
+  // Meta rejects the exchange otherwise: "Error validating verification code.
+  // Please make sure your redirect_uri is identical to the one you used in the
+  // OAuth dialog request" — after the merchant has finished every step.
+  const env = { META_APP_ID: "111", META_ES_CONFIG_ID: "222", SHOPIFY_APP_URL: "https://app.example.com" };
+  const dialogRedirect = new URL(buildConnectDialogUrl("s", env).url).searchParams.get("redirect_uri");
+
+  process.env.META_APP_ID ||= "111";
+  process.env.META_APP_SECRET ||= "secret";
+  const { exchangeCodeForToken } = await import("./embedded-signup.server.js");
+
+  let requested;
+  const realFetch = globalThis.fetch; // eslint-disable-line no-undef
+  globalThis.fetch = async (url) => { // eslint-disable-line no-undef
+    requested = new URL(String(url));
+    return { ok: true, status: 200, json: async () => ({ access_token: "t" }) };
+  };
+  try {
+    await exchangeCodeForToken("code", { redirectUri: connectCallbackUrl(env) });
+  } finally {
+    globalThis.fetch = realFetch; // eslint-disable-line no-undef
+  }
+  assert.equal(requested.searchParams.get("redirect_uri"), dialogRedirect);
+});
