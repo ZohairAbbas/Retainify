@@ -24,6 +24,12 @@
  * should take the revenue back out of the report, not leave a flow permanently
  * credited for a sale that unwound.
  *
+ * This exclusion only became load-bearing once the orders webhook subscribed to
+ * updated/cancelled/refunds. Before that the app saw create and paid only, so a
+ * COD order was frozen at "pending" and nothing here ever matched — attributed
+ * revenue counted sales that had since been cancelled or returned, and the
+ * filter that was supposed to prevent it was never reached.
+ *
  * ── Why `tracked` exists ────────────────────────────────────────────────────
  * Clicks are only measurable when the sending domain rewrites links, which the
  * shared fallback domain currently does not do. Every send in the system before

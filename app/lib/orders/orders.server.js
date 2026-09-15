@@ -14,6 +14,13 @@
  * kept as rows, so a refund correctly reduces a customer's lifetime value
  * rather than leaving it inflated. Those states arrive as an update to the same
  * order id, which the upsert below applies.
+ *
+ * That last sentence was aspirational until the orders webhook subscribed to
+ * updated/cancelled/refunds: only create and paid were registered, so a COD
+ * order sat at "pending" forever and no later state ever reached the upsert.
+ * The exclusion below was correct the whole time and simply had nothing to act
+ * on. If lifetime value ever looks frozen again, check the subscribed topics in
+ * shopify.app.toml first — and that `shopify app deploy` has actually run.
  */
 import prisma from "../../db.server.js";
 import { normalizeEmail, upsertContact } from "../contacts/contacts.server.js";
