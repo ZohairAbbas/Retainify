@@ -19,8 +19,8 @@ import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.s
 import { stopShopSending, releaseClaimedJob, cancelStaleJob } from "../journey/shop-work.server.js";
 import { settleEnrollmentIfFinished } from "../journey/journey-queue.server.js";
 import { checkStepSequence, CANCEL, WAIT, SEQUENCE_RECHECK_MS } from "../journey/sequence-gate.server.js";
-import { decideFailureOutcome, MAX_ATTEMPTS, isStale } from "../journey/failure-policy.server.js";
-import { toE164 } from "../contacts/contacts.server.js";
+import { decideFailureOutcome, MAX_ATTEMPTS, isStale, PERMANENT } from "../journey/failure-policy.server.js";
+import { toE164, isRepairableFormat } from "../contacts/contacts.server.js";
 import { sendWhatsapp } from "./index.server.js";
 
 async function claimDueWhatsappJobs(limit = 20) {
@@ -177,6 +177,12 @@ async function processWhatsappJob(job) {
   // permanent-failure code and get the contact suppressed forever, so an
   // unsendable one is skipped instead — the number stays, and starts working
   // the moment the merchant corrects it.
+  // Checked against the number as STORED, before toE164 rewrites it: once
+  // phoneNumber holds the repaired digits the evidence of the original defect is
+  // gone, and the suppression branch below needs it to tell a dead recipient
+  // apart from one we simply mis-dialled.
+  const wasRepairable = isRepairableFormat(phoneNumber);
+
   const shape = toE164(phoneNumber);
   if (!shape.ok) {
     console.warn(
@@ -247,6 +253,29 @@ async function processWhatsappJob(job) {
   }
 
   if (result.invalid) {
+    // A repairable stored format makes Meta's "permanent" verdict untrustworthy:
+    // the number we just sent was reconstructed from digits that were wrong on
+    // the way in, so a rejection is evidence about our formatting, not about the
+    // buyer. Fail the job with a reason and leave every consent record alone —
+    // no suppression, no status flip — so the data repair can still recover the
+    // subscriber. Once the stored phone is corrected this branch stops firing
+    // and a genuine rejection suppresses normally.
+    // PERMANENT, not transient: the stored digits will be identically wrong on
+    // every retry until the repair script runs, so retrying only spends Meta
+    // calls and holds the enrollment open. This job is done; the subscriber is
+    // recoverable because nothing was suppressed.
+    if (wasRepairable) {
+      await markWhatsappJobFailed(
+        job.id,
+        `recipient rejected, but the stored phone was in a repairable format — not suppressing (${result.error || "invalid recipient"})`,
+        PERMANENT,
+      );
+      console.warn(
+        `[whatsapp-worker] job=${job.id} permanent-failure code on a repairable number — left unsuppressed for data repair`,
+      );
+      return;
+    }
+
     // Permanent recipient failure — suppress the number, don't retry.
     await prisma.whatsappSuppression.upsert({
       where: { shop_phoneNumber: { shop: job.shop, phoneNumber } },
