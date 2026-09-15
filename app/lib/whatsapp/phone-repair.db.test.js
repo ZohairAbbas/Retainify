@@ -32,15 +32,35 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.resolve(HERE, "../../../scripts/repair-pk-trunk-zero-phones.mjs");
 
 const SHOP = "__test__phone-repair";
-const BROKEN = "9203001234567";
-const FIXED = "923001234567";
+
+/**
+ * Numbers unique to this file.
+ *
+ * The repair script is run as a real child process against the same database
+ * every other test file is using, and it rewrites EVERY row matching the broken
+ * shape — it is not scoped to a shop, by design. Sharing a number with
+ * repairable-suppression.db.test.js meant this file silently corrected that
+ * file's fixture while its worker was mid-send, so the suppression guard saw an
+ * already-correct number and took the genuine-failure path. Distinct numbers
+ * keep the two files from reaching into each other.
+ */
+const BROKEN = "9203111111111";
+const FIXED = "923111111111";
 
 /** The other broken number, used for the collision case. */
-const BROKEN_2 = "9203009999999";
-const FIXED_2 = "923009999999";
+const BROKEN_2 = "9203119999999";
+const FIXED_2 = "923119999999";
 
+/**
+ * Always scoped to this file's shop.
+ *
+ * Unscoped, the script rewrites every matching row in the database — which is
+ * correct in production and ruinous in a test run, where node --test executes
+ * files concurrently against one database and other fixtures hold 920… numbers
+ * of their own. --shop keeps this file's writes inside its own workspace.
+ */
 async function repairScript(...args) {
-  const { stdout } = await run(process.execPath, [SCRIPT, ...args], {
+  const { stdout } = await run(process.execPath, [SCRIPT, `--shop=${SHOP}`, ...args], {
     cwd: path.resolve(HERE, "../../.."),
     env: process.env,
   });

@@ -32,6 +32,7 @@
  * Usage:
  *   node --env-file=.env scripts/repair-pk-trunk-zero-phones.mjs            # dry run (default)
  *   node --env-file=.env scripts/repair-pk-trunk-zero-phones.mjs --apply
+ *   node --env-file=.env scripts/repair-pk-trunk-zero-phones.mjs --shop=x.myshopify.com --apply
  *
  * Output is counts per shop only. No phone numbers are printed in either mode.
  */
@@ -42,6 +43,26 @@ const prisma = new PrismaClient();
 // Dry run is the default: --apply must be asked for explicitly, so a mistyped
 // flag reports instead of writing.
 const APPLY = process.argv.includes("--apply");
+
+/**
+ * Optional --shop=<key>: repair one workspace instead of every one.
+ *
+ * Operationally this lets a big shop be repaired and checked on its own before
+ * the rest follow. It is also what makes the tests hermetic — without it the
+ * script rewrites every matching row in the database, including fixtures other
+ * test files are using concurrently.
+ */
+const SHOP_ARG = process.argv.find((a) => a.startsWith("--shop="));
+const ONLY_SHOP = SHOP_ARG ? SHOP_ARG.slice("--shop=".length) : null;
+
+/** Literal for interpolation. Shop keys are Shopify domains or generated slugs. */
+function shopClause(column = "shop") {
+  if (!ONLY_SHOP) return "";
+  if (!/^[A-Za-z0-9._-]+$/.test(ONLY_SHOP)) {
+    throw new Error(`refusing to run: --shop=${ONLY_SHOP} is not a plain shop key`);
+  }
+  return ` and "${column}" = '${ONLY_SHOP}'`;
+}
 
 /**
  * The one unambiguous broken shape: 92 + trunk 0 + 10 digits.
@@ -82,7 +103,7 @@ async function main() {
   const subs = await prisma.$queryRawUnsafe(`
     select id, shop, "phoneNumber", "contactEmail", status, "confirmedAt", "optInAt", "optOutAt"
     from "WhatsappSubscription"
-    where "phoneNumber" ~ '${BROKEN_SQL}'
+    where "phoneNumber" ~ '${BROKEN_SQL}'${shopClause()}
     order by shop
   `);
 
@@ -152,7 +173,7 @@ async function main() {
   const supps = await prisma.$queryRawUnsafe(`
     select id, shop, "phoneNumber", reason
     from "WhatsappSuppression"
-    where "phoneNumber" ~ '${BROKEN_SQL}'
+    where "phoneNumber" ~ '${BROKEN_SQL}'${shopClause()}
     order by shop
   `);
 
@@ -192,7 +213,7 @@ async function main() {
   const contacts = await prisma.$queryRawUnsafe(`
     select id, shop, email, phone, "whatsappStatus"
     from "Contact"
-    where phone ~ '${BROKEN_SQL}'
+    where phone ~ '${BROKEN_SQL}'${shopClause()}
     order by shop
   `);
 
