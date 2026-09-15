@@ -53,6 +53,17 @@ export function toE164(raw) {
   // which country the caller is in — the leading-zero rejection below is for
   // a national trunk code, which genuinely lacks the information to fix.
   if (digits.startsWith("00")) digits = digits.slice(2);
+  // Narrow Pakistan trunk-zero repair, pending the suite-wide normalizer.
+  //
+  // The leading-zero rejection below only sees position 0, so a trunk zero
+  // sitting AFTER the country code — +92 0300 1234567, how a PK mobile is
+  // written locally — sailed through as a 13-digit "valid" number. Meta then
+  // rejects it permanently and the buyer is suppressed for good over a
+  // formatting slip. PK mobiles are 92 + 3xx + 7 digits = 12, so a 13-digit
+  // 920-prefixed string is unambiguous: there is no valid number of that shape.
+  // Deliberately not generalized to other countries — that is the normalizer's
+  // job, and guessing here would break numbers that are already correct.
+  if (/^920\d{10}$/.test(digits)) digits = "92" + digits.slice(-10);
   if (digits.startsWith("0")) {
     return {
       ok: false,
@@ -67,6 +78,24 @@ export function toE164(raw) {
   }
   return { ok: true, phone: digits };
 
+}
+
+/**
+ * Would toE164 have rewritten this number's digits?
+ *
+ * Meta's permanent-failure codes mean "this recipient does not exist", which is
+ * only true if we sent what the buyer actually gave us. For a number stored
+ * before the trunk-zero repair existed, the rejection says nothing about the
+ * buyer — it says we dialled the wrong digits. Suppressing on that basis loses a
+ * reachable subscriber forever, so the worker checks here first.
+ *
+ * @param {string} raw phone as stored
+ * @returns {boolean} true if the stored form is a repairable formatting error
+ */
+export function isRepairableFormat(raw) {
+  const digits = normalizePhone(raw);
+  const stripped = digits.startsWith("00") ? digits.slice(2) : digits;
+  return /^920\d{10}$/.test(stripped);
 }
 const VALID_SOURCES = new Set([
   "popup",
