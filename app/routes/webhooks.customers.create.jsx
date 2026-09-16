@@ -1,6 +1,5 @@
 import { authenticate } from "../shopify.server.js";
-import prisma from "../db.server.js";
-import { enrollContact } from "../lib/journey/journey-queue.server.js";
+import { enrollInAllFlows } from "../lib/journey/journey-queue.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
 
 export const action = async ({ request }) => {
@@ -30,12 +29,7 @@ export const action = async ({ request }) => {
     console.error("[webhook] upsertContact (customers.create) failed:", err.message),
   );
 
-  const journey = await prisma.journey.findFirst({
-    where: { shop, trigger: "customer_created", status: "published" },
-  });
-  if (!journey) return new Response(null, { status: 200 });
-
-  await enrollContact(journey.id, email, name, {}).catch((err) =>
+  await enrollInAllFlows(shop, "customer_created", email, name, {}).catch((err) =>
     console.error("[webhook] welcome enroll failed:", err.message),
   );
 

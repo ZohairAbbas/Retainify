@@ -1,6 +1,6 @@
 import { authenticate } from "../shopify.server.js";
 import prisma from "../db.server.js";
-import { enrollContact } from "../lib/journey/journey-queue.server.js";
+import { enrollInAllFlows } from "../lib/journey/journey-queue.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
 import { recalcContactCartStats } from "../lib/contacts/carts.server.js";
 
@@ -123,19 +123,14 @@ export const action = async ({ request }) => {
     if (!cart.recoveredAt) {
       const settings = await prisma.shopSettings.findUnique({ where: { shop } });
       if (settings?.isActive) {
-        const journey = await prisma.journey.findFirst({
-          where: { shop, trigger: "cart_abandoned", status: "published" },
-        });
-        if (journey) {
-          await enrollContact(journey.id, email, customerName, {
-            cartId: cart.id,
-            checkoutToken,
-            recoveryUrl,
-            totalPrice: String(totalPrice || ""),
-            currency,
-            lineItems,
-          }).catch((err) => console.error("[webhook] cart_abandoned enroll failed:", err.message));
-        }
+        await enrollInAllFlows(shop, "cart_abandoned", email, customerName, {
+          cartId: cart.id,
+          checkoutToken,
+          recoveryUrl,
+          totalPrice: String(totalPrice || ""),
+          currency,
+          lineItems,
+        }).catch((err) => console.error("[webhook] cart_abandoned enroll failed:", err.message));
       }
     }
   }
