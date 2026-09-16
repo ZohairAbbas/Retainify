@@ -33,6 +33,7 @@ import { runEngagementRollupWorker } from "../segments/engagementRollupWorker.se
 import { pruneExpiredSessions } from "../auth/session.server.js";
 import { runStuckJobReaper, runEnrollmentStallReaper } from "../journey/stuck-jobs.server.js";
 import { runEnrollmentAdvanceWorker } from "../journey/advance.server.js";
+import { runWinbackWorker } from "../journey/winback-worker.server.js";
 import { withLease } from "./lease.server.js";
 
 export const FAST_TICK_MS = 60_000;
@@ -145,6 +146,16 @@ export async function runSlowTick() {
  */
 export async function runHourlyTick() {
   await guarded("session-prune", leased("session-prune", pruneExpiredSessions, 30 * MINUTE));
+  // Enrolls contacts who crossed the 90-day inactivity line since the last
+  // sweep. Hourly rather than per-minute because dormancy is a slow condition:
+  // crossing it an hour late is invisible to the buyer, while sweeping every
+  // minute would be 60x the reads for the same enrollments.
+  //
+  // Leased. It has no per-row claim — it selects contacts by a date window and
+  // advances one marker on the flow — so two instances would pick the same
+  // window and enroll everyone in it twice. Fifteen minutes: a sweep is ten
+  // flows, each capped, but a large shop's contact scan is the slow part.
+  await guarded("winback", leased("winback", runWinbackWorker, 15 * MINUTE));
 }
 
 /**
