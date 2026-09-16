@@ -9,6 +9,14 @@
  * Runs page-by-page against the Admin API, resumable via a stored cursor so a
  * shop with years of orders can be processed across several passes rather than
  * one request that times out.
+ *
+ * That was true of the cursor and false of everything around it until
+ * 2026-09-16. A run that hit its page ceiling left the status as "running", and
+ * the guard declines to start while a run is "running" — so the cursor was
+ * written every time and read never, and any shop past ~2,000 orders stopped
+ * there for good. The states now distinguish "in flight" from "ended with work
+ * left" ("partial"), and "running" is believed only while its heartbeat is
+ * fresh, so a process killed mid-run cannot lock a shop out permanently either.
  */
 import prisma from "../../db.server.js";
 import { unauthenticated } from "../../shopify.server.js";
@@ -66,6 +74,12 @@ export async function backfillOrders(shop, { maxPages = MAX_PAGES_PER_RUN } = {}
   let imported = 0;
   let pages = 0;
   let hasNext = true;
+
+  // Claim the run before the first API call. Two dashboard loaders landing
+  // together would otherwise both walk the same pages — harmless to the data,
+  // since every write is an upsert, but it doubles the API spend against a
+  // rate limit the backfill already lives close to.
+  await markState(shop, { cursor, status: "running", error: "" });
 
   const touchedEmails = new Set();
 
@@ -138,9 +152,13 @@ export async function backfillOrders(shop, { maxPages = MAX_PAGES_PER_RUN } = {}
   }
 
   const done = !hasNext;
+  // "partial", not "running": this run has returned, and the only thing standing
+  // between the remaining pages and the cursor that reaches them is the next
+  // trigger. Leaving it as "running" is what froze every shop over ~2,000
+  // orders — the guard read it as a run already in flight and declined forever.
   await markState(shop, {
     cursor: done ? null : cursor,
-    status: done ? "done" : "running",
+    status: done ? "done" : "partial",
     error: "",
     completedAt: done ? new Date() : undefined,
   });
@@ -156,6 +174,9 @@ async function markState(shop, { cursor, status, error, completedAt }) {
         ordersBackfillCursor: cursor ?? null,
         ordersBackfillStatus: status,
         ordersBackfillError: (error || "").slice(0, 500),
+        // Heartbeat. Written on every state change, so a "running" row can be
+        // told apart from one abandoned by a process that died mid-run.
+        ordersBackfillRunAt: new Date(),
         ...(completedAt ? { ordersBackfilledAt: completedAt } : {}),
       },
     })
@@ -163,21 +184,58 @@ async function markState(shop, { cursor, status, error, completedAt }) {
 }
 
 /**
- * Run the backfill once per shop, the first time it's needed.
+ * How long a "running" backfill is believed before it is treated as abandoned.
+ *
+ * A run is bounded by MAX_PAGES_PER_RUN pages against the Admin API, which
+ * finishes in well under a minute in practice. Fifteen minutes is therefore far
+ * beyond any legitimate run, while still being short enough that a shop whose
+ * worker was killed mid-backfill resumes the same day rather than never.
+ */
+export const BACKFILL_STALE_AFTER_MS = 15 * 60 * 1000;
+
+/** @returns {boolean} true when a "running" flag is old enough to be abandoned. */
+export function isBackfillStale(runAt, now = new Date()) {
+  // Null means a row that predates the heartbeat column — the migration moved
+  // those to "partial", so anything still claiming to run without one is left
+  // over from a build that could not record it. Treat it as resumable.
+  if (!runAt) return true;
+  return now.getTime() - new Date(runAt).getTime() > BACKFILL_STALE_AFTER_MS;
+}
+
+/**
+ * Run the backfill for a shop, resuming a partial run from its saved cursor.
  *
  * Called from the contacts and dashboard loaders in the same spirit as
  * runContactsBackfillIfNeeded — cheap to call, no-ops once complete.
+ *
+ * Not "once per shop, ever": a run covers at most MAX_PAGES_PER_RUN pages, so a
+ * shop with years of orders needs several. What must happen once is the
+ * *completion*, which ordersBackfilledAt records.
  */
 export async function runOrdersBackfillIfNeeded(shop) {
   const settings = await prisma.shopSettings.findUnique({
     where: { shop },
-    select: { ordersBackfilledAt: true, ordersBackfillStatus: true },
+    select: {
+      ordersBackfilledAt: true,
+      ordersBackfillStatus: true,
+      ordersBackfillRunAt: true,
+    },
   });
   if (!settings) return { didRun: false };
   if (settings.ordersBackfilledAt) return { didRun: false };
-  // A failed run is retried on the next load; a run already in flight is not
-  // restarted, which would double the API calls for no benefit.
-  if (settings.ordersBackfillStatus === "running") return { didRun: false };
+
+  // A run genuinely in flight is left alone: restarting it would walk the same
+  // pages twice for no benefit. But "running" is only believed while the
+  // heartbeat is fresh — a process killed mid-run leaves the flag set with
+  // nothing to clear it, and trusting that forever is precisely the bug this
+  // fixes. "partial" and "failed" both resume immediately; both carry a valid
+  // cursor, so neither restarts from the beginning.
+  if (
+    settings.ordersBackfillStatus === "running" &&
+    !isBackfillStale(settings.ordersBackfillRunAt)
+  ) {
+    return { didRun: false };
+  }
 
   const result = await backfillOrders(shop).catch((err) => ({
     imported: 0,
