@@ -212,8 +212,23 @@ model ShopSettings {
   // times out. ordersBackfilledAt is set only on completion.
   ordersBackfilledAt                 DateTime?
   ordersBackfillCursor               String?
-  ordersBackfillStatus               String    @default("idle") // idle | running | done | failed
+  // idle | running | partial | done | failed
+  //
+  // "partial" means a run ended at its page ceiling with work left: the cursor
+  // is valid and the next trigger should resume from it. It exists because a run
+  // that stopped cleanly used to be left as "running", which the guard treats as
+  // a run already in flight — so any shop with more than ~2,000 orders stopped
+  // at the first 20 pages and never resumed.
+  //
+  // "running" now means genuinely in flight, and is trusted only as far as
+  // ordersBackfillRunAt is recent (see BACKFILL_STALE_AFTER_MS). A process that
+  // dies mid-run leaves the flag set with nothing to clear it, so an old
+  // "running" is treated as abandoned rather than as a permanent lock.
+  ordersBackfillStatus               String    @default("idle")
   ordersBackfillError                String    @default("")
+  // Heartbeat for the above: when the current run last wrote state. Null on a
+  // shop that has never run one.
+  ordersBackfillRunAt                DateTime?
   createdAt                          DateTime  @default(now())
   updatedAt                          DateTime  @updatedAt
 }
