@@ -64,8 +64,9 @@
           return fetch(subscribeUrl, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            // No `shop`: the server takes it from the proxy signature and
+            // ignores any body field of that name.
             body: JSON.stringify({
-              shop: config.shop,
               endpoint: raw.endpoint,
               p256dh: raw.keys.p256dh,
               auth: raw.keys.auth,
@@ -150,9 +151,11 @@
 
   (function fetchRemoteConfig() {
     var endpoint = config.configEndpoint;
-    var shop = config.shop;
-    if (!endpoint || !shop) { _configReady = true; return; }
-    fetch(endpoint + "?shop=" + encodeURIComponent(shop))
+    if (!endpoint) { _configReady = true; return; }
+    // No ?shop= — the app proxy appends its own signed shop, signature and
+    // timestamp, and the signature covers the whole query string. Adding a
+    // parameter of our own would invalidate it and the server would 401.
+    fetch(endpoint)
       .then(function (r) { return r.json(); })
       .then(function (remote) {
         if (remote.enabled === false) {
@@ -523,9 +526,9 @@
       fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        // No `shop`: supplied by the proxy signature, not by the page.
         body: JSON.stringify({
           email: email,
-          shop: config.shop,
           anonId: getAnonId(),
           phone: phone,
           whatsappConsent: waConsent,

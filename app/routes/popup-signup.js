@@ -1,20 +1,28 @@
 /**
- * Public popup signup endpoint, called from the storefront popup JS.
+ * Popup signup, called from the storefront popup JS through the Shopify app
+ * proxy (/apps/retainify/popup-signup).
  *
- * Necessarily unauthenticated and open-CORS — it runs on the shopper's browser
- * on the merchant's domain. That makes it the most abusable surface in the app:
- * every accepted request sends a confirmation email from the SHARED sending
- * domain, so an unthrottled flood burns deliverability for every shop at once.
+ * It runs in the shopper's browser on the merchant's domain, so it can never
+ * require an admin session — but it is no longer unauthenticated. Shopify signs
+ * every request it forwards through the proxy, and the shop now comes from that
+ * signature rather than from the request body.
+ *
+ * Every accepted request still sends a confirmation email from the SHARED
+ * sending domain, so a flood would burn deliverability for every shop at once.
+ * The rest of the defences therefore stay exactly as they were.
  *
  * Defences, cheapest first:
- *   1. Shape validation — the shop must look like a myshopify domain and the
- *      address must look like an address.
- *   2. Existence check — the shop must have an enabled popup. This is the
- *      strongest one: it reduces the attack surface from "any string" to "shops
- *      that actually installed us and turned the popup on".
+ *   0. Proxy signature — proves the request came through a real storefront, and
+ *      supplies the shop. Replaces the guess that a well-formed *.myshopify.com
+ *      string in the body meant anything.
+ *   1. Shape validation — the address must look like an address.
+ *   2. Existence check — the shop must have an enabled popup. Now a
+ *      belt-and-braces check rather than the main gate, since the signature
+ *      already establishes which shop this is.
  *   3. Per-address cooldown — one confirmation email per address per hour, so
  *      the endpoint cannot be used to mail-bomb a specific person.
- *   4. Per-IP and per-shop rate limits.
+ *   4. Per-IP and per-shop rate limits. Still per-process; see the note in
+ *      lib/security/rate-limit.server.js.
  *   5. Shop health — a closed or uninstalled shop sends nothing, matching the
  *      rule the workers enforce on queued sends.
  */
@@ -26,6 +34,7 @@ import { generateConfirmToken } from "../lib/email/confirm.server.js";
 import { upsertContact, normalizeEmail, toE164 } from "../lib/contacts/contacts.server.js";
 import { recordOptIn } from "../lib/whatsapp/optin.server.js";
 import { hit, clientIp } from "../lib/security/rate-limit.server.js";
+import { verifyAppProxy } from "../lib/security/app-proxy.server.js";
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -62,6 +71,12 @@ export const action = async ({ request }) => {
     return new Response(null, { status: 204, headers: CORS });
   }
 
+  // 0. The signature, before any parsing or database work.
+  const auth = await verifyAppProxy(request);
+  if (!auth.ok) return auth.response;
+  // Attested by Shopify. The body's own `shop` field is ignored.
+  const shop = auth.shop.trim().toLowerCase();
+
   let body;
   try {
     body = await request.json();
@@ -70,7 +85,6 @@ export const action = async ({ request }) => {
   }
 
   const email = normalizeEmail(body.email);
-  const shop = String(body.shop || "").trim().toLowerCase();
   const anonId = String(body.anonId || "").trim() || null;
   // WhatsApp opt-in, captured by the popup when the merchant enables it. Both
   // must be present: a phone number is not consent, and a ticked box with no
@@ -88,7 +102,9 @@ export const action = async ({ request }) => {
     console.warn(`[popup-signup] WhatsApp opt-in rejected for shop=${shop} — ${phoneCheck.error}`);
   }
 
-  // 1. Shape.
+  // 1. Shape. The shop is no longer shape-checked as a stand-in for
+  // authentication — the signature covers that — but it is still required to
+  // look like a shop domain, since every downstream row is keyed on it.
   if (!email || !EMAIL_RE.test(email) || !SHOP_RE.test(shop)) {
     return new Response(JSON.stringify({ ok: false }), { status: 400, headers: CORS });
   }

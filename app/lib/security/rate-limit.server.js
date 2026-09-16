@@ -1,15 +1,25 @@
 /**
  * In-memory sliding-window rate limiter for the public storefront endpoints.
  *
- * These endpoints are reachable by anyone — they are called from storefront JS,
- * so they cannot require an admin session and CORS is necessarily open. Without
- * a limit, a single script can drive unbounded confirmation emails out of the
- * shared sending domain, which costs every shop on it their deliverability.
+ * These endpoints are called from storefront JS, so they cannot require an admin
+ * session. They now require a Shopify app-proxy signature instead (see
+ * app-proxy.server.js), which means the caller has to be a real storefront — but
+ * that is not a volume control. Every accepted popup signup still sends a
+ * confirmation email from the SHARED sending domain, so an unthrottled flood
+ * through a legitimate storefront still costs every shop on it their
+ * deliverability.
  *
- * Deliberately in-process rather than Redis-backed: the app runs as a single
- * PM2 fork (see ecosystem.config.cjs, instances: 1), so one process sees every
- * request. If that ever becomes a cluster this must move to shared storage —
- * per-process buckets would multiply the effective limit by the instance count.
+ * ── The limits are per-process, and production runs more than one ───────────
+ * These buckets live in this process's memory. Production runs PM2 in cluster
+ * mode with 2 instances, so each one keeps its own buckets and the EFFECTIVE
+ * limit is roughly double whatever a caller reads here: an 8-per-10-minutes
+ * per-IP cap admits about 16, and a 500-per-hour per-shop cap about 1000.
+ *
+ * That is a known, accepted gap rather than an oversight — the caps are ceilings
+ * on catastrophe rather than traffic shapers, and 2x a generous ceiling is still
+ * a ceiling. Anyone tightening these numbers to a value that has to be exact,
+ * though, is relying on something this cannot provide: the fix is shared storage
+ * (Postgres or Redis), not a smaller constant here.
  *
  * Memory is bounded by pruning expired buckets on write, and by a hard cap on
  * distinct keys so a spray of unique IPs can't itself become the attack.
