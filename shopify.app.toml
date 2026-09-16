@@ -30,8 +30,18 @@ api_version = "2025-10"
   topics = [ "app/scopes_update" ]
   uri = "/webhooks/app/scopes_update"
 
+  # create and paid alone freeze an order at the state it held when it was
+  # placed. A COD order lands as financial_status "pending" and never moves, so
+  # attributed revenue and lifetime value went on counting orders that were
+  # later cancelled or returned. The corrective paths already existed — the
+  # attribution and LTV queries both exclude cancelled/refunded/voided — but the
+  # data to drive them never arrived, and the only other route in, the
+  # historical backfill, runs once per shop ever.
+  #
+  # Declaring a topic here is not enough on its own: Shopify only registers it
+  # on `shopify app deploy`. Until that runs the handler is live but uncalled.
   [[webhooks.subscriptions]]
-  topics = [ "orders/create", "orders/paid" ]
+  topics = [ "orders/create", "orders/paid", "orders/updated", "orders/cancelled", "refunds/create" ]
   uri = "/webhooks/orders"
 
   [[webhooks.subscriptions]]

@@ -34,13 +34,35 @@ const { encryptSecret } = await import("../crypto/secrets.server.js");
 const { runWhatsappWorker } = await import("./whatsapp-worker.server.js");
 const { __resetShopHealthCache } = await import("../shopify/shop-health.server.js").catch(() => ({}));
 
-const SHOP = "__test__wa-repairable";
+/**
+ * One shop per test, not one per file.
+ *
+ * runWhatsappWorker() claims every due job in the queue, not just this test's.
+ * With a shared shop the second test's job was already pending when the first
+ * test ran the worker, so both were processed in one pass and the genuine
+ * suppression appeared while the first test was asserting it had not. Scoping
+ * by shop keeps the two cases from seeing each other's rows.
+ */
+const SHOPS = {
+  repairable: "__test__wa-repairable-a",
+  genuine: "__test__wa-repairable-b",
+};
+const ALL_SHOPS = Object.values(SHOPS);
 const EMAIL = "buyer@example.test";
 
-/** Stored with the trunk zero — 13 digits, the shape the old toE164 let through. */
-const BROKEN = "9203001234567";
+/**
+ * Stored with the trunk zero — 13 digits, the shape the old toE164 let through.
+ *
+ * Every phone fixture in the suite has to be unique in its REPAIRED form, not
+ * just as written: node --test runs files concurrently against one database, and
+ * WhatsappSubscription is unique on [shop, phoneNumber]. 9203001234567 repairs
+ * to 923001234567, which is exactly the number internal/routes.db.test.js opts
+ * in — so that file's recordOptIn rewrote this fixture mid-send and the guard
+ * saw a well-formed number. 9207… is used by nothing else, in either form.
+ */
+const BROKEN = "9207001234567";
 /** What it should have been all along, and what the worker actually dials. */
-const REPAIRED = "923001234567";
+const REPAIRED = "927001234567";
 
 const realFetch = globalThis.fetch;
 
@@ -60,18 +82,18 @@ function metaRejects() {
  * SHOP_LIVE for a storeless workspace, so the worker never probes Shopify and
  * the test needs no session fixture and no network.
  */
-async function seed({ storedPhone }) {
-  await cleanup();
+async function seed(shop, { storedPhone }) {
+  await cleanupShop(shop);
 
   await prisma.account.create({
-    data: { key: SHOP, kind: "direct", name: "repairable test" },
+    data: { key: shop, kind: "direct", name: "repairable test" },
   });
   await prisma.shopSettings.create({
-    data: { shop: SHOP, whatsappEnabled: true, whatsappRequireOptIn: true },
+    data: { shop, whatsappEnabled: true, whatsappRequireOptIn: true },
   });
   await prisma.whatsappAccount.create({
     data: {
-      shop: SHOP,
+      shop,
       wabaId: "waba",
       phoneNumberId: "pnid",
       accessTokenEnc: encryptSecret("token"),
@@ -81,11 +103,11 @@ async function seed({ storedPhone }) {
   });
 
   await prisma.contact.create({
-    data: { shop: SHOP, email: EMAIL, phone: storedPhone, whatsappStatus: "subscribed" },
+    data: { shop, email: EMAIL, phone: storedPhone, whatsappStatus: "subscribed" },
   });
   const sub = await prisma.whatsappSubscription.create({
     data: {
-      shop: SHOP,
+      shop,
       phoneNumber: storedPhone,
       contactEmail: EMAIL,
       status: "subscribed",
@@ -94,7 +116,7 @@ async function seed({ storedPhone }) {
   });
 
   const journey = await prisma.journey.create({
-    data: { shop: SHOP, name: "wa test", trigger: "order_placed", status: "published" },
+    data: { shop, name: "wa test", trigger: "order_placed", status: "published" },
   });
   const step = await prisma.journeyStep.create({
     data: {
@@ -106,11 +128,11 @@ async function seed({ storedPhone }) {
     },
   });
   const enrollment = await prisma.journeyEnrollment.create({
-    data: { shop: SHOP, journeyId: journey.id, contactEmail: EMAIL },
+    data: { shop, journeyId: journey.id, contactEmail: EMAIL },
   });
   const job = await prisma.whatsappJob.create({
     data: {
-      shop: SHOP,
+      shop,
       enrollmentId: enrollment.id,
       stepId: step.id,
       scheduledFor: new Date(Date.now() - 1000),
@@ -120,18 +142,20 @@ async function seed({ storedPhone }) {
   return { job, sub };
 }
 
-async function cleanup() {
-  await prisma.whatsappJob.deleteMany({ where: { shop: SHOP } });
-  await prisma.journeyEnrollment.deleteMany({ where: { shop: SHOP } });
-  await prisma.journeyStep.deleteMany({ where: { journey: { shop: SHOP } } });
-  await prisma.journey.deleteMany({ where: { shop: SHOP } });
-  await prisma.whatsappSuppression.deleteMany({ where: { shop: SHOP } });
-  await prisma.whatsappSubscription.deleteMany({ where: { shop: SHOP } });
-  await prisma.whatsappAccount.deleteMany({ where: { shop: SHOP } });
-  await prisma.contact.deleteMany({ where: { shop: SHOP } });
-  await prisma.shopSettings.deleteMany({ where: { shop: SHOP } });
-  await prisma.account.deleteMany({ where: { key: SHOP } });
+async function cleanupShop(shop) {
+  await prisma.whatsappJob.deleteMany({ where: { shop } });
+  await prisma.journeyEnrollment.deleteMany({ where: { shop } });
+  await prisma.journeyStep.deleteMany({ where: { journey: { shop } } });
+  await prisma.journey.deleteMany({ where: { shop } });
+  await prisma.whatsappSuppression.deleteMany({ where: { shop } });
+  await prisma.whatsappSubscription.deleteMany({ where: { shop } });
+  await prisma.whatsappAccount.deleteMany({ where: { shop } });
+  await prisma.contact.deleteMany({ where: { shop } });
+  await prisma.shopSettings.deleteMany({ where: { shop } });
+  await prisma.account.deleteMany({ where: { key: shop } });
 }
+
+const cleanup = () => Promise.all(ALL_SHOPS.map(cleanupShop));
 
 test.beforeEach(() => {
   __resetShopHealthCache?.();
@@ -143,18 +167,19 @@ test.after(async () => {
 });
 
 test("a rejection on a repairable number suppresses nothing and keeps the subscriber", async () => {
-  const { job, sub } = await seed({ storedPhone: BROKEN });
+  const shop = SHOPS.repairable;
+  const { job, sub } = await seed(shop, { storedPhone: BROKEN });
   metaRejects();
 
   await runWhatsappWorker();
 
   // The harm this whole item exists to prevent: an unrecoverable suppression.
   const suppression = await prisma.whatsappSuppression.findUnique({
-    where: { shop_phoneNumber: { shop: SHOP, phoneNumber: REPAIRED } },
+    where: { shop_phoneNumber: { shop, phoneNumber: REPAIRED } },
   });
   assert.equal(suppression, null, "no suppression may be written for a repairable number");
   assert.equal(
-    await prisma.whatsappSuppression.count({ where: { shop: SHOP } }),
+    await prisma.whatsappSuppression.count({ where: { shop } }),
     0,
     "no suppression under any spelling of the number",
   );
@@ -164,7 +189,7 @@ test("a rejection on a repairable number suppresses nothing and keeps the subscr
   assert.equal(after.status, "subscribed", "subscription must not be flipped to invalid");
 
   const contact = await prisma.contact.findUnique({
-    where: { shop_email: { shop: SHOP, email: EMAIL } },
+    where: { shop_email: { shop, email: EMAIL } },
   });
   assert.equal(contact.whatsappStatus, "subscribed", "contact must not be flagged invalid");
 
@@ -179,13 +204,14 @@ test("a rejection on a correctly-stored number still suppresses, as it must", as
   // The guard is narrow by design. A genuine dead recipient — nothing wrong with
   // the digits — must still be suppressed, or the shop keeps paying Meta to
   // message a number that does not exist.
-  const { job, sub } = await seed({ storedPhone: REPAIRED });
+  const shop = SHOPS.genuine;
+  const { job, sub } = await seed(shop, { storedPhone: REPAIRED });
   metaRejects();
 
   await runWhatsappWorker();
 
   const suppression = await prisma.whatsappSuppression.findUnique({
-    where: { shop_phoneNumber: { shop: SHOP, phoneNumber: REPAIRED } },
+    where: { shop_phoneNumber: { shop, phoneNumber: REPAIRED } },
   });
   assert.ok(suppression, "a genuine permanent failure must still suppress");
   assert.equal(suppression.reason, "invalid");
@@ -194,7 +220,7 @@ test("a rejection on a correctly-stored number still suppresses, as it must", as
   assert.equal(after.status, "invalid");
 
   const contact = await prisma.contact.findUnique({
-    where: { shop_email: { shop: SHOP, email: EMAIL } },
+    where: { shop_email: { shop, email: EMAIL } },
   });
   assert.equal(contact.whatsappStatus, "invalid");
 
