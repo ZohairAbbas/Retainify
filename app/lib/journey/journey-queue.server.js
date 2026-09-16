@@ -5,6 +5,58 @@ import { loadGraph, rootId } from "./graph.server.js";
 import { createLazyEnrollment } from "./advance.server.js";
 
 /**
+ * Enroll a contact into EVERY published flow listening on a trigger.
+ *
+ * The webhooks used to pick one flow with findFirst, so a merchant running two
+ * published flows on the same trigger — an email-only and a WhatsApp-only
+ * variant, or a flow-level A/B — silently got whichever row the database
+ * returned first. The second flow looked published in the UI and never enrolled
+ * anyone.
+ *
+ * Every flow decides for itself: enrollContact already applies that flow's own
+ * entry filters and re-entry rules, including the 30-second duplicate guard that
+ * absorbs Shopify's orders/create + orders/paid double-fire. So enrolling into
+ * all of them is not the same as sending more — a flow whose conditions say no
+ * still says no.
+ *
+ * Failures are isolated per flow. One flow with a broken graph must not stop the
+ * others from enrolling, and the webhook that called this has already committed
+ * the work that matters.
+ *
+ * @param {string} shop
+ * @param {string} trigger
+ * @param {string} contactEmail
+ * @param {string} contactName
+ * @param {object|((journey: object) => object)} payload per-flow payload, or a
+ *   function of the flow for callers whose payload depends on it
+ * @returns {Promise<{enrolled: number, flows: number}>}
+ */
+export async function enrollInAllFlows(shop, trigger, contactEmail, contactName, payload) {
+  const flows = await prisma.journey.findMany({
+    where: { shop, trigger, status: "published", archivedAt: null },
+    select: { id: true, name: true },
+    // Stable order so logs read consistently across replays of the same webhook.
+    orderBy: { createdAt: "asc" },
+  });
+  if (!flows.length) return { enrolled: 0, flows: 0 };
+
+  let enrolled = 0;
+  for (const flow of flows) {
+    try {
+      const body = typeof payload === "function" ? payload(flow) : payload;
+      const result = await enrollContact(flow.id, contactEmail, contactName, body);
+      if (result) enrolled++;
+    } catch (err) {
+      console.error(
+        `[enroll-all] ${trigger} flow ${flow.id} (${flow.name}) failed for ${contactEmail}:`,
+        err.message,
+      );
+    }
+  }
+  return { enrolled, flows: flows.length };
+}
+
+/**
  * Enroll a contact in a journey — creates one JourneyJob per sendable step.
  * Honors Journey.status (only "published"), Journey.entryFilters, and
  * Journey.entryFrequency:

@@ -23,7 +23,7 @@
  */
 import { authenticate, unauthenticated } from "../shopify.server.js";
 import prisma from "../db.server.js";
-import { enrollContact } from "../lib/journey/journey-queue.server.js";
+import { enrollInAllFlows } from "../lib/journey/journey-queue.server.js";
 import { evaluateExitCriteria } from "../lib/journey/exit-criteria.server.js";
 import { recordOrder } from "../lib/orders/orders.server.js";
 
@@ -211,15 +211,11 @@ async function handleRefund(shop, payload) {
 
 /** Enroll the buyer into every published post-purchase flow. */
 async function enrollPostPurchase(shop, customerEmail, payload) {
-  const journey = await prisma.journey.findFirst({
-    where: { shop, trigger: "order_placed", status: "published" },
-  });
-  if (!journey) return;
-
   const firstName = payload.customer?.first_name || "";
   const lastName = payload.customer?.last_name || "";
   const name = [firstName, lastName].filter(Boolean).join(" ");
-  await enrollContact(journey.id, customerEmail, name, {
+
+  await enrollInAllFlows(shop, "order_placed", customerEmail, name, {
     orderId: String(payload.id || ""),
     totalPrice: payload.total_price || "",
     currency: payload.currency || "USD",
