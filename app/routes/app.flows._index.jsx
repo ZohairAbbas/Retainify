@@ -2,6 +2,7 @@ import { useState, useRef, Fragment } from "react";
 import { useLoaderData, useNavigate, useLocation, useFetcher, redirect } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
+import { canManage } from "../lib/auth/roles.js";
 import { getFlowAttributionBatch } from "../lib/analytics/attribution.server.js";
 import prisma from "../db.server.js";
 import {
@@ -91,6 +92,14 @@ export const action = async ({ request }) => {
   const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
+
+  // Archiving retires a flow: it pauses it, deactivates it, and takes it out of
+  // the list. Building and editing stay open to members — ROLE_HELP promises a
+  // member "can build and send" — but destroying someone else's work is not
+  // building. Embedded Shopify sessions resolve to owner and are unaffected.
+  if (intent === "archive" && !canManage(ctx.role)) {
+    return { ok: false, error: "Only owners and admins can archive a flow." };
+  }
 
   // Flow count is capped per plan. All three creation paths go through the same
   // check; archive/pause are never gated so a shop at its limit can still
