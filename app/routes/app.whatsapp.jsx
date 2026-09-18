@@ -20,7 +20,6 @@ import EmbeddedSignup from "../components/whatsapp/EmbeddedSignup.jsx";
 import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
-import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
 import { mintConnectToken, appBaseUrl } from "../lib/whatsapp/connect-link.server.js";
 
 /** Subscription states in the merchant's language. */
@@ -52,8 +51,8 @@ function isStale(syncedAt) {
 
 export const loader = async ({ request }) => {
   const ctx = await requireAccount(request);
-  // Gate below: this whole page depends on a storefront.
-  if (!ctx.isShopify) return { storefrontOnly: true };
+  // Open to every workspace. Only popup opt-in capture needs a storefront, and
+  // the page hides that one option when there is none (isShopify below).
   const { shop } = ctx;
 
   const [account, settings, subCount, subscribers, templates, popup] = await Promise.all([
@@ -106,6 +105,7 @@ export const loader = async ({ request }) => {
 
   return {
     gate,
+    isShopify: ctx.isShopify,
     account: account
       ? {
           status: account.status,
@@ -216,6 +216,9 @@ export const action = async ({ request }) => {
   // Turns the popup's phone + consent fields on. Stored on PopupSettings.config
   // because it is a property of the popup, not of the WhatsApp account.
   if (intent === "toggle-popup-optin") {
+    if (!ctx.isShopify) {
+      return { ok: false, error: "Popup opt-in needs a connected Shopify store." };
+    }
     const enabled = fd.get("enabled") === "1";
     const row = await prisma.popupSettings.findUnique({ where: { shop } });
     const config = { ...(row?.config || {}), whatsappOptIn: enabled };
@@ -359,7 +362,7 @@ export const action = async ({ request }) => {
 };
 
 function WhatsappPageInner() {
-  const { gate, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
+  const { gate, isShopify = true, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -1077,6 +1080,20 @@ function WhatsappPageInner() {
             {/* Storefront capture used to say "coming soon" — recordOptIn had no
                 caller anywhere, so this count could never leave zero and no
                 WhatsApp step in any flow could send. */}
+            {!isShopify ? (
+              <div
+                className="t-small muted"
+                style={{
+                  marginTop: 16, padding: 12, borderRadius: 8, lineHeight: 1.5,
+                  border: "1px solid var(--hair-1)", background: "var(--paper-2)",
+                }}
+              >
+                This workspace has no storefront, so there is no popup to collect
+                opt-ins. Subscribers come from contacts imported with a phone
+                number and consent, and from Growzar apps and Merchant360 via the
+                internal API.
+              </div>
+            ) : (
             <label
               className="t-small"
               style={{
@@ -1107,6 +1124,7 @@ function WhatsappPageInner() {
                 </span>
               </span>
             </label>
+            )}
           </section>
 
         </div>
@@ -1131,15 +1149,5 @@ function WhatsappPageInner() {
 export const headers = (headersArgs) => boundary.headers(headersArgs);
 
 export default function WhatsappPage() {
-  // A direct workspace can still reach this URL by bookmark or shared link.
-  const data = useLoaderData();
-  if (data?.storefrontOnly) {
-    return (
-      <StorefrontOnly
-        feature="WhatsApp"
-        what="WhatsApp opt-in is captured by a block in your storefront theme."
-      />
-    );
-  }
   return <WhatsappPageInner />;
 }

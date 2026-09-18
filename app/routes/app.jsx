@@ -98,10 +98,15 @@ export const action = async ({ request }) => {
  * Navigation.
  *
  * `shopifyOnly` marks features that depend on a storefront: the exit-intent
- * popup and the web-push service worker are injected by the theme extension,
- * and WhatsApp opt-in capture is a theme block. A direct workspace has no
- * storefront, so these are hidden rather than shown broken — the server-side
- * backstop is requireShopifyAdmin, which 409s.
+ * popup and the web-push service worker are injected by the theme extension.
+ * A direct workspace has no storefront, so these are hidden rather than shown
+ * broken — the server-side backstop is requireShopifyAdmin, which 409s.
+ *
+ * WhatsApp is NOT shopifyOnly. Only its popup opt-in capture needs a
+ * storefront; connecting a number, templates, test sends and subscribers work
+ * for any workspace — and a direct workspace (Growzar Internal among them)
+ * gets its opt-ins from imports and the internal API instead. The page hides
+ * just the popup option there.
  *
  * Plans is deliberately NOT shopifyOnly: both workspace kinds have a plan and
  * usage worth seeing. Only the checkout differs, which the page handles via its
@@ -112,7 +117,7 @@ const NAV_ACTIVE = [
   { id: "flows",     label: "Flows",     href: "/app/flows",     icon: "Flow" },
   { id: "campaigns", label: "Campaigns", href: "/app/campaigns", icon: "Send" },
   { id: "push",      label: "Push",      href: "/app/push",      icon: "Bell",     shopifyOnly: true },
-  { id: "whatsapp",  label: "WhatsApp",  href: "/app/whatsapp",  icon: "Whatsapp", shopifyOnly: true },
+  { id: "whatsapp",  label: "WhatsApp",  href: "/app/whatsapp",  icon: "Whatsapp" },
   { id: "contacts",  label: "Contacts",  href: "/app/contacts",  icon: "Users" },
   { id: "segments",  label: "Segments",  href: "/app/segments",  icon: "Sliders" },
   { id: "popup",     label: "Popup",     href: "/app/popup",     icon: "Tab",      shopifyOnly: true },
