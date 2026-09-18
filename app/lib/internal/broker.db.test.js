@@ -215,6 +215,15 @@ test("select options are merged and a type change is refused", async (t) => {
   assert.match(res.body.error, /cannot be redeclared/);
 });
 
+test("clearing a property whose definition was deleted is a no-op, not an error", async (t) => {
+  t.after(clear);
+  await sync({ properties: DEFS, contacts: [{ email: EMAIL }] });
+  const res = await sync({ contacts: [{ email: EMAIL, properties: { gone_key: null } }] });
+  assert.equal(res.body.results[0].status, "updated");
+  const bad = await sync({ contacts: [{ email: EMAIL, properties: { gone_key: "x" } }] });
+  assert.equal(bad.body.results[0].status, "error");
+});
+
 test("null clears a property and other properties are left alone", async (t) => {
   t.after(clear);
   await sync({ properties: DEFS, contacts: [{ email: EMAIL, properties: { [PROP]: "pro", [PROP_NUM]: 5 } }] });

@@ -200,13 +200,22 @@ export async function contactActivity(email) {
 export const MANAGED_TAG_PREFIX = "m360:seg:";
 const SEGMENT_KEY_RE = /^[a-z0-9_-]{1,48}$/;
 
-/** Is this segment one ensureManagedSegments created? One hasTag rule on an m360:seg: tag. */
-function managedTagId(segment) {
-  const t = segment.filterTree;
-  const kids = t?.children;
-  if (!t || t.type !== "group" || !Array.isArray(kids) || kids.length !== 1) return null;
-  const r = kids[0];
-  return r?.type === "rule" && r.field === "hasTag" && r.op === "has" ? r.value : null;
+/**
+ * The tag ids a segment's rules test with "has tag", at any depth.
+ *
+ * A managed segment starts as exactly one such rule, but a person may narrow it
+ * in Retainify ("…and opened an email in 30 days"). It is still ours — it still
+ * rests on our tag — so it must be recognised, or the next sync would create a
+ * second "M360 · <name>" beside it. Only name and description are ever written
+ * back, so their extra rules survive.
+ */
+function hasTagIds(node, out = []) {
+  if (!node || typeof node !== "object") return out;
+  if (node.type === "group") for (const c of node.children || []) hasTagIds(c, out);
+  else if (node.type === "rule" && node.field === "hasTag" && (node.op === "has" || node.op === "has_any")) {
+    for (const v of Array.isArray(node.value) ? node.value : [node.value]) if (v) out.push(v);
+  }
+  return out;
 }
 
 /**
@@ -229,14 +238,24 @@ export async function ensureManagedSegments(segments, { prune = false } = {}) {
 
   const existing = await prisma.segment.findMany({ where: { shop: INTERNAL_SHOP, deletedAt: null } });
   const managed = new Map();
-  const tagIds = [...new Set(existing.map(managedTagId).filter(Boolean))];
+  const tagIds = [...new Set(existing.flatMap((seg) => hasTagIds(seg.filterTree)))];
   const tags = tagIds.length
-    ? await prisma.tag.findMany({ where: { id: { in: tagIds } }, select: { id: true, nameKey: true } })
+    ? await prisma.tag.findMany({
+        where: { id: { in: tagIds }, nameKey: { startsWith: MANAGED_TAG_PREFIX } },
+        select: { id: true, nameKey: true },
+      })
     : [];
   const tagKey = new Map(tags.map((t) => [t.id, t.nameKey]));
-  for (const seg of existing) {
-    const nk = tagKey.get(managedTagId(seg));
-    if (nk?.startsWith(MANAGED_TAG_PREFIX)) managed.set(nk.slice(MANAGED_TAG_PREFIX.length), seg);
+  // Oldest first, so when a person has also built their own segment on one of
+  // our tags, the one we created (named "M360 · …") is the one we manage.
+  for (const seg of [...existing].sort((a, b) => a.createdAt - b.createdAt)) {
+    for (const id of hasTagIds(seg.filterTree)) {
+      const nk = tagKey.get(id);
+      if (!nk) continue;
+      const key = nk.slice(MANAGED_TAG_PREFIX.length);
+      const current = managed.get(key);
+      if (!current || (!current.name.startsWith("M360 · ") && seg.name.startsWith("M360 · "))) managed.set(key, seg);
+    }
   }
 
   const results = [];

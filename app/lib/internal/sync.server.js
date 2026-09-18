@@ -171,6 +171,13 @@ function readContactProps(raw, defsByKey) {
   const clear = [];
   for (const [key, value] of entries) {
     const def = defsByKey.get(key);
+    // Clearing a property that no longer exists (someone deleted its
+    // definition in Retainify) is already done — not an error, or retiring an
+    // address would fail on every sync forever.
+    if (!def && (value === null || value === "")) {
+      clear.push(key);
+      continue;
+    }
     if (!def) return { ok: false, error: `Unknown property "${key}" — declare it in properties first.` };
     if (value === null || value === "") {
       clear.push(key);

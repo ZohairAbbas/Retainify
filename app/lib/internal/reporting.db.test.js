@@ -134,4 +134,13 @@ test("managed segments are created, renamed, matched by tag, and pruned", async 
   assert.equal(pruned.body.removed, 1);
   assert.equal((await prisma.segment.findUnique({ where: { id: mine.id } })).deletedAt, null);
   assert.equal((await post({ segments: [{ key: "Bad Key", name: "x" }] })).status, 400);
+
+  // Narrowed by a person in Retainify: still recognised, not duplicated, their rule kept.
+  const narrowed = { type: "group", match: "all", children: [segA.filterTree.children[0], { type: "rule", field: "emailsOpened", op: "gt", value: 0 }] };
+  await prisma.segment.update({ where: { id: segA.id }, data: { filterTree: narrowed } });
+  const after = await post({ segments: [{ key: "rep-a", name: "Reporting A2" }] });
+  assert.equal(after.body.segments[0].status, "exists");
+  assert.equal(after.body.segments[0].segmentId, segA.id);
+  assert.equal((await prisma.segment.findUnique({ where: { id: segA.id } })).filterTree.children.length, 2);
+  assert.equal(await prisma.segment.count({ where: { shop: INTERNAL_SHOP, name: "M360 · Reporting A2", deletedAt: null } }), 1);
 });
