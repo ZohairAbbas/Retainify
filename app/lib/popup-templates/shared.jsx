@@ -1,3 +1,12 @@
+import { createContext, useContext } from "react";
+
+/**
+ * What the popup editors need to know about the workspace. A Shopify store
+ * gets a unique single-use code minted per signup; any other website has no
+ * store to mint in, so it reveals a code the merchant created themselves.
+ */
+export const PopupEnv = createContext({ isShopify: true });
+
 export function TextField({ label, value, onChange, help, type = "text" }) {
   return (
     <div className="rt-pop-field">
@@ -256,7 +265,8 @@ export function GradientRowWithCustom({ label, value, onChange, options, customV
   );
 }
 
-export function CommonTimingFields({ data, onUpdate }) {
+export function CommonTimingFields({ data, onUpdate, showDiscount = true }) {
+  const { isShopify } = useContext(PopupEnv);
   return (
     <>
       <div className="rt-pop-section">
@@ -297,16 +307,28 @@ export function CommonTimingFields({ data, onUpdate }) {
           ]}
         />
       </div>
-      <div className="rt-pop-section">
-        <div className="rt-pop-section-h">Discount</div>
-        <SelectField
-          label="Discount percentage"
-          value={String(data.discount ?? 10)}
-          onChange={(v) => onUpdate({ discount: +v })}
-          options={[5, 10, 15, 20, 25].map((n) => ({ value: String(n), label: `${n}%` }))}
-          help="Auto-generated single-use code is sent after email confirmation."
-        />
-      </div>
+      {showDiscount && (
+        <div className="rt-pop-section">
+          <div className="rt-pop-section-h">Discount</div>
+          <SelectField
+            label="Discount percentage"
+            value={String(data.discount ?? 10)}
+            onChange={(v) => onUpdate({ discount: +v })}
+            options={[5, 10, 15, 20, 25, 30].map((n) => ({ value: String(n), label: `${n}%` }))}
+            help={isShopify
+              ? "A unique single-use code is created in your Shopify store and sent after they confirm their email."
+              : "The number shown in the popup."}
+          />
+          {!isShopify && (
+            <TextField
+              label="Discount code to send"
+              value={data.offerCode}
+              onChange={(v) => onUpdate({ offerCode: v.trim().slice(0, 64) })}
+              help="Create this code in your own checkout first. It's shown and emailed after they confirm. Leave empty to collect subscribers without a code — and remove the discount from your copy."
+            />
+          )}
+        </div>
+      )}
     </>
   );
 }

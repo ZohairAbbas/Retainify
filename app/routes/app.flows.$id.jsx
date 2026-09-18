@@ -36,6 +36,8 @@ import {
   walk as walkTree,
   splitDepth,
   insertNode as insertTreeNode,
+  moveNode as moveTreeNode,
+  canMoveNode,
   insertSplit,
   removeNode as removeTreeNode,
   removeSplit,
@@ -745,6 +747,12 @@ export default function FlowBuilder() {
     });
   }
 
+  // Reorder within a chain. The tree helper does the work; see canvas-tree.js
+  // for which steps can move and why a split or an exit cannot.
+  function moveNodeBy(id, dir) {
+    setNodes((arr) => moveTreeNode(arr, id, dir));
+  }
+
   function insertNode(parentId, branch, kind) {
     if (kind === "split" || kind === "abtest") {
       let created = null;
@@ -1086,6 +1094,7 @@ export default function FlowBuilder() {
                   setSelectedId={setSelectedId}
                   onDuplicate={duplicateNode}
                   onDelete={deleteNode}
+                  onMove={moveNodeBy}
                   onInsert={insertNode}
                   openMenuId={openMenuId}
                   setOpenMenuId={setOpenMenuId}
@@ -1426,7 +1435,37 @@ function LeaveDraftModal({ onCancel, onSaveAndContinue, onDiscardAndContinue, lo
   );
 }
 
-function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, stats, showPreview, showAnalytics, tags = [] }) {
+/**
+ * Move a step up or down its chain. Shown on every step that can move — the
+ * trigger, splits and exits can't, so they never render one.
+ */
+function MoveButtons({ onMove, canUp, canDown }) {
+  if (!onMove || (!canUp && !canDown)) return null;
+  return (
+    <>
+      <button
+        type="button"
+        disabled={!canUp}
+        title={canUp ? "Move up" : "Can't move up from here"}
+        aria-label="Move step up"
+        onClick={(e) => { e.stopPropagation(); onMove("up"); }}
+      >
+        <Icons.ArrowUp size={13} />
+      </button>
+      <button
+        type="button"
+        disabled={!canDown}
+        title={canDown ? "Move down" : "Can't move down from here"}
+        aria-label="Move step down"
+        onClick={(e) => { e.stopPropagation(); onMove("down"); }}
+      >
+        <Icons.ArrowDown size={13} />
+      </button>
+    </>
+  );
+}
+
+function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, onMove, canMoveUp, canMoveDown, stats, showPreview, showAnalytics, tags = [] }) {
   const trig = TRIGGER_CONFIG[journey.trigger] || TRIGGER_CONFIG.customer_created;
   const TrigIcon = Icons[trig.icon];
 
@@ -1462,6 +1501,7 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
           <div className="rt-node-glyph rt-tint-delay"><Icons.Clock size={14} /></div>
           <div className="rt-node-title">Wait {formatHours(node.hours)}</div>
           <div className="rt-node-actions">
+            <MoveButtons onMove={onMove} canUp={canMoveUp} canDown={canMoveDown} />
             <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
               <Icons.Copy size={13} />
             </button>
@@ -1488,6 +1528,7 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
             {node.emailName || (removing ? "Remove tag" : "Tag contact")}
           </div>
           <div className="rt-node-actions">
+            <MoveButtons onMove={onMove} canUp={canMoveUp} canDown={canMoveDown} />
             <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
               <Icons.Copy size={13} />
             </button>
@@ -1531,6 +1572,7 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
             {node.emailName || (isTest ? "A/B test" : "Split branch")}
           </div>
           <div className="rt-node-actions">
+            <MoveButtons onMove={onMove} canUp={canMoveUp} canDown={canMoveDown} />
             {/* No duplicate: copying a split would have to say what happens to
                 its two subtrees, and nobody has asked for an answer yet. */}
             <button onClick={(e) => { e.stopPropagation(); onDelete(); }}>
@@ -1591,6 +1633,7 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
           <div className="rt-node-glyph rt-tint-push"><Icons.Bell size={14} /></div>
           <div className="rt-node-title">{node.pushTitle || "Push Notification"}</div>
           <div className="rt-node-actions">
+            <MoveButtons onMove={onMove} canUp={canMoveUp} canDown={canMoveDown} />
             <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
               <Icons.Copy size={13} />
             </button>
@@ -1618,6 +1661,7 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
           <div className="rt-node-glyph rt-tint-whatsapp"><Icons.Whatsapp size={14} /></div>
           <div className="rt-node-title">{node.waTemplateName || "WhatsApp message"}</div>
           <div className="rt-node-actions">
+            <MoveButtons onMove={onMove} canUp={canMoveUp} canDown={canMoveDown} />
             <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
               <Icons.Copy size={13} />
             </button>
@@ -1646,6 +1690,7 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
         <div className="rt-node-glyph rt-tint-email"><Icons.Mail size={14} /></div>
         <div className="rt-node-title">{node.emailName || "Email"}</div>
         <div className="rt-node-actions">
+            <MoveButtons onMove={onMove} canUp={canMoveUp} canDown={canMoveDown} />
           <button onClick={(e) => { e.stopPropagation(); onDuplicate(); }}>
             <Icons.Copy size={13} />
           </button>
@@ -1752,6 +1797,7 @@ function BranchColumn({
   setSelectedId,
   onDuplicate,
   onDelete,
+  onMove,
   onInsert,
   openMenuId,
   setOpenMenuId,
@@ -1805,6 +1851,9 @@ function BranchColumn({
               onSelect={() => setSelectedId(node.id)}
               onDuplicate={() => onDuplicate(node.id)}
               onDelete={() => onDelete(node.id)}
+              onMove={onMove ? (dir) => onMove(node.id, dir) : undefined}
+              canMoveUp={canMoveNode(nodes, node.id, "up")}
+              canMoveDown={canMoveNode(nodes, node.id, "down")}
               stats={stats?.[node.id]}
               showPreview={showPreview}
               showAnalytics={showAnalytics}
@@ -1828,6 +1877,7 @@ function BranchColumn({
                 setSelectedId={setSelectedId}
                 onDuplicate={onDuplicate}
                 onDelete={onDelete}
+                onMove={onMove}
                 onInsert={onInsert}
                 openMenuId={openMenuId}
                 setOpenMenuId={setOpenMenuId}

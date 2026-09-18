@@ -91,6 +91,20 @@ export const TASKS = [
     platform: "shopify",
   },
   {
+    // The website counterpart of "embed" + "popup" for a workspace without
+    // Shopify: paste one script tag. Completes itself once the popup is on
+    // AND has actually loaded on one of the merchant's domains, so a tag
+    // that was never pasted (or pasted on the wrong site) doesn't count.
+    id: "website",
+    title: "Add a signup popup to your website (optional)",
+    sub: "Paste one line of code — works on any site builder",
+    time: "5 min",
+    optional: true,
+    detect: "auto",
+    panel: "website",
+    platform: "direct",
+  },
+  {
     id: "flow",
     title: "Launch your first flow",
     sub: "Cart recovery or a welcome series",

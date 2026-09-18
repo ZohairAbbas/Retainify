@@ -458,6 +458,11 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-node-actions { display: flex; gap: 2px; opacity: 0; transition: opacity var(--t-fast) var(--ease); }
 .rt-node:hover .rt-node-actions { opacity: 1; }
 .rt-node-actions button { background: transparent; border: 0; padding: 5px; border-radius: 4px; color: var(--ink-3); cursor: pointer; }
+/* A move button that would do nothing stays visible but plainly unavailable —
+   the row keeps its shape as steps are reordered. */
+.rt-node-actions button:disabled { opacity: 0.3; cursor: default; }
+/* The actions only appear on hover; keyboard users need them on focus too. */
+.rt-node:focus-within .rt-node-actions { opacity: 1; }
 .rt-node-actions button:hover { background: var(--paper-2); color: var(--ink-1); }
 .rt-node-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 8px; }
 .rt-node:last-child .rt-node-head { border-bottom: 0; }
@@ -3456,3 +3461,112 @@ a.rt-bulk-btn:hover { color: var(--on-brand); }
 .rt-mini-push { background: var(--node-push-bg); color: var(--node-push-ink); }
 .rt-seq-whatsapp { background: var(--node-whatsapp-bg); color: var(--node-whatsapp-ink); font-size: 9px; font-weight: 700; }
 .rt-seq-push { background: var(--node-push-bg); font-size: 8px; }
+
+/* ── Contacts: calmer list ─────────────────────────────────────────────── */
+.rt-stats-compact { gap: 12px; margin-bottom: 20px; }
+.rt-stats-compact .rt-stat { padding: 12px 16px; gap: 4px; box-shadow: none; }
+.rt-stats-compact .rt-stat-value { font-size: 26px; }
+
+.rt-ct-toolbar { flex-wrap: wrap; gap: 8px; justify-content: flex-start; }
+.rt-ct-toolbar .rt-ct-search { width: 240px; }
+.rt-ct-toolbar .rt-toolbar-right { gap: 8px; }
+
+/* Segmented control: one choice of several, reads as a single control
+   rather than a row of separate pills. */
+.rt-seg-ctl {
+  display: inline-flex; padding: 2px; gap: 2px;
+  background: var(--paper-2); border: 1px solid var(--hair-1); border-radius: var(--r-3);
+}
+.rt-seg-ctl button {
+  border: 0; background: transparent; padding: 5px 10px; border-radius: calc(var(--r-3) - 2px);
+  font: inherit; font-size: 13px; color: var(--ink-2); cursor: pointer; white-space: nowrap;
+}
+.rt-seg-ctl button:hover { color: var(--ink-1); }
+.rt-seg-ctl button.on { background: var(--paper-3); color: var(--ink-1); font-weight: 600; box-shadow: var(--sh-1); }
+.rt-seg-ctl-n { font-family: var(--font-mono); font-size: 11px; color: var(--ink-4); margin-left: 2px; }
+.rt-seg-ctl button.on .rt-seg-ctl-n { color: var(--ink-3); }
+
+.rt-ctable .rt-ctrow { padding-top: 10px; padding-bottom: 10px; }
+.rt-ctable .rt-cname-name { font-size: 12px; }
+
+@media (max-width: 900px) {
+  .rt-stats-compact { grid-template-columns: repeat(2, 1fr); }
+  .rt-ct-toolbar .rt-ct-search { width: 100%; }
+  .rt-ct-toolbar .rt-toolbar-right { margin-left: 0; }
+}
+
+/* ── Popups: install on a website ─────────────────────────────────────── */
+.rt-wi {
+  background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4);
+  padding: 24px 26px; margin: 0 0 28px;
+}
+.rt-wi-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 18px; }
+.rt-wi-status { display: inline-flex; align-items: center; gap: 8px; font-size: 12.5px; font-weight: 600; padding: 5px 12px; border-radius: var(--r-pill); }
+.rt-wi-dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+.rt-wi-status-ok { background: var(--success-bg); color: var(--success-ink); }
+.rt-wi-status-warn { background: var(--warn-bg, #F6EBCB); color: var(--warn-ink, #6B5018); }
+.rt-wi-status-idle { background: var(--paper-2); color: var(--ink-3); }
+.rt-wi-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 0; }
+.rt-wi-steps > li { padding: 16px 0 18px 38px; border-top: 1px solid var(--hair-1); position: relative; }
+.rt-wi-step-h { font-weight: 600; font-size: 14.5px; color: var(--ink-1); margin-bottom: 4px; display: flex; align-items: center; gap: 10px; margin-left: -38px; }
+.rt-wi-num {
+  width: 26px; height: 26px; border-radius: 50%; flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1.5px solid var(--hair-2); font-size: 12px; color: var(--ink-2); background: var(--paper-3);
+}
+.rt-wi-steps > li.is-done .rt-wi-num { background: var(--brand-700); border-color: var(--brand-700); color: var(--on-brand, #fff); }
+.rt-wi-steps p { margin: 0 0 10px; }
+.rt-wi-domains { display: flex; gap: 8px; align-items: flex-start; max-width: 560px; }
+.rt-wi-domains .textarea { flex: 1; min-height: 44px; font-family: var(--font-mono); font-size: 13px; }
+.rt-wi-code {
+  display: flex; gap: 10px; align-items: center; margin: 8px 0 14px;
+  background: var(--ink-1); color: var(--paper-1); border-radius: var(--r-3); padding: 10px 10px 10px 14px;
+}
+.rt-wi-code code { flex: 1; font-family: var(--font-mono); font-size: 12.5px; overflow-x: auto; white-space: nowrap; }
+.rt-wi-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin-bottom: 10px; }
+.rt-wi-tabs button {
+  border: 1px solid var(--hair-1); background: var(--paper-2); color: var(--ink-2);
+  font: inherit; font-size: 12.5px; padding: 5px 11px; border-radius: var(--r-pill); cursor: pointer;
+}
+.rt-wi-tabs button.on { background: var(--ink-1); border-color: var(--ink-1); color: var(--paper-1); }
+.rt-wi-guide { margin: 0; padding-left: 20px; font-size: 13.5px; line-height: 1.6; color: var(--ink-2); max-width: 640px; }
+.rt-wi-guide li + li { margin-top: 4px; }
+.rt-wi-checks { list-style: none; margin: 6px 0 0; padding: 0; font-size: 13.5px; }
+.rt-wi-checks li { position: relative; padding-left: 24px; margin: 6px 0; color: var(--ink-3); }
+.rt-wi-checks li::before { content: ""; position: absolute; left: 2px; top: 4px; width: 12px; height: 12px; border-radius: 50%; border: 1.5px solid var(--hair-2); }
+.rt-wi-checks li.ok { color: var(--ink-1); }
+.rt-wi-checks li.ok::before { background: var(--success-ink); border-color: var(--success-ink); }
+.rt-wi code { font-family: var(--font-mono); font-size: 0.92em; }
+.rt-wi-trouble { margin-top: 12px; font-size: 13px; color: var(--ink-2); }
+.rt-wi-trouble summary { cursor: pointer; color: var(--link); }
+.rt-wi-trouble ul { margin: 8px 0 0; padding-left: 20px; line-height: 1.6; }
+@media (max-width: 640px) {
+  .rt-wi { padding: 18px 16px; }
+  .rt-wi-domains { flex-direction: column; align-items: stretch; }
+}
+
+/* ── Newer email blocks (canvas) ────────────────────────────────────────── */
+.rt-emb-quote { background: rgba(0,0,0,0.035); border-radius: 8px; padding: 22px 24px; }
+.rt-emb-list { display: flex; flex-direction: column; gap: 6px; font-size: 15px; line-height: 1.55; }
+.rt-emb-list-row { display: grid; grid-template-columns: 24px 1fr; }
+.rt-emb-list-row > span:first-child { font-weight: 700; }
+.rt-emb-callout { border-radius: 8px; padding: 18px 22px; }
+.rt-emb-callout-label { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; font-weight: 700; opacity: 0.8; margin-bottom: 6px; }
+.rt-emb-social-pill { display: inline-block; margin: 4px; padding: 6px 14px; border: 1px solid; border-radius: 999px; font-size: 13px; }
+.rt-emb-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; align-items: center; }
+
+/* ── Email builder: drag to reorder ─────────────────────────────────────── */
+.rt-emb-wrap { position: relative; }
+.rt-emb-drag {
+  position: absolute; top: 4px; left: -26px;
+  width: 22px; height: 26px; display: flex; align-items: center; justify-content: center;
+  background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: 5px;
+  color: var(--ink-3); cursor: grab; padding: 0;
+}
+.rt-emb-drag:hover { color: var(--ink-1); border-color: var(--hair-2); }
+.rt-emb-drag:active { cursor: grabbing; }
+.rt-emb-dragging { opacity: 0.4; }
+.rt-emb-dropline { height: 2px; margin: 0 8px; border-radius: 2px; background: transparent; transition: background var(--t-fast) var(--ease); }
+.rt-emb-dropline.is-on { background: var(--brand-700); box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand-700) 18%, transparent); }
+.rt-emb-empty-drop { outline: 2px dashed var(--brand-700); outline-offset: -6px; }
+.rt-emb-lib-item[draggable="true"] { cursor: grab; }

@@ -30,6 +30,13 @@ function makeBlock(type, trigger) {
     // generated code's value.
     case "discount":  return { id: bid(), type, percent: 10, label: "A little gift for you" };
     case "footer":    return { id: bid(), type, storeName: "{store_name}", address: "", unsubscribe: true };
+    case "quote":     return { id: bid(), type, text: "Honestly the best thing I bought this year. I've already ordered a second one.", author: "Sarah, verified customer", stars: 5, align: "center" };
+    case "list":      return { id: bid(), type, items: "Free shipping on every order\nEasy 30-day returns\nReal humans answer every email", style: "check" };
+    case "callout":   return { id: bid(), type, label: "This week only", html: "Free shipping on every order over $50", align: "center" };
+    case "social":    return { id: bid(), type, label: "Follow along", align: "center", links: [{ network: "instagram", url: "" }, { network: "tiktok", url: "" }] };
+    case "video":     return { id: bid(), type, src: "", url: "", caption: "Watch the video", alt: "" };
+    case "columns":   return { id: bid(), type, src: "", alt: "", heading: "A headline for this story", html: "Two or three sentences on why it matters to your reader.", linkText: "Read more", url: "", imageSide: "left" };
+    case "coupon":    return { id: bid(), type, code: "WELCOME10", label: "Your code", note: "Enter it at checkout." };
     default: return null;
   }
 }
@@ -109,6 +116,11 @@ const TEXT_SWATCHES = [
   { name: "Cream",  value: "#FCE6D6" },
   { name: "White",  value: "#FFFFFF" },
 ];
+
+const SOCIAL_NETWORKS = {
+  instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", x: "X", youtube: "YouTube",
+  linkedin: "LinkedIn", pinterest: "Pinterest", whatsapp: "WhatsApp", website: "Website",
+};
 
 const MERGE_TAGS = ["{first_name}", "{last_name}", "{store_name}", "{store_url}", "{discount_code}", "{cart_url}"];
 
@@ -303,6 +315,94 @@ export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
       </div>
     );
   }
+  if (block.type === "quote") {
+    const stars = Math.max(0, Math.min(5, Number(block.stars) || 0));
+    return (
+      <div className="rt-emb-quote" style={{ textAlign: block.align || "center" }}>
+        {stars > 0 && <div style={{ color: accent, letterSpacing: 3, marginBottom: 8 }}>{"★".repeat(stars)}{"☆".repeat(5 - stars)}</div>}
+        <div style={{ fontFamily: fonts.display, fontSize: 20, lineHeight: 1.4, color: ink, ...displayItalicStyle }}>&ldquo;{block.text}&rdquo;</div>
+        {block.author && <div style={{ fontFamily: fonts.body, fontSize: 13, color: subInk, marginTop: 10 }}>— {block.author}</div>}
+      </div>
+    );
+  }
+  if (block.type === "list") {
+    const items = String(block.items || "").split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 12);
+    return (
+      <div className="rt-emb-list" style={{ fontFamily: fonts.body }}>
+        {items.map((it, i) => (
+          <div key={i} className="rt-emb-list-row">
+            <span style={{ color: accent }}>{block.style === "number" ? `${i + 1}.` : block.style === "bullet" ? "•" : "✓"}</span>
+            <span style={{ color: block.color || subInk }}>{it}</span>
+          </div>
+        ))}
+        {items.length === 0 && <div className="muted t-small">Add items in the inspector →</div>}
+      </div>
+    );
+  }
+  if (block.type === "callout") {
+    return (
+      <div className="rt-emb-callout" style={{ background: block.bgColor || accent, color: block.textColor || onAccent, textAlign: block.align || "center", fontFamily: fonts.body }}>
+        {block.label && <div className="rt-emb-callout-label">{block.label}</div>}
+        <div
+          className={!isPreview ? "rt-emb-editable" : undefined}
+          contentEditable={!isPreview}
+          suppressContentEditableWarning
+          onBlur={(e) => onInlineEdit && onInlineEdit({ html: e.currentTarget.innerHTML })}
+          style={{ fontSize: 16, fontWeight: 600, lineHeight: 1.5 }}
+          dangerouslySetInnerHTML={{ __html: block.html }}
+        />
+      </div>
+    );
+  }
+  if (block.type === "social") {
+    const links = (block.links || []).filter((l) => l?.network);
+    return (
+      <div style={{ textAlign: block.align || "center", fontFamily: fonts.body }}>
+        {block.label && <div style={{ fontSize: 13, color: subInk, marginBottom: 6 }}>{block.label}</div>}
+        {links.map((l, i) => (
+          <span key={i} className="rt-emb-social-pill" style={{ borderColor: accent, color: accent, opacity: l.url ? 1 : 0.45 }}>
+            {SOCIAL_NETWORKS[l.network] || l.network}
+          </span>
+        ))}
+      </div>
+    );
+  }
+  if (block.type === "video") {
+    return (
+      <div style={{ textAlign: "center", fontFamily: fonts.body }}>
+        {block.src
+          ? <img src={block.src} alt={block.alt || ""} style={{ width: "100%", display: "block", borderRadius: 6 }} />
+          : <div className="rt-emb-image-placeholder" style={{ height: 200 }}><Icons.Play size={22} /><span style={{ fontFamily: "var(--font-mono)", fontSize: 11, marginTop: 6 }}>Video thumbnail</span></div>}
+        <div style={{ marginTop: 10, fontSize: 14, fontWeight: 600, color: accent }}>▶&nbsp; {block.caption || "Watch the video"}</div>
+      </div>
+    );
+  }
+  if (block.type === "columns") {
+    const img = block.src
+      ? <img src={block.src} alt={block.alt || ""} style={{ width: "100%", display: "block", borderRadius: 6 }} />
+      : <div className="rt-emb-image-placeholder" style={{ height: 150 }}><Icons.Image size={18} /></div>;
+    const text = (
+      <div>
+        {block.heading && <div style={{ fontFamily: fonts.display, fontSize: 20, lineHeight: 1.25, color: ink, marginBottom: 8, ...displayItalicStyle }}>{block.heading}</div>}
+        <div style={{ fontFamily: fonts.body, fontSize: 14, lineHeight: 1.6, color: subInk }} dangerouslySetInnerHTML={{ __html: block.html }} />
+        {block.linkText && <div style={{ marginTop: 10, fontFamily: fonts.body, fontSize: 14, fontWeight: 600, color: accent, textDecoration: "underline" }}>{block.linkText} →</div>}
+      </div>
+    );
+    return (
+      <div className="rt-emb-columns">
+        {block.imageSide === "right" ? <>{text}{img}</> : <>{img}{text}</>}
+      </div>
+    );
+  }
+  if (block.type === "coupon") {
+    return (
+      <div className="rt-emb-discount" style={{ borderColor: accent, borderWidth: 2 }}>
+        {block.label && <div className="rt-emb-discount-label" style={{ fontFamily: fonts.body, color: accent }}>{block.label}</div>}
+        <div className="rt-emb-discount-code" style={{ fontFamily: "var(--font-mono)", color: ink }}>{block.code || "YOURCODE"}</div>
+        {block.note && <div className="rt-emb-discount-percent" style={{ fontFamily: fonts.body, color: subInk }}>{block.note}</div>}
+      </div>
+    );
+  }
   if (block.type === "footer") {
     return (
       <div className="rt-emb-footer" style={{ fontFamily: fonts.body, color: subInk }}>
@@ -320,13 +420,36 @@ export function BlockView({ block, brand: rawBrand, isPreview, onInlineEdit }) {
 }
 
 // ── Block wrapper (selection + handles) ────────────────────────────────────
-function BlockWrapper({ block, brand, selected, onSelect, onMove, onDuplicate, onDelete, onInlineEdit, canMoveUp, canMoveDown }) {
+function BlockWrapper({
+  block, brand, selected, onSelect, onMove, onDuplicate, onDelete, onInlineEdit,
+  canMoveUp, canMoveDown, dnd, index,
+}) {
+  // Dragging is offered through a handle rather than the whole block: the
+  // text blocks are contentEditable, and a draggable parent makes selecting a
+  // word with the mouse start a drag instead.
+  const dragging = dnd?.draggingId === block.id;
   return (
     <div
-      className={`rt-emb-wrap${selected ? " rt-emb-selected" : ""}`}
+      className={`rt-emb-wrap${selected ? " rt-emb-selected" : ""}${dragging ? " rt-emb-dragging" : ""}`}
       onClick={(e) => { e.stopPropagation(); onSelect(block.id); }}
+      onDragOver={(e) => dnd?.onDragOverBlock(e, index)}
+      onDrop={(e) => dnd?.onDrop(e)}
     >
       <BlockView block={block} brand={brand} isPreview={false} onInlineEdit={onInlineEdit} />
+      {(selected || dnd?.active) && (
+        <button
+          type="button"
+          className="rt-emb-drag"
+          title="Drag to reorder"
+          aria-label={`Drag ${block.type} block to reorder`}
+          draggable
+          onDragStart={(e) => dnd?.onDragStartBlock(e, block.id)}
+          onDragEnd={() => dnd?.onDragEnd()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <Icons.Drag size={13} />
+        </button>
+      )}
       {selected && (
         <div className="rt-emb-tools" onClick={(e) => e.stopPropagation()}>
           <button title="Move up" disabled={!canMoveUp} onClick={() => onMove(block.id, -1)}><Icons.ArrowUp size={12} /></button>
@@ -344,7 +467,17 @@ function InsertGap({ onAdd, idx, openId, setOpenId, isShopify }) {
   const id = `gap-${idx}`;
   const open = openId === id;
   return (
-    <div className="rt-emb-gap">
+    <div
+      className="rt-emb-gap"
+      // Releasing a dragged block in the gap between two blocks is the most
+      // natural thing to do, so the gap is a drop target in its own right.
+      onDragOver={(e) => {
+        if (!dnd?.active) return;
+        e.preventDefault();
+        dnd.onDragOverGap(e, idx);
+      }}
+      onDrop={(e) => dnd?.onDrop(e)}
+    >
       <button className="rt-emb-gap-btn" onClick={(e) => { e.stopPropagation(); setOpenId(open ? null : id); }}>
         <Icons.Plus size={12} />
       </button>
@@ -808,6 +941,8 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag, showDataT
     logo: "Logo", heading: "Heading", paragraph: "Paragraph", button: "Button",
     image: "Image", spacer: "Spacer", divider: "Divider", product: "Product grid",
     discount: "Discount code", footer: "Footer",
+    quote: "Testimonial", list: "Checklist", callout: "Callout", social: "Social links",
+    video: "Video", columns: "Image + text", coupon: "Coupon code",
   }[block.type];
 
   return (
@@ -937,6 +1072,122 @@ function BlockInspector({ block, onUpdate, onDelete, onInsertMergeTag, showDataT
           <div className="rt-emb-linked-note">
             <Icons.Bolt size={12} />
             <span>The discount code is generated by Shopify when the email sends.</span>
+          </div>
+        </div>
+      )}
+
+      {block.type === "quote" && (
+        <div className="rt-ins-section">
+          <label className="field-label">Quote</label>
+          <textarea className="textarea" rows={4} value={block.text} onChange={(e) => onUpdate({ text: e.target.value })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Who said it</label>
+          <input className="input" value={block.author} onChange={(e) => onUpdate({ author: e.target.value })} placeholder="Name, verified customer" />
+          <label className="field-label" style={{ marginTop: 14 }}>Stars</label>
+          <div className="rt-segmented">
+            {[0, 3, 4, 5].map((n) => (
+              <button key={n} className={Number(block.stars) === n ? "rt-seg-on" : ""} onClick={() => onUpdate({ stars: n })}>{n === 0 ? "None" : `${n}★`}</button>
+            ))}
+          </div>
+          <label className="field-label" style={{ marginTop: 14 }}>Alignment</label>
+          <AlignToggle value={block.align} onChange={(v) => onUpdate({ align: v })} />
+          <div className="field-help" style={{ marginTop: 10 }}>Use a real review, with permission. Invented testimonials break consumer-protection law in most places.</div>
+        </div>
+      )}
+
+      {block.type === "list" && (
+        <div className="rt-ins-section">
+          <label className="field-label">Items (one per line)</label>
+          <textarea className="textarea" rows={5} value={block.items} onChange={(e) => onUpdate({ items: e.target.value })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Marker</label>
+          <div className="rt-segmented">
+            {[["check", "✓ Ticks"], ["bullet", "• Bullets"], ["number", "1. Steps"]].map(([k, l]) => (
+              <button key={k} className={block.style === k ? "rt-seg-on" : ""} onClick={() => onUpdate({ style: k })}>{l}</button>
+            ))}
+          </div>
+          <label className="field-label" style={{ marginTop: 14 }}>Text color</label>
+          <ColorField value={block.color} onChange={(v) => onUpdate({ color: v })} presets={TEXT_SWATCHES} allowClear />
+        </div>
+      )}
+
+      {block.type === "callout" && (
+        <div className="rt-ins-section">
+          <label className="field-label">Small label (optional)</label>
+          <input className="input" value={block.label || ""} onChange={(e) => onUpdate({ label: e.target.value })} placeholder="This week only" />
+          <div className="field-help" style={{ marginTop: 6 }}>Click the callout on the canvas to edit its message.</div>
+          <label className="field-label" style={{ marginTop: 14 }}>Background</label>
+          <ColorField value={block.bgColor} onChange={(v) => onUpdate({ bgColor: v })} presets={ACCENT_SWATCHES} allowClear />
+          <label className="field-label" style={{ marginTop: 14 }}>Text color</label>
+          <ColorField value={block.textColor} onChange={(v) => onUpdate({ textColor: v })} presets={TEXT_SWATCHES} allowClear />
+          <label className="field-label" style={{ marginTop: 14 }}>Alignment</label>
+          <AlignToggle value={block.align} onChange={(v) => onUpdate({ align: v })} />
+        </div>
+      )}
+
+      {block.type === "social" && (
+        <div className="rt-ins-section">
+          <label className="field-label">Label (optional)</label>
+          <input className="input" value={block.label || ""} onChange={(e) => onUpdate({ label: e.target.value })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Links</label>
+          {(block.links || []).map((l, i) => (
+            <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
+              <select className="select" style={{ width: 120 }} value={l.network} onChange={(e) => onUpdate({ links: block.links.map((x, j) => (j === i ? { ...x, network: e.target.value } : x)) })}>
+                {Object.entries(SOCIAL_NETWORKS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <input className="input" style={{ flex: 1 }} value={l.url} placeholder="https://" onChange={(e) => onUpdate({ links: block.links.map((x, j) => (j === i ? { ...x, url: e.target.value.trim() } : x)) })} />
+              <button className="btn btn-ghost btn-icon" aria-label="Remove link" onClick={() => onUpdate({ links: block.links.filter((_, j) => j !== i) })}><Icons.Close size={12} /></button>
+            </div>
+          ))}
+          {(block.links || []).length < 8 && (
+            <button className="btn btn-secondary btn-sm" onClick={() => onUpdate({ links: [...(block.links || []), { network: "website", url: "" }] })}>
+              <Icons.Plus size={12} /> Add link
+            </button>
+          )}
+          <div className="field-help" style={{ marginTop: 10 }}>Links without a full https:// address are left out of the email.</div>
+        </div>
+      )}
+
+      {block.type === "video" && (
+        <div className="rt-ins-section">
+          <ImageUploader block={block} onUpdate={onUpdate} />
+          <label className="field-label" style={{ marginTop: 14 }}>Video link</label>
+          <input className="input" value={block.url} onChange={(e) => onUpdate({ url: e.target.value.trim() })} placeholder="https://youtube.com/watch?v=…" />
+          <label className="field-label" style={{ marginTop: 14 }}>Caption</label>
+          <input className="input" value={block.caption} onChange={(e) => onUpdate({ caption: e.target.value })} />
+          <div className="field-help" style={{ marginTop: 10 }}>Email apps can't play video, so this shows the thumbnail and opens the video when clicked. A screenshot with a visible play button works best.</div>
+        </div>
+      )}
+
+      {block.type === "columns" && (
+        <div className="rt-ins-section">
+          <ImageUploader block={block} onUpdate={onUpdate} />
+          <label className="field-label" style={{ marginTop: 14 }}>Image side</label>
+          <div className="rt-segmented">
+            {[["left", "Left"], ["right", "Right"]].map(([k, l]) => (
+              <button key={k} className={block.imageSide === k ? "rt-seg-on" : ""} onClick={() => onUpdate({ imageSide: k })}>{l}</button>
+            ))}
+          </div>
+          <label className="field-label" style={{ marginTop: 14 }}>Heading</label>
+          <input className="input" value={block.heading} onChange={(e) => onUpdate({ heading: e.target.value })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Text</label>
+          <textarea className="textarea" rows={3} value={block.html} onChange={(e) => onUpdate({ html: e.target.value })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Link text (optional)</label>
+          <input className="input" value={block.linkText || ""} onChange={(e) => onUpdate({ linkText: e.target.value })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Link URL</label>
+          <input className="input" value={block.url || ""} onChange={(e) => onUpdate({ url: e.target.value.trim() })} placeholder="https:// or {store_url}" />
+        </div>
+      )}
+
+      {block.type === "coupon" && (
+        <div className="rt-ins-section">
+          <label className="field-label">Code</label>
+          <input className="input" value={block.code} onChange={(e) => onUpdate({ code: e.target.value.toUpperCase().replace(/\s+/g, "").slice(0, 40) })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Label</label>
+          <input className="input" value={block.label} onChange={(e) => onUpdate({ label: e.target.value })} />
+          <label className="field-label" style={{ marginTop: 14 }}>Note</label>
+          <input className="input" value={block.note} onChange={(e) => onUpdate({ note: e.target.value })} placeholder="Valid until Sunday · Enter at checkout" />
+          <div className="rt-emb-linked-note">
+            <Icons.Ticket size={12} />
+            <span>Shows this exact code to everyone. Create it in your checkout first. For a unique single-use code per person on Shopify, use the Discount code block.</span>
           </div>
         </div>
       )}
@@ -1083,7 +1334,7 @@ function EmailSettings({ node, brand, onNode, onBrand }) {
  */
 const VIEWPORT_WIDTH = { mobile: 390, desktop: 600 };
 
-function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingFrom, onSelect, onInsert, onUpdateBlock, onMove, onDuplicate, onDelete, openGapId, setOpenGapId, isShopify }) {
+function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingFrom, onSelect, onInsert, onUpdateBlock, onMove, onDuplicate, onDelete, openGapId, setOpenGapId, isShopify, dnd }) {
   const width = VIEWPORT_WIDTH[viewport] || VIEWPORT_WIDTH.desktop;
   return (
     <div className="rt-emb-stage" onClick={() => onSelect(null)}>
@@ -1097,7 +1348,8 @@ function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingF
         <div className="rt-emb-inbox-time">11:42 AM</div>
       </div>
       <div className="rt-emb-frame" style={{ width, background: brand.bg }} onClick={(e) => e.stopPropagation()}>
-        <InsertGap idx={0} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} isShopify={isShopify} />
+        {dnd?.active && <DropLine on={dnd.dropIndex === 0} />}
+        <InsertGap idx={0} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} isShopify={isShopify} dnd={dnd} />
         {blocks.map((b, i) => (
           <div key={b.id}>
             <BlockWrapper
@@ -1111,14 +1363,21 @@ function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingF
               onInlineEdit={(patch) => onUpdateBlock(b.id, patch)}
               canMoveUp={i > 0}
               canMoveDown={i < blocks.length - 1}
+              dnd={dnd}
+              index={i}
             />
-            <InsertGap idx={i + 1} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} isShopify={isShopify} />
+            {dnd?.active && <DropLine on={dnd.dropIndex === i + 1} />}
+            <InsertGap idx={i + 1} onAdd={onInsert} openId={openGapId} setOpenId={setOpenGapId} isShopify={isShopify} dnd={dnd} />
           </div>
         ))}
         {blocks.length === 0 && (
-          <div className="rt-emb-empty">
+          <div
+            className={`rt-emb-empty${dnd?.active ? " rt-emb-empty-drop" : ""}`}
+            onDragOver={(e) => dnd?.onDragOverBlock(e, 0)}
+            onDrop={(e) => dnd?.onDrop(e)}
+          >
             <div className="t-h3" style={{ marginBottom: 6 }}>Start with a block</div>
-            <div className="t-small muted">Click the + above, or pick from the library on the left.</div>
+            <div className="t-small muted">Drag one in from the left, or click the + above.</div>
           </div>
         )}
       </div>
@@ -1127,7 +1386,12 @@ function EmailCanvas({ blocks, brand, selectedId, viewport, senderName, sendingF
 }
 
 // ── Block library left rail ────────────────────────────────────────────────
-function BlockLibraryRail({ onAdd, isShopify }) {
+/** Where the block being dragged would land. */
+function DropLine({ on }) {
+  return <div className={`rt-emb-dropline${on ? " is-on" : ""}`} aria-hidden="true" />;
+}
+
+function BlockLibraryRail({ onAdd, isShopify, dnd }) {
   return (
     <div className="rt-emb-left">
       <div className="rt-emb-library-head">
@@ -1140,7 +1404,15 @@ function BlockLibraryRail({ onAdd, isShopify }) {
             {grp.items.map((it) => {
               const Icon = Icons[it.icon];
               return (
-                <button key={it.type} className="rt-emb-lib-item" onClick={() => onAdd(it.type)}>
+                <button
+                  key={it.type}
+                  className="rt-emb-lib-item"
+                  onClick={() => onAdd(it.type)}
+                  draggable
+                  onDragStart={(e) => dnd?.onDragStartNew(e, it.type)}
+                  onDragEnd={() => dnd?.onDragEnd()}
+                  title={`Click to add, or drag ${it.label.toLowerCase()} onto the email`}
+                >
                   {Icon && <Icon size={16} />}
                   <span>{it.label}</span>
                 </button>
@@ -1176,6 +1448,12 @@ export function RenderedBlockPreview({ node }) {
         if (b.type === "spacer") return <div key={b.id} style={{ height: Math.min(b.height / 3, 16) }} />;
         if (b.type === "footer") return <div key={b.id} className="rt-emp-block rt-emp-footer">{b.storeName}</div>;
         if (b.type === "product") return <div key={b.id} className="rt-emp-block rt-emp-image" style={{ height: 24 }} />;
+        if (b.type === "quote") return <div key={b.id} className="rt-emp-block rt-emp-paragraph" style={{ fontStyle: "italic" }}>&ldquo;{String(b.text || "").slice(0, 80)}&rdquo;</div>;
+        if (b.type === "list") return <div key={b.id} className="rt-emp-block rt-emp-paragraph">{String(b.items || "").split(/\n+/).filter(Boolean).slice(0, 3).map((x) => "✓ " + x).join("  ")}</div>;
+        if (b.type === "callout") return <div key={b.id} className="rt-emp-block rt-emp-discount" style={{ background: brand.accent, color: "#fff", borderColor: brand.accent }}>{stripTags(b.html).slice(0, 60)}</div>;
+        if (b.type === "coupon") return <div key={b.id} className="rt-emp-block rt-emp-discount" style={{ borderColor: brand.accent, color: brand.accent }}>{b.label} · <span className="rt-emp-discount-code">{b.code}</span></div>;
+        if (b.type === "video" || b.type === "columns") return <div key={b.id} className="rt-emp-block rt-emp-image" style={{ height: 32 }} />;
+        if (b.type === "social") return <div key={b.id} className="rt-emp-block rt-emp-footer">{(b.links || []).map((l) => SOCIAL_NETWORKS[l.network]).join(" · ")}</div>;
         return null;
       })}
     </div>
@@ -1608,6 +1886,71 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
       return next;
     });
   }
+  // ── Drag and drop ────────────────────────────────────────────────────────
+  // Two kinds of drag land on the canvas: an existing block being reordered,
+  // and a new block dragged in from the library. Both use the same drop
+  // indicator and the same drop handler; `drag` says which is in flight.
+  //
+  // The arrow buttons on a selected block do the same job without a mouse —
+  // dragging is the shortcut, not the only way.
+  const [drag, setDrag] = useState(null);      // { kind: "move", id } | { kind: "new", type }
+  const [dropIndex, setDropIndex] = useState(null);
+
+  function onDragStartBlock(e, id) {
+    setDrag({ kind: "move", id });
+    e.dataTransfer.effectAllowed = "move";
+    // Firefox starts no drag at all without data set.
+    try { e.dataTransfer.setData("text/plain", id); } catch { /* older browsers */ }
+  }
+  function onDragStartNew(e, type) {
+    setDrag({ kind: "new", type });
+    e.dataTransfer.effectAllowed = "copy";
+    try { e.dataTransfer.setData("text/plain", type); } catch { /* older browsers */ }
+  }
+  function onDragEnd() {
+    setDrag(null);
+    setDropIndex(null);
+  }
+  /** Above or below the block being hovered, by which half the pointer is in. */
+  function onDragOverBlock(e, index) {
+    if (!drag) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = drag.kind === "new" ? "copy" : "move";
+    const r = e.currentTarget.getBoundingClientRect();
+    setDropIndex(e.clientY - r.top > r.height / 2 ? index + 1 : index);
+  }
+  function onDrop(e) {
+    if (!drag || dropIndex === null) return onDragEnd();
+    e.preventDefault();
+    e.stopPropagation();
+    if (drag.kind === "new") {
+      insertBlock(drag.type, dropIndex);
+    } else {
+      setBlocks((bs) => {
+        const from = bs.findIndex((b) => b.id === drag.id);
+        if (from < 0) return bs;
+        const next = [...bs];
+        const [moved] = next.splice(from, 1);
+        // The target index was measured before the block was lifted out, so
+        // it shifts by one when the block came from above it.
+        next.splice(dropIndex > from ? dropIndex - 1 : dropIndex, 0, moved);
+        return next;
+      });
+    }
+    onDragEnd();
+  }
+  function onDragOverGap(e, index) {
+    if (!drag) return;
+    e.dataTransfer.dropEffect = drag.kind === "new" ? "copy" : "move";
+    setDropIndex(index);
+  }
+  const dnd = {
+    active: Boolean(drag),
+    draggingId: drag?.kind === "move" ? drag.id : null,
+    dropIndex,
+    onDragStartBlock, onDragStartNew, onDragEnd, onDragOverBlock, onDragOverGap, onDrop,
+  };
+
   function duplicateBlock(id) {
     setBlocks((bs) => {
       const i = bs.findIndex((b) => b.id === id);
@@ -1748,7 +2091,7 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
         </div>
       ) : (
       <div className="rt-builder-body rt-emb-builder">
-        <BlockLibraryRail onAdd={addToEnd} isShopify={isShopify} />
+        <BlockLibraryRail onAdd={addToEnd} isShopify={isShopify} dnd={dnd} />
 
         <div className="rt-builder-canvas rt-emb-builder">
           {selected && (
@@ -1794,6 +2137,7 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
             openGapId={openGapId}
             setOpenGapId={setOpenGapId}
             isShopify={isShopify}
+            dnd={dnd}
           />
         </div>
 
@@ -1822,6 +2166,7 @@ export default function EmailEditor({ flow, node, onBack, onSave, testEmailDefau
         <EmailTemplateGallery
           onClose={() => setTemplatesOpen(false)}
           onUseTemplate={applyTemplate}
+          isShopify={isShopify}
         />
       )}
 

@@ -343,11 +343,25 @@ export async function provisionWhatsappAccount({ shop, accessToken, expiresAt = 
     lastError: subRes.ok ? "" : String(subRes.error || "").slice(0, 500),
   };
 
+  const before = await prisma.whatsappAccount.findUnique({ where: { shop }, select: { status: true } });
   const account = await prisma.whatsappAccount.upsert({
     where: { shop },
     create: { shop, ...shared },
     update: shared,
   });
+
+  // A number that has just been connected starts with the channel on — the
+  // merchant connected it to send, and "connected but switched off" was a
+  // second step nobody expected. They can still turn it off on the WhatsApp
+  // page. Only on a fresh connection: re-running signup on an account that
+  // was already connected (a token refresh) keeps whatever they chose.
+  if (before?.status !== "connected") {
+    await prisma.shopSettings.upsert({
+      where: { shop },
+      create: { shop, whatsappEnabled: true },
+      update: { whatsappEnabled: true },
+    });
+  }
 
   // Pull the WABA's existing templates straight away. A merchant who has just
   // connected already has approved templates at Meta; leaving the list empty

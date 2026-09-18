@@ -13,6 +13,14 @@ export const BLOCK_LIBRARY = [
     { type: "image",     icon: "Image",        label: "Image"     },
     { type: "logo",      icon: "Logo",         label: "Logo"      },
   ]},
+  { group: "Content", items: [
+    { type: "columns", icon: "Columns",   label: "Image + text" },
+    { type: "list",    icon: "List",      label: "Checklist"    },
+    { type: "quote",   icon: "Quote",     label: "Testimonial"  },
+    { type: "callout", icon: "Megaphone", label: "Callout"      },
+    { type: "video",   icon: "Play",      label: "Video"        },
+    { type: "coupon",  icon: "Ticket",    label: "Coupon code"  },
+  ]},
   { group: "Layout", items: [
     { type: "spacer",  icon: "Spacer",  label: "Spacer"  },
     { type: "divider", icon: "Divider", label: "Divider" },
@@ -22,6 +30,7 @@ export const BLOCK_LIBRARY = [
     { type: "discount", icon: "Discount",    label: "Discount code"  },
   ]},
   { group: "Structure", items: [
+    { type: "social", icon: "Share",  label: "Social links" },
     { type: "footer", icon: "Footer", label: "Footer" },
   ]},
 ];
@@ -45,3 +54,6 @@ export function blocksFor(isShopify) {
   if (isShopify) return BLOCK_LIBRARY;
   return BLOCK_LIBRARY.filter((g) => g.group !== "Commerce");
 }
+
+/** Block types that need a Shopify store behind them (see blocksFor). */
+export const COMMERCE_BLOCKS = new Set(["product", "discount"]);

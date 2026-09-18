@@ -72,6 +72,9 @@ export const IconAlignRight = (p) => <I {...p}><path d="M3 6h18M9 12h12M3 18h18"
 export const IconCheck = (p) => <I {...p}><path d="M5 12l5 5L20 7"/></I>;
 export const IconMegaphone = (p) => <I {...p}><path d="M3 11v2a2 2 0 0 0 2 2h1l3 5h2v-4l9 3V5l-9 3H6a3 3 0 0 0-3 3z"/></I>;
 export const IconCode = (p) => <I {...p}><path d="m8 6-6 6 6 6M16 6l6 6-6 6"/></I>;
+export const IconQuote = (p) => <I {...p}><path d="M7 7h4v4c0 3-1.5 5-4 6M15 7h4v4c0 3-1.5 5-4 6"/></I>;
+export const IconColumns = (p) => <I {...p}><rect x="3" y="5" width="8" height="14" rx="1.5"/><path d="M14 7h7M14 11h7M14 15h5"/></I>;
+export const IconShare = (p) => <I {...p}><circle cx="6" cy="12" r="2.5"/><circle cx="18" cy="6" r="2.5"/><circle cx="18" cy="18" r="2.5"/><path d="m8.2 10.8 7.6-3.6M8.2 13.2l7.6 3.6"/></I>;
 export const IconUpload = (p) => <I {...p}><path d="M12 16V4m0 0L7 9m5-5 5 5M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></I>;
 
 const Icons = {
@@ -143,6 +146,9 @@ const Icons = {
   Check: IconCheck,
   Megaphone: IconMegaphone,
   Code: IconCode,
+  Quote: IconQuote,
+  Columns: IconColumns,
+  Share: IconShare,
 };
 
 export default Icons;

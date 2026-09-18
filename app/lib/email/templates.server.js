@@ -86,20 +86,24 @@ export function renderConfirmationEmail({ storeName, logoUrl, brandColor, confir
   });
 }
 
-export function renderDiscountRevealEmail({ storeName, logoUrl, brandColor, discountCode, discountPct }) {
+export function renderDiscountRevealEmail({ storeName, logoUrl, brandColor, discountCode, discountPct, terms = "Valid for 48 hours &middot; Single use" }) {
+  // A merchant's own code (websites outside Shopify) is neither single-use
+  // nor time-limited by us, so those claims are only made for minted codes.
+  const code = String(discountCode ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const pctLine = discountPct > 0 ? `for ${discountPct}% off your order` : "at checkout";
   const content = `
     <h1 style="margin:0 0 12px;font-size:22px;font-weight:700;color:#1a1a1a;">Here's your discount!</h1>
     <p style="margin:0 0 20px;font-size:15px;color:#555;line-height:1.6;">
-      Thanks for confirming. Use the code below for ${discountPct}% off your order.
+      Thanks for confirming. Use the code below ${pctLine}.
     </p>
     <div style="text-align:center;padding:24px 20px;background:#f9f9f9;border-radius:8px;margin-bottom:24px;">
       <p style="margin:0;font-size:32px;font-weight:800;color:${brandColor};letter-spacing:3px;font-family:monospace;">
-        ${discountCode}
+        ${code}
       </p>
-      <p style="margin:10px 0 0;font-size:12px;color:#999;">Valid for 48 hours &middot; Single use</p>
+      ${terms ? `<p style="margin:10px 0 0;font-size:12px;color:#999;">${terms}</p>` : ""}
     </div>
     <p style="margin:0;font-size:14px;color:#555;">
-      Apply this code at checkout to save ${discountPct}% on your entire order.
+      ${discountPct > 0 ? `Apply this code at checkout to save ${discountPct}% on your order.` : "Apply this code at checkout."}
     </p>`;
   return baseLayout({
     content,

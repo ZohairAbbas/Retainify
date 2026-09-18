@@ -5,7 +5,11 @@ import { syncConfirmedSubscriber } from "../lib/shopify/customers.server.js";
 import { sendEmail, resolveFrom, resolveProvider } from "../lib/email/index.server.js";
 import { renderDiscountRevealEmail } from "../lib/email/templates.server.js";
 import { upsertContact } from "../lib/contacts/contacts.server.js";
-import { checkShopHealth, SHOP_CLOSED, SHOP_UNINSTALLED } from "../lib/shopify/shop-health.server.js";
+import { checkShopHealth, isNonShopifyWorkspace, SHOP_CLOSED, SHOP_UNINSTALLED } from "../lib/shopify/shop-health.server.js";
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
 
 function html(title, body) {
   return new Response(
@@ -76,7 +80,13 @@ export const loader = async ({ request }) => {
   const configDiscount = popupSettings?.config?.discount;
   const discountPct = Number.isFinite(configDiscount) ? configDiscount : (popupSettings?.discountPct ?? 10);
 
-  if (!shopIsGone) {
+  // A workspace without Shopify has no store to mint a code in. It reveals
+  // the code the merchant set on the popup, or none (a newsletter).
+  const nonShopify = await isNonShopifyWorkspace(shop);
+  const staticCode = nonShopify ? String(popupSettings?.config?.offerCode || "").trim().slice(0, 64) : "";
+  if (nonShopify) {
+    discountCode = popupSettings?.config?.template === "newsletter" ? "" : staticCode;
+  } else if (!shopIsGone && popupSettings?.config?.template !== "newsletter" && discountPct > 0) {
     try {
       discountCode = await createDiscountCode(shop, discountPct);
     } catch (err) {
@@ -113,16 +123,19 @@ export const loader = async ({ request }) => {
     console.error("[confirm] upsertContact failed:", err.message),
   );
 
-  // Push subscriber to Shopify with CONFIRMED_OPT_IN marketing consent (fire-and-forget)
-  syncConfirmedSubscriber(shop, email, confirmedAt).catch((err) =>
-    console.error("[confirm] shopify customer sync failed:", err.message),
-  );
+  // Push subscriber to Shopify with CONFIRMED_OPT_IN marketing consent
+  // (fire-and-forget). There is no Shopify to push to without a store.
+  if (!nonShopify) {
+    syncConfirmedSubscriber(shop, email, confirmedAt).catch((err) =>
+      console.error("[confirm] shopify customer sync failed:", err.message),
+    );
+  }
 
   // Send discount reveal email (fire-and-forget). Guarded on shop health as
   // well as on the code itself — the two are linked today, but a future edit
   // that sends something here regardless of discount must not reopen this hole.
   if (discountCode && !shopIsGone) {
-    sendDiscountEmail(shop, email, discountCode, discountPct, signup.id).catch((err) =>
+    sendDiscountEmail(shop, email, discountCode, discountPct, signup.id, { minted: !nonShopify }).catch((err) =>
       console.error("[confirm] discount reveal email failed:", err.message),
     );
   }
@@ -132,13 +145,13 @@ export const loader = async ({ request }) => {
     discountCode
       ? `<h1>You're confirmed! 🎉</h1>
          <p>Here's your exclusive discount code:</p>
-         <div class="code">${discountCode}</div>
-         <p class="sub">Valid for 48 hours &middot; Single use &middot; Apply at checkout</p>`
-      : `<h1>You're confirmed! 🎉</h1><p>Your email has been confirmed. Happy shopping!</p>`,
+         <div class="code">${escapeHtml(discountCode)}</div>
+         <p class="sub">${nonShopify ? "Apply it at checkout" : "Valid for 48 hours &middot; Single use &middot; Apply at checkout"}</p>`
+      : `<h1>You're confirmed! 🎉</h1><p>Your email has been confirmed. ${nonShopify ? "Thanks for subscribing!" : "Happy shopping!"}</p>`,
   );
 };
 
-async function sendDiscountEmail(shop, email, discountCode, discountPct, signupId) {
+async function sendDiscountEmail(shop, email, discountCode, discountPct, signupId, { minted = true } = {}) {
   const shopSettings = await prisma.shopSettings.findUnique({ where: { shop } });
   const popupSettings = await prisma.popupSettings.findUnique({ where: { shop } });
 
@@ -146,7 +159,10 @@ async function sendDiscountEmail(shop, email, discountCode, discountPct, signupI
   const brandColor = shopSettings?.brandColor || popupSettings?.brandColor || "#000000";
   const logoUrl = shopSettings?.logoUrl || popupSettings?.logoUrl || "";
 
-  const htmlContent = renderDiscountRevealEmail({ storeName, logoUrl, brandColor, discountCode, discountPct });
+  const htmlContent = renderDiscountRevealEmail({
+    storeName, logoUrl, brandColor, discountCode, discountPct,
+    ...(minted ? {} : { terms: "" }),
+  });
 
   const provider = resolveProvider(shopSettings);
   const { from, replyTo } = resolveFrom({ settings: shopSettings, provider });
@@ -156,7 +172,7 @@ async function sendDiscountEmail(shop, email, discountCode, discountPct, signupI
       to: email,
       from,
       replyTo,
-      subject: `Your ${discountPct}% discount code from ${storeName}`,
+      subject: discountPct > 0 ? `Your ${discountPct}% discount code from ${storeName}` : `Your discount code from ${storeName}`,
       html: htmlContent,
     },
     { shop, settings: shopSettings },

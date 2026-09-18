@@ -36,7 +36,10 @@ const toStep = (n) => {
   }
   // `??` not `||`: an empty subject has to reach the server as empty, since
   // that is precisely what publish validation is being asked about.
-  return { ...key, nodeType: "email", emailName: n.emailName || "", subject: n.subject ?? "s", emailBlocks: "[]" };
+  return {
+    ...key, nodeType: "email", emailName: n.emailName || "", subject: n.subject ?? "s",
+    emailBlocks: n.emailBlocks ?? "[]",
+  };
 };
 
 const em = (name) => ({ kind: "email", emailName: name, subject: name });
@@ -240,4 +243,49 @@ test("branch history survives the merchant editing the flow", async () => {
   const [row] = await getCampaignSplitBreakdown(SHOP, j.id, 30);
   assert.equal(row.label, "Renamed split");
   assert.equal(row.yes, 1, "the decision is still counted after the edit");
+});
+
+
+// ── A workspace with no store ──────────────────────────────────────────────
+//
+// These blocks don't degrade: a discount block makes the worker mint a code in
+// Shopify and refuse the send when it can't, so the flow publishes and then
+// sends nothing at all. See flow-validation.server.js.
+
+const DIRECT_SHOP = "__publish-test-direct";
+
+test("a store-only email block blocks publishing without a store", async (t) => {
+  await prisma.account.upsert({
+    where: { key: DIRECT_SHOP },
+    create: { key: DIRECT_SHOP, name: "Direct test", kind: "direct" },
+    update: { kind: "direct" },
+  });
+  t.after(async () => {
+    await prisma.journey.deleteMany({ where: { shop: DIRECT_SHOP } });
+    await prisma.account.deleteMany({ where: { key: DIRECT_SHOP } });
+  });
+
+  const withBlocks = (blocks) => [
+    { kind: "email", emailName: "a", subject: "s", emailBlocks: JSON.stringify(blocks) },
+    { kind: "exit" },
+  ];
+  const make = async (blocks) => {
+    const journey = await prisma.journey.create({
+      data: { shop: DIRECT_SHOP, name: "direct test", trigger: "segment_entered", triggerSegmentKey: "sys_new", status: "draft" },
+    });
+    const nodes = [
+      { kind: "trigger", id: TRIGGER_ID },
+      { ...withBlocks(blocks)[0], id: "a", parentId: TRIGGER_ID, branch: NEXT },
+      { kind: "exit", id: "z", parentId: "a", branch: NEXT },
+    ];
+    const { steps, edges } = serializeTree(nodes, toStep);
+    await saveDraft(journey.id, { steps, edges });
+    return (await validateFlowForPublish(journey.id)).errors.map((e) => e.message).join(" | ");
+  };
+
+  assert.match(await make([{ type: "discount", percent: 10 }]), /discount code block/i);
+  assert.match(await make([{ type: "product", count: 3 }]), /product grid/i);
+  // The coupon block is a code the merchant typed in — no store needed.
+  assert.doesNotMatch(await make([{ type: "coupon", code: "HI" }]), /Shopify store/i);
+  assert.doesNotMatch(await make([{ type: "paragraph", html: "hi" }]), /Shopify store/i);
 });

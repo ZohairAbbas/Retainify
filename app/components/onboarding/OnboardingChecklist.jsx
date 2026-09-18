@@ -267,7 +267,7 @@ function WhatsappPanel({ ctx, onSkip }) {
       <ul className="ob-panel-lede" style={{ margin: "0 0 16px", paddingLeft: 20 }}>
         <li>Connect your WhatsApp Business account (about 2 minutes)</li>
         <li>Create or sync a message template — Meta approves it, usually within the hour</li>
-        <li>Switch the channel on and add a WhatsApp step to any flow</li>
+        <li>The channel switches on as soon as you connect — add a WhatsApp step to any flow</li>
       </ul>
       <div className="ob-panel-actions">
         <button
@@ -275,6 +275,30 @@ function WhatsappPanel({ ctx, onSkip }) {
           onClick={() => navigate(`/app/whatsapp?return=${encodeURIComponent("/app/setup")}${ctx.search ? "&" + ctx.search.slice(1) : ""}`)}
         >
           <Icons.Whatsapp size={14} /> Set up WhatsApp
+        </button>
+        {onSkip && <button className="ob-skip-btn" onClick={onSkip}>Not now</button>}
+      </div>
+    </div>
+  );
+}
+
+function WebsitePanel({ ctx, onSkip }) {
+  const navigate = useNavigate();
+  return (
+    <div className="ob-panel-pad">
+      <p className="ob-panel-lede">
+        Grow your list from your own website. Pick a popup, list your domain, and paste one
+        line of code into your site — it works with WordPress, Wix, Squarespace, Webflow,
+        Framer, Google Tag Manager or plain HTML.
+      </p>
+      <ul className="ob-panel-lede" style={{ margin: "0 0 16px", paddingLeft: 20 }}>
+        <li>Choose a template and write your offer</li>
+        <li>Add your website&rsquo;s domain, then copy the install code</li>
+        <li>Paste it into your site&rsquo;s header — this step ticks itself once the popup loads there</li>
+      </ul>
+      <div className="ob-panel-actions">
+        <button className="ob-btn ob-btn-primary" onClick={() => navigate(`/app/popup${ctx.search}#install`)}>
+          <Icons.Megaphone size={15} /> Set up your popup
         </button>
         {onSkip && <button className="ob-skip-btn" onClick={onSkip}>Not now</button>}
       </div>
@@ -418,6 +442,7 @@ const PANELS = {
   popup: PopupPanel,
   flow: FlowPanel,
   whatsapp: WhatsappPanel,
+  website: WebsitePanel,
   call: CallPanel,
 };
 

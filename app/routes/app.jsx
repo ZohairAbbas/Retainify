@@ -119,10 +119,13 @@ export const action = async ({ request }) => {
 /**
  * Navigation.
  *
- * `shopifyOnly` marks features that depend on a storefront: the exit-intent
- * popup and the web-push service worker are injected by the theme extension.
- * A direct workspace has no storefront, so these are hidden rather than shown
- * broken — the server-side backstop is requireShopifyAdmin, which 409s.
+ * `shopifyOnly` marks features that depend on a storefront: web push needs a
+ * service worker on the shop's own domain, which only the theme extension can
+ * serve. A direct workspace has no storefront, so it is hidden rather than
+ * shown broken — the server-side backstop is requireShopifyAdmin, which 409s.
+ *
+ * Popups are NOT shopifyOnly: a Shopify store gets them through the theme
+ * embed, any other website through one script tag (/embed/popup.js).
  *
  * WhatsApp is NOT shopifyOnly. Only its popup opt-in capture needs a
  * storefront; connecting a number, templates, test sends and subscribers work
@@ -151,7 +154,7 @@ const NAV_ACTIVE = [
   { id: "whatsapp",  label: "WhatsApp",  href: "/app/whatsapp",  icon: "Whatsapp", group: "channels" },
   { id: "contacts",  label: "Contacts",  href: "/app/contacts",  icon: "Users", group: "audience" },
   { id: "segments",  label: "Segments",  href: "/app/segments",  icon: "Sliders", group: "audience" },
-  { id: "popup",     label: "Popup",     href: "/app/popup",     icon: "Tab",      shopifyOnly: true, group: "channels" },
+  { id: "popup",     label: "Popups",    href: "/app/popup",     icon: "Tab",      group: "channels" },
   { id: "content",   label: "Media library", href: "/app/content", icon: "Image", group: "audience" },
   { id: "team",      label: "Team",      href: "/app/team",      icon: "Users",    directOnly: true, group: "workspace" },
   { id: "plans",     label: "Plans",     href: "/app/plans",     icon: "Ticket", group: "workspace" },

@@ -688,6 +688,14 @@ model PopupSettings {
   logoUrl     String   @default("")
   discountPct Int      @default(10)
   delayMs     Int      @default(3000)
+  // Website embed (workspaces without Shopify). siteKey is public — it sits
+  // in the merchant's page source — and only identifies the popup; the
+  // domains list is what stops another site from loading it.
+  siteKey        String?   @unique
+  siteDomains    String[]  @default([])
+  // Last time the embed loaded on an allowed domain, for the install check.
+  lastSeenAt     DateTime?
+  lastSeenOrigin String    @default("")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 }

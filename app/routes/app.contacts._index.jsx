@@ -54,7 +54,8 @@ import {
   updateProperty,
 } from "../lib/contacts/properties.server.js";
 import {
-  BUILTIN_COLUMNS,
+  builtinColumnsFor,
+  columnsFor,
   COLUMN_GROUPS,
   createView,
   deleteView,
@@ -107,7 +108,7 @@ export const loader = async ({ request }) => {
   // A stored column list can reference a property that has since been deleted,
   // so it is sanitized on read as well as write — rendering a column with no
   // definition behind it would throw.
-  const columns = sanitizeColumns(savedColumns, properties);
+  const columns = columnsFor(ctx.isShopify, sanitizeColumns(savedColumns, properties));
 
   // Per-contact stats for the page, in a fixed number of grouped queries.
   // This was one getContactStats() call per row — six queries per contact — so
@@ -153,7 +154,7 @@ export const loader = async ({ request }) => {
     // layout — it is configuration, not something to show in a view switcher.
     views: views.filter((v) => !v.isDefault),
     columns,
-    builtinColumns: BUILTIN_COLUMNS,
+    builtinColumns: builtinColumnsFor(ctx.isShopify),
     columnGroups: COLUMN_GROUPS,
     propPrefix: PROP_PREFIX,
     nextCursor: nextCursor || null,
@@ -459,6 +460,7 @@ export default function ContactsPage() {
   const [propsOpen, setPropsOpen] = useState(false);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const searchRef = useRef(null);
   const busy = fetcher.state !== "idle";
 
   const allPageChecked = contacts.length > 0 && contacts.every((c) => selected.has(c.id));
@@ -514,6 +516,9 @@ export default function ContactsPage() {
   if (filters.tagId !== "all") exportQuery.set("tag", filters.tagId);
   if (filters.search) exportQuery.set("q", filters.search);
   const exportHref = `/app/contacts/export?${exportQuery.toString()}`;
+  // Status/source/tag translate into segment rules; a free-text search does not.
+  const segmentableFilters = filters.status !== "all" || filters.source !== "all" || filters.tagId !== "all";
+  const filtersActive = segmentableFilters || Boolean(filters.search);
 
   // Bulk actions used to complete with no feedback whatsoever — the page simply
   // re-rendered, giving no sign that 1,200 contacts had just been unsubscribed.
@@ -576,10 +581,10 @@ export default function ContactsPage() {
       case "contact":
         return (
           <>
-            <Avatar name={c.name} email={c.email} size={32} />
+            <Avatar name={c.name} email={c.email} size={28} />
             <div style={{ minWidth: 0 }}>
               <div className="rt-cname-email">{c.email}</div>
-              <div className="rt-cname-name">{c.name || "—"}</div>
+              {c.name && <div className="rt-cname-name">{c.name}</div>}
             </div>
           </>
         );
@@ -753,7 +758,7 @@ export default function ContactsPage() {
         />
       )}
 
-      <section className="rt-stats">
+      <section className="rt-stats rt-stats-compact">
         <StatCard
           label="Total contacts"
           value={summary.total.toLocaleString()}
@@ -795,10 +800,14 @@ export default function ContactsPage() {
         />
       )}
 
+      {/* Saved views only earn a row once there is something to switch
+          between (or filters worth saving). An "All contacts" pill alone
+          with a "+ New view" link was a whole row of chrome saying nothing. */}
+      {(views.length > 0 || filtersActive) && (
       <ViewsBar
         views={views}
         activeViewId={activeViewId}
-        dirty={activeViewId === null && (filters.status !== "all" || filters.source !== "all" || filters.tagId !== "all")}
+        dirty={activeViewId === null && segmentableFilters}
         onSelect={(id) => {
           setActiveViewId(id);
           const view = views.find((v) => v.id === id);
@@ -814,94 +823,86 @@ export default function ContactsPage() {
         onSaveNew={() => setDialog({ kind: "save-view" })}
         onDelete={(v) => setDialog({ kind: "delete-view", view: v })}
       />
+      )}
 
-      <div className="rt-toolbar rt-toolbar-stack">
-        <div className="rt-chips rt-chips-wrap">
-          <button
-            type="button"
-            onClick={() => setFilter("status", "all")}
-            className={`rt-chip ${filters.status === "all" ? "rt-chip-on" : ""}`}
-          >
-            All<span className="rt-chip-count">{summary.total}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter("status", "subscribed")}
-            className={`rt-chip ${filters.status === "subscribed" ? "rt-chip-on" : ""}`}
-          >
-            Subscribed<span className="rt-chip-count">{summary.subscribed}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter("status", "unsubscribed")}
-            className={`rt-chip ${filters.status === "unsubscribed" ? "rt-chip-on" : ""}`}
-          >
-            Unsubscribed<span className="rt-chip-count">{summary.unsubscribedOnly}</span>
-          </button>
-          <button
-            type="button"
-            onClick={() => setFilter("status", "bounced")}
-            className={`rt-chip ${filters.status === "bounced" ? "rt-chip-on" : ""}`}
-          >
-            Bounced<span className="rt-chip-count">{summary.bounced}</span>
-          </button>
-          <span className="rt-chip-sep" />
-          <FilterDropdown
-            label="Tag"
-            icon="Tag"
-            value={filters.tagId}
-            onChange={(v) => setFilter("tag", v)}
-            options={[
-              { id: "all", label: "Any tag" },
-              ...tags.map((t) => ({
-                id: t.id,
-                label: t.name,
-                swatch: TAG_PALETTE[t.color]?.bg,
-                count: tagCounts[t.id] || 0,
-              })),
-            ]}
-          />
-          <button
-            type="button"
-            className="rt-link"
-            onClick={() => navigate("/app/contacts/tags")}
-            title="Rename, recolor, or delete tags"
-            style={{ marginLeft: 4 }}
-          >
-            Manage tags
-          </button>
-          <FilterDropdown
-            label="Source"
-            icon="Refresh"
-            value={filters.source}
-            onChange={(v) => setFilter("source", v)}
-            options={[
-              { id: "all", label: "Any source" },
-              ...Object.entries(SOURCE).map(([k, v]) => ({ id: k, label: v })),
-            ]}
+      <div className="rt-toolbar rt-ct-toolbar">
+        <div className="rt-search rt-ct-search">
+          <Icons.Search size={14} />
+          <input
+            ref={searchRef}
+            placeholder="Search email, name or tag…"
+            defaultValue={filters.search}
+            aria-label="Search contacts"
+            onChange={(e) => {
+              const v = e.target.value;
+              clearTimeout(window.__rtSearchT);
+              window.__rtSearchT = setTimeout(() => setFilter("q", v), 250);
+            }}
           />
         </div>
-        <div className="rt-toolbar-right">
-          <ColumnsButton onClick={() => setColumnsOpen(true)} />
-          <button className="btn btn-secondary" onClick={() => setPropsOpen(true)}>
-            <Icons.Tag size={14} /> Properties
+        <div className="rt-seg-ctl" role="tablist" aria-label="Subscription status">
+          {[
+            ["all", "All", summary.total],
+            ["subscribed", "Subscribed", summary.subscribed],
+            ["unsubscribed", "Unsubscribed", summary.unsubscribedOnly],
+            // Bounced is only worth a tab once something has bounced.
+            ...(summary.bounced > 0 || filters.status === "bounced" ? [["bounced", "Bounced", summary.bounced]] : []),
+          ].map(([id, label, n]) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={filters.status === id}
+              onClick={() => setFilter("status", id)}
+              className={filters.status === id ? "on" : ""}
+            >
+              {label} <span className="rt-seg-ctl-n">{Number(n || 0).toLocaleString()}</span>
+            </button>
+          ))}
+        </div>
+        <FilterDropdown
+          label="Tag"
+          icon="Tag"
+          value={filters.tagId}
+          onChange={(v) => setFilter("tag", v)}
+          options={[
+            { id: "all", label: "Any tag" },
+            ...tags.map((t) => ({
+              id: t.id,
+              label: t.name,
+              swatch: TAG_PALETTE[t.color]?.bg,
+              count: tagCounts[t.id] || 0,
+            })),
+          ]}
+        />
+        <FilterDropdown
+          label="Source"
+          icon="Refresh"
+          value={filters.source}
+          onChange={(v) => setFilter("source", v)}
+          options={[
+            { id: "all", label: "Any source" },
+            ...Object.entries(SOURCE).map(([k, v]) => ({ id: k, label: v })),
+          ]}
+        />
+        {filtersActive && (
+          <button
+            type="button"
+            className="rt-link t-small"
+            onClick={() => {
+              if (searchRef.current) searchRef.current.value = "";
+              setActiveViewId(null);
+              setParams(new URLSearchParams(), { replace: true });
+            }}
+          >
+            Clear filters
           </button>
-          <div className="rt-search">
-            <Icons.Search size={14} />
-            <input
-              placeholder="Search by email, name, or tag…"
-              defaultValue={filters.search}
-              onChange={(e) => {
-                const v = e.target.value;
-                clearTimeout(window.__rtSearchT);
-                window.__rtSearchT = setTimeout(() => setFilter("q", v), 250);
-              }}
-            />
-          </div>
-          {(filters.status !== "all" || filters.source !== "all" || filters.tagId !== "all") && (
+        )}
+        <div className="rt-toolbar-right">
+          {segmentableFilters && (
             <button
               type="button"
-              className="btn btn-secondary"
+              className="btn btn-secondary btn-sm"
               onClick={() => {
                 const p = new URLSearchParams();
                 p.set("from", "filters");
@@ -914,6 +915,32 @@ export default function ContactsPage() {
               <Icons.Sliders size={14} /> Save as segment
             </button>
           )}
+          <ColumnsButton onClick={() => setColumnsOpen(true)} />
+          {/* Setup-type actions, used rarely, kept out of the filter row. */}
+          <div className="rt-kebab-wrap">
+            <button
+              type="button"
+              className="btn btn-secondary btn-icon"
+              onClick={() => setOpenMenu(openMenu === "tablekb" ? null : "tablekb")}
+              aria-label="Table options"
+              title="Properties and tags"
+            >
+              <Icons.More size={16} />
+            </button>
+            {openMenu === "tablekb" && (
+              <>
+                <div className="rt-veil" onClick={() => setOpenMenu(null)} />
+                <div className="rt-menu" style={{ right: 0, left: "auto" }}>
+                  <button type="button" onClick={() => { setOpenMenu(null); setPropsOpen(true); }}>
+                    <Icons.Sliders size={14} /> Custom properties
+                  </button>
+                  <button type="button" onClick={() => { setOpenMenu(null); navigate("/app/contacts/tags"); }}>
+                    <Icons.Tag size={14} /> Manage tags
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
@@ -1054,7 +1081,11 @@ export default function ContactsPage() {
             <button
               type="button"
               className="rt-link"
-              onClick={() => setParams(new URLSearchParams(), { replace: true })}
+              onClick={() => {
+              if (searchRef.current) searchRef.current.value = "";
+              setActiveViewId(null);
+              setParams(new URLSearchParams(), { replace: true });
+            }}
             >
               Clear filters
             </button>

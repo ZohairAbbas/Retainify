@@ -155,10 +155,12 @@ export function relativeTime(d) {
   const date = new Date(d);
   const s = Math.floor((Date.now() - date.getTime()) / 1000);
   if (s < 60) return "just now";
+  const ago = (n, unit) => `${n} ${unit}${n === 1 ? "" : "s"} ago`;
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
-  if (s < 604800) return `${Math.floor(s / 86400)} days ago`;
-  if (s < 2592000) return `${Math.floor(s / 604800)} weeks ago`;
-  if (s < 31536000) return `${Math.floor(s / 2592000)} months ago`;
+  if (s < 172800) return "yesterday";
+  if (s < 604800) return ago(Math.floor(s / 86400), "day");
+  if (s < 2592000) return ago(Math.floor(s / 604800), "week");
+  if (s < 31536000) return ago(Math.floor(s / 2592000), "month");
   return date.toLocaleDateString();
 }

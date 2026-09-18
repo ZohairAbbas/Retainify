@@ -32,6 +32,8 @@ import {
   splitBranchSizes,
   nodesFromSteps,
   serializeTree,
+  canMoveNode,
+  moveNode,
 } from "./canvas-tree.js";
 
 let seq = 0;
@@ -307,4 +309,72 @@ test("serialize drops nothing reachable and terminates on a cycle", () => {
   cyclic[0].parentId = "a2";
   const { steps } = serializeTree(cyclic, passthrough);
   assert.ok(steps.length <= 3);
+});
+
+// ── Moving a step up and down its chain ────────────────────────────────────
+
+test("a step swaps with the one above it, and the chain stays intact", () => {
+  const nodes = [
+    { id: "a", kind: "email", parentId: TRIGGER_ID, branch: NEXT },
+    { id: "b", kind: "delay", parentId: "a", branch: NEXT },
+    { id: "c", kind: "email", parentId: "b", branch: NEXT },
+    { id: "x", kind: "exit", parentId: "c", branch: NEXT },
+  ];
+  const moved = moveNode(nodes, "c", "up");
+  const by = Object.fromEntries(moved.map((n) => [n.id, n]));
+  assert.equal(by.c.parentId, "a");
+  assert.equal(by.b.parentId, "c");
+  assert.equal(by.x.parentId, "b");
+  // Moving it back down restores the original chain exactly.
+  const back = moveNode(moved, "c", "down");
+  assert.deepEqual(
+    back.map((n) => [n.id, n.parentId, n.branch]).sort(),
+    nodes.map((n) => [n.id, n.parentId, n.branch]).sort(),
+  );
+});
+
+test("the first step can move down but not up past the trigger", () => {
+  const nodes = [
+    { id: "a", kind: "email", parentId: TRIGGER_ID, branch: NEXT },
+    { id: "b", kind: "delay", parentId: "a", branch: NEXT },
+  ];
+  assert.equal(canMoveNode(nodes, "a", "up"), false);
+  assert.equal(canMoveNode(nodes, "a", "down"), true);
+  const moved = moveNode(nodes, "a", "down");
+  const by = Object.fromEntries(moved.map((n) => [n.id, n]));
+  assert.equal(by.b.parentId, TRIGGER_ID);
+  assert.equal(by.a.parentId, "b");
+});
+
+test("splits and exits don't move, and nothing swaps across them", () => {
+  const nodes = [
+    { id: "a", kind: "email", parentId: TRIGGER_ID, branch: NEXT },
+    { id: "s", kind: "split", parentId: "a", branch: NEXT },
+    { id: "y", kind: "email", parentId: "s", branch: YES },
+    { id: "n", kind: "email", parentId: "s", branch: "no" },
+    { id: "x", kind: "exit", parentId: "y", branch: NEXT },
+  ];
+  assert.equal(canMoveNode(nodes, "s", "up"), false);
+  assert.equal(canMoveNode(nodes, "s", "down"), false);
+  assert.equal(canMoveNode(nodes, "x", "up"), false);
+  // A branch's first step can't be pulled out of its branch…
+  assert.equal(canMoveNode(nodes, "y", "up"), false);
+  // …and can't swap with the exit below it.
+  assert.equal(canMoveNode(nodes, "y", "down"), false);
+  assert.deepEqual(moveNode(nodes, "s", "up"), nodes);
+});
+
+test("a step inside a branch still moves within that branch", () => {
+  const nodes = [
+    { id: "s", kind: "split", parentId: TRIGGER_ID, branch: NEXT },
+    { id: "y1", kind: "email", parentId: "s", branch: YES },
+    { id: "y2", kind: "delay", parentId: "y1", branch: NEXT },
+    { id: "y3", kind: "email", parentId: "y2", branch: NEXT },
+  ];
+  assert.equal(canMoveNode(nodes, "y3", "up"), true);
+  const moved = moveNode(nodes, "y3", "up");
+  const by = Object.fromEntries(moved.map((n) => [n.id, n]));
+  assert.equal(by.y3.parentId, "y1");
+  assert.equal(by.y2.parentId, "y3");
+  assert.equal(by.y1.branch, YES);
 });

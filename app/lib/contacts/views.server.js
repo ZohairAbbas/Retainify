@@ -39,6 +39,27 @@ export const COLUMN_GROUPS = ["Identity", "Status", "Purchase", "Activity"];
 /** What the table shows before anyone configures anything. */
 export const DEFAULT_COLUMNS = ["contact", "status", "lifecycle", "tags", "carts", "lastSeen"];
 
+// Columns that only ever hold data with a connected store: orders and carts
+// come from Shopify webhooks. Outside Shopify they are a column of dashes.
+const STORE_ONLY = new Set(["orders", "spent", "lastOrder", "carts"]);
+
+/** The built-in columns this workspace can show. */
+export function builtinColumnsFor(isShopify) {
+  return isShopify ? BUILTIN_COLUMNS : BUILTIN_COLUMNS.filter((c) => !STORE_ONLY.has(c.key));
+}
+
+/**
+ * A saved column list, minus store-only columns outside Shopify. If that
+ * leaves the untouched default, it swaps Carts for Emails sent so the
+ * table keeps the same shape.
+ */
+export function columnsFor(isShopify, columns) {
+  if (isShopify) return columns;
+  const same = columns.length === DEFAULT_COLUMNS.length && columns.every((c, i) => c === DEFAULT_COLUMNS[i]);
+  if (same) return columns.map((c) => (c === "carts" ? "emails" : c));
+  return columns.filter((c) => !STORE_ONLY.has(c));
+}
+
 const BUILTIN_KEYS = new Set(BUILTIN_COLUMNS.map((c) => c.key));
 
 /**

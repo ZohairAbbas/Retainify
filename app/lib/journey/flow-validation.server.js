@@ -104,6 +104,29 @@ export async function validateFlowForPublish(journeyId) {
     });
   }
 
+  // Commerce blocks inside an email have the same problem, one level down. A
+  // discount block makes the worker mint a code in Shopify before it will
+  // send, and it refuses to send at all rather than deliver a subject line
+  // promising an offer the body can't carry — so the job fails permanently
+  // and the flow looks published but sends nothing. A product grid has no
+  // catalogue to draw from and renders as nothing at all.
+  if (isDirect) {
+    const LABELS = { discount: "a discount code block", product: "a product grid" };
+    for (const step of sendable.filter((s) => s.nodeType === "email")) {
+      let blocks = [];
+      try { blocks = JSON.parse(step.emailBlocks || "[]"); } catch { blocks = []; }
+      const found = [...new Set(blocks.map((b) => b?.type).filter((t) => LABELS[t]))];
+      if (found.length) {
+        errors.push({
+          stepNumber: step.stepNumber,
+          message:
+            `Step ${step.stepNumber}: this email uses ${found.map((t) => LABELS[t]).join(" and ")}, which needs a connected Shopify store. ` +
+            "Remove it — for a code you set yourself, use the Coupon code block instead.",
+        });
+      }
+    }
+  }
+
   // Trigger wiring. A segment-entry flow with no segment is inert: the
   // enrollment worker filters on triggerSegmentKey and skips it entirely.
   if (journey.trigger === "segment_entered" && !journey.triggerSegmentKey) {

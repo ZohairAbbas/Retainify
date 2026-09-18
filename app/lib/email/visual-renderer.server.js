@@ -230,7 +230,7 @@ function renderProductGrid(b, brand, fonts, ctx, products) {
     const priceHtml = showPrice && p.price
       ? `<div style="font-family:${fonts.body};font-size:13px;color:${brand.subInk};">${formatPriceServer(p.price, p.currency)}</div>`
       : "";
-    return `<td valign="top" width="${cellWidthPct}%" style="padding:6px;">
+    return `<td class="rt-stack" valign="top" width="${cellWidthPct}%" style="padding:6px;">
       ${img}
       <div style="margin-top:8px;font-family:${fonts.body};font-size:13px;color:${brand.ink};">
         <a href="${url}" style="color:${brand.ink};text-decoration:none;">${escapeAttr(p.title || "")}</a>
@@ -293,7 +293,150 @@ function renderFooter(b, brand, fonts, ctx) {
   </td></tr>`;
 }
 
+// ── Newer blocks ───────────────────────────────────────────────────────────
+
+/**
+ * A link a block may point at: http(s), mailto, or a merge tag that resolves
+ * to one. Anything else (javascript:, data:, a typo) becomes "#" — the link
+ * goes nowhere rather than somewhere dangerous.
+ */
+function safeHref(raw, ctx) {
+  const url = mergeText(raw || "", ctx).trim();
+  if (/^(https?:\/\/|mailto:)/i.test(url)) return url;
+  return ctx.store_url && /^https?:\/\//i.test(ctx.store_url) && !url ? ctx.store_url : "#";
+}
+
+/** Testimonial: a quote, who said it, and optional stars. */
+function renderQuote(b, brand, fonts, ctx) {
+  const text = escapeAttr(mergeText(b.text || "", ctx));
+  if (!text) return null;
+  const author = escapeAttr(mergeText(b.author || "", ctx));
+  const stars = Math.max(0, Math.min(5, Number(b.stars) || 0));
+  const align = b.align || "center";
+  return `<tr><td align="${align}" style="padding:16px 0;">
+    <div style="background:${b.bgColor || "rgba(0,0,0,0.03)"};border-radius:8px;padding:24px 26px;text-align:${align};">
+      ${stars ? `<div style="font-size:16px;letter-spacing:3px;color:${brand.accent};margin-bottom:10px;">${"★".repeat(stars)}${"☆".repeat(5 - stars)}</div>` : ""}
+      <div style="font-family:${fonts.display};font-size:20px;line-height:1.4;color:${brand.ink};${fonts.displayItalic ? "font-style:italic;" : ""}">&ldquo;${text}&rdquo;</div>
+      ${author ? `<div style="font-family:${fonts.body};font-size:13px;color:${brand.subInk};margin-top:12px;">— ${author}</div>` : ""}
+    </div>
+  </td></tr>`;
+}
+
+/** A list: one item per line, as ticks, bullets or numbers. */
+function renderList(b, brand, fonts, ctx) {
+  const items = String(b.items || "").split(/\n+/).map((x) => x.trim()).filter(Boolean).slice(0, 12);
+  if (!items.length) return null;
+  const style = ["check", "bullet", "number"].includes(b.style) ? b.style : "check";
+  const rows = items.map((raw, i) => {
+    const mark = style === "check" ? "&#10003;" : style === "number" ? `${i + 1}.` : "&bull;";
+    return `<tr>
+      <td valign="top" width="28" style="padding:5px 0;font-family:${fonts.body};font-size:15px;font-weight:700;color:${brand.accent};">${mark}</td>
+      <td valign="top" style="padding:5px 0;font-family:${fonts.body};font-size:15px;line-height:1.55;color:${b.color || brand.subInk};">${escapeAttr(mergeText(raw, ctx))}</td>
+    </tr>`;
+  }).join("");
+  return `<tr><td style="padding:8px 0;">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%">${rows}</table>
+  </td></tr>`;
+}
+
+/** Callout: a tinted box that makes one line impossible to miss. */
+function renderCallout(b, brand, fonts, ctx) {
+  const { out } = applyMergeTags(b.html || "", ctx);
+  if (!out) return null;
+  const label = escapeAttr(mergeText(b.label || "", ctx));
+  const bg = b.bgColor || brand.accent;
+  const ink = b.textColor || brand.onAccent;
+  return `<tr><td style="padding:12px 0;">
+    <div style="background:${bg};color:${ink};border-radius:8px;padding:18px 22px;text-align:${b.align || "center"};">
+      ${label ? `<div style="font-family:${fonts.body};font-size:11px;letter-spacing:0.14em;text-transform:uppercase;font-weight:700;opacity:0.8;margin-bottom:6px;">${label}</div>` : ""}
+      <div style="font-family:${fonts.body};font-size:16px;line-height:1.5;font-weight:600;">${out}</div>
+    </div>
+  </td></tr>`;
+}
+
+const SOCIAL_LABELS = {
+  instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", x: "X", youtube: "YouTube",
+  linkedin: "LinkedIn", pinterest: "Pinterest", whatsapp: "WhatsApp", website: "Website",
+};
+
+/** Social links, as text pills — images of logos are blocked by default in most clients. */
+function renderSocial(b, brand, fonts, ctx) {
+  const links = (Array.isArray(b.links) ? b.links : [])
+    .filter((l) => l && SOCIAL_LABELS[l.network] && /^https?:\/\//i.test(String(l.url || "").trim()))
+    .slice(0, 8);
+  if (!links.length) return null;
+  const pills = links.map((l) =>
+    `<a href="${escapeAttr(String(l.url).trim())}" style="display:inline-block;margin:4px;padding:7px 14px;border:1px solid ${brand.accent};border-radius:999px;font-family:${fonts.body};font-size:13px;color:${brand.accent};text-decoration:none;">${SOCIAL_LABELS[l.network]}</a>`,
+  ).join("");
+  const label = escapeAttr(mergeText(b.label || "", ctx));
+  return `<tr><td align="${b.align || "center"}" style="padding:12px 0;">
+    ${label ? `<div style="font-family:${fonts.body};font-size:13px;color:${brand.subInk};margin-bottom:6px;">${label}</div>` : ""}
+    ${pills}
+  </td></tr>`;
+}
+
+/** Video: a thumbnail that links to the video. Email clients can't play video inline. */
+function renderVideo(b, brand, fonts, ctx) {
+  if (!b.src) return null;
+  const href = safeHref(b.url, ctx);
+  const caption = escapeAttr(mergeText(b.caption || "", ctx));
+  return `<tr><td align="center" style="padding:12px 0;">
+    <a href="${escapeAttr(href)}" style="display:block;text-decoration:none;">
+      <img src="${escapeAttr(b.src)}" alt="${escapeAttr(b.alt || caption || "Watch the video")}" style="width:100%;max-width:100%;height:auto;display:block;border:0;border-radius:6px;" />
+      <div style="margin-top:10px;font-family:${fonts.body};font-size:14px;font-weight:600;color:${brand.accent};">&#9654;&nbsp; ${caption || "Watch the video"}</div>
+    </a>
+  </td></tr>`;
+}
+
+/** Image beside text, with an optional link. Two cells that sit side by side. */
+function renderColumns(b, brand, fonts, ctx) {
+  const heading = escapeAttr(mergeText(b.heading || "", ctx));
+  const { out: body } = applyMergeTags(b.html || "", ctx);
+  if (!b.src && !heading && !body) return null;
+  const href = b.linkText ? safeHref(b.url, ctx) : "";
+  const img = b.src
+    ? `<img src="${escapeAttr(b.src)}" alt="${escapeAttr(b.alt || heading)}" width="260" style="width:100%;max-width:260px;height:auto;display:block;border:0;border-radius:6px;" />`
+    : `<div style="height:160px;background:rgba(0,0,0,0.05);border-radius:6px;"></div>`;
+  const text = `
+    ${heading ? `<div style="font-family:${fonts.display};font-size:20px;line-height:1.25;color:${brand.ink};margin-bottom:8px;${fonts.displayItalic ? "font-style:italic;" : ""}">${heading}</div>` : ""}
+    ${body ? `<div style="font-family:${fonts.body};font-size:14px;line-height:1.6;color:${brand.subInk};">${body}</div>` : ""}
+    ${href ? `<div style="margin-top:12px;"><a href="${escapeAttr(href)}" style="font-family:${fonts.body};font-size:14px;font-weight:600;color:${brand.accent};text-decoration:underline;">${escapeAttr(mergeText(b.linkText, ctx))} &rarr;</a></div>` : ""}`;
+  const imgCell = `<td class="rt-stack" valign="middle" width="48%" style="padding:0;">${img}</td>`;
+  const gap = `<td class="rt-gap" width="4%" style="font-size:1px;">&nbsp;</td>`;
+  const textCell = `<td class="rt-stack" valign="middle" width="48%" style="padding:0;">${text}</td>`;
+  const cells = b.imageSide === "right" ? textCell + gap + imgCell : imgCell + gap + textCell;
+  return `<tr><td style="padding:14px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${cells}</tr></table>
+  </td></tr>`;
+}
+
+/**
+ * A code the merchant typed in, shown as a coupon. Unlike the discount block
+ * nothing is generated at send time, so it works in every workspace — with a
+ * store or without.
+ */
+function renderCoupon(b, brand, fonts, ctx) {
+  const code = escapeAttr(mergeText(b.code || "", ctx)).trim();
+  if (!code) return null;
+  const label = escapeAttr(mergeText(b.label || "", ctx));
+  const note = escapeAttr(mergeText(b.note || "", ctx));
+  return `<tr><td align="center" style="padding:16px 0;">
+    <div style="border:2px dashed ${brand.accent};border-radius:8px;padding:20px;text-align:center;">
+      ${label ? `<div style="font-family:${fonts.body};font-size:12px;color:${brand.accent};text-transform:uppercase;letter-spacing:0.12em;font-weight:700;">${label}</div>` : ""}
+      <div style="font-family:'Courier New',monospace;font-size:26px;font-weight:700;letter-spacing:0.08em;color:${brand.ink};margin:8px 0;">${code}</div>
+      ${note ? `<div style="font-family:${fonts.body};font-size:13px;color:${brand.subInk};">${note}</div>` : ""}
+    </div>
+  </td></tr>`;
+}
+
 const RENDERERS = {
+  quote: renderQuote,
+  list: renderList,
+  callout: renderCallout,
+  social: renderSocial,
+  video: renderVideo,
+  columns: renderColumns,
+  coupon: renderCoupon,
   logo: renderLogo,
   heading: renderHeading,
   paragraph: renderParagraph,
@@ -429,6 +572,16 @@ export async function renderVisualEmail({ blocks, brand, ctx, stepId, shop }) {
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="${GOOGLE_FONTS_HREF}" rel="stylesheet" />
+<style>
+/* Side-by-side cells (image + text, product grid) become full-width rows on a
+   phone. Inline styles can't express this, so it lives here; a client that
+   drops <style> simply keeps the columns, which is what it did before. */
+@media only screen and (max-width:480px) {
+  .rt-stack { display:block !important; width:100% !important; max-width:100% !important; padding-left:0 !important; padding-right:0 !important; }
+  .rt-stack img { max-width:100% !important; }
+  .rt-gap { display:none !important; }
+}
+</style>
 </head>
 <body style="margin:0;padding:0;background-color:${safeBrand.bg};font-family:${fonts.body};">
 <table width="100%" cellpadding="0" cellspacing="0" style="background-color:${safeBrand.bg};">

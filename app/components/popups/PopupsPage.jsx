@@ -12,7 +12,8 @@ function triggerSummary(popup) {
   return `after ${delay}s`;
 }
 
-function PopupOverview({ popup, signupCount, storeDomain, storeName, onEdit, onBrowse, onToggle }) {
+function PopupOverview({ popup, signupCount, storeDomain, storeName, isShopify, onEdit, onBrowse, onToggle }) {
+  const where = isShopify ? "storefront" : "website";
   if (!popup || !popup.template) {
     return (
       <div
@@ -28,7 +29,7 @@ function PopupOverview({ popup, signupCount, storeDomain, storeName, onEdit, onB
         <Icons.Megaphone size={28} />
         <h2 className="t-display-2" style={{ margin: "12px 0 8px" }}>You don't have a popup live yet.</h2>
         <p className="t-body muted" style={{ margin: "0 auto 22px", maxWidth: 460 }}>
-          Pick one of five templates below — each can be customized to match your brand. Only one popup runs on your storefront at a time.
+          Pick one of the {TEMPLATE_ORDER.length} templates below — each can be customized to match your brand. Only one popup runs on your {where} at a time.
         </p>
       </div>
     );
@@ -43,7 +44,7 @@ function PopupOverview({ popup, signupCount, storeDomain, storeName, onEdit, onB
         <div className="rt-pop-statusbar">
           <span className={`rt-pop-statusbar-dot ${popup.enabled ? "" : "off"}`} />
           <div className="rt-pop-statusbar-text">
-            <div className="rt-pop-statusbar-title">{popup.enabled ? "Live on storefront" : "Paused"}</div>
+            <div className="rt-pop-statusbar-title">{popup.enabled ? `Live on your ${where}` : "Paused"}</div>
             <div className="rt-pop-statusbar-sub">
               {popup.enabled
                 ? `Showing to first-time visitors · ${triggerSummary(config)}`
@@ -100,7 +101,7 @@ function PopupOverview({ popup, signupCount, storeDomain, storeName, onEdit, onB
 
       <div className="rt-pop-preview-card">
         <div className="rt-pop-preview-head">
-          <span className="rt-pop-preview-head-title">Storefront preview</span>
+          <span className="rt-pop-preview-head-title">{isShopify ? "Storefront preview" : "Website preview"}</span>
           {/* Was hardcoded to a fictional store name for every merchant. */}
           <span className="t-small muted">{storeDomain}</span>
         </div>
@@ -125,11 +126,11 @@ function PopupGallery({ activeId, onUseTemplate }) {
         <div>
           <h2 className="rt-pop-gallery-h">Template library</h2>
           <p className="rt-pop-gallery-sub">
-            Five distinct popups, each with its own personality and template-specific settings. Pick one to make it live — only one popup runs at a time.
+            {TEMPLATE_ORDER.length - 1} designed popups plus your own HTML — conversion-focused layouts first. Pick one to make it live; only one popup runs at a time.
           </p>
         </div>
         <div className="rt-pop-preview-tab" style={{ cursor: "default" }}>
-          <Icons.Sparkles size={12} /> 5 templates
+          <Icons.Sparkles size={12} /> {TEMPLATE_ORDER.length} templates
         </div>
       </div>
       <div className="rt-pop-gallery">
@@ -173,7 +174,7 @@ function PopupGallery({ activeId, onUseTemplate }) {
   );
 }
 
-export default function PopupsPage({ popup, signupCount, storeDomain, storeName, onEnterEditor, onToggle, onUseTemplate }) {
+export default function PopupsPage({ popup, signupCount, storeDomain, storeName, isShopify = true, install = null, onEnterEditor, onToggle, onUseTemplate }) {
   const galleryRef = useRef(null);
   return (
     <div className="rt-pop-page">
@@ -182,7 +183,9 @@ export default function PopupsPage({ popup, signupCount, storeDomain, storeName,
           <div className="t-micro muted" style={{ marginBottom: 8 }}>Retainify · On-site</div>
           <h1 className="t-display-2" style={{ margin: 0 }}>Popups</h1>
           <p className="rt-pop-lede">
-            Capture emails, recover exits, and run seasonal moments — all from a single, focused popup. Pick a template, customize, ship.
+            {isShopify
+              ? "Capture emails, recover exits, and run seasonal moments — all from a single, focused popup. Pick a template, customize, ship."
+              : "Grow your list from your own website — pick a template, make it yours, and install it with one line of code."}
           </p>
         </div>
       </header>
@@ -192,10 +195,13 @@ export default function PopupsPage({ popup, signupCount, storeDomain, storeName,
         signupCount={signupCount}
         storeDomain={storeDomain}
         storeName={storeName}
+        isShopify={isShopify}
         onEdit={() => onEnterEditor(popup?.template)}
         onBrowse={() => galleryRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })}
         onToggle={onToggle}
       />
+
+      {install}
 
       <div ref={galleryRef}>
         <PopupGallery activeId={popup?.template} onUseTemplate={onUseTemplate} />

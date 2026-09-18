@@ -9,7 +9,7 @@ import { useState, useMemo, useLayoutEffect, useRef } from "react";
 import Icons from "../ui/Icons.jsx";
 import { BlockView } from "../EmailEditor.jsx";
 import {
-  VIBES, VIBE_ORDER, JOURNEYS, TEMPLATES, TEMPLATE_ORDER,
+  VIBES, VIBE_ORDER, JOURNEYS, TEMPLATES, templatesFor,
 } from "../../lib/email-templates/email-templates.js";
 
 // ── Auto-fit wrapper (scales contents into parent) ──────────────────────
@@ -239,22 +239,26 @@ function EmailTemplatePreview({ template, onUseTemplate, onClose }) {
 }
 
 // ── Gallery (full-screen takeover from email editor) ────────────────────
-export default function EmailTemplateGallery({ onClose, onUseTemplate }) {
+export default function EmailTemplateGallery({ onClose, onUseTemplate, isShopify = true }) {
   const [activeFilter, setActiveFilter] = useState("all");
   const [previewId, setPreviewId] = useState(null);
   const [pendingId, setPendingId] = useState(null);
 
   const visibleVibes = activeFilter === "all" ? VIBE_ORDER : [activeFilter];
 
+  // Only what this workspace can send. A design carrying a product grid or a
+  // discount block needs a store; offering one here would hand the merchant a
+  // send that fails at the worker. See templatesFor().
+  const order = useMemo(() => templatesFor(isShopify), [isShopify]);
   const templatesByVibe = useMemo(() => {
     const map = {};
     VIBE_ORDER.forEach((v) => { map[v] = []; });
-    TEMPLATE_ORDER.forEach((id) => {
+    order.forEach((id) => {
       const t = TEMPLATES[id];
       if (map[t.vibeGroup]) map[t.vibeGroup].push(t);
     });
     return map;
-  }, []);
+  }, [order]);
 
   const previewTemplate = previewId ? TEMPLATES[previewId] : null;
   const pendingTemplate = pendingId ? TEMPLATES[pendingId] : null;
@@ -303,7 +307,7 @@ export default function EmailTemplateGallery({ onClose, onUseTemplate }) {
           >
             <span className="rt-emt-rail-glyph"><Icons.List size={13} /></span>
             <span className="rt-emt-rail-name">All styles</span>
-            <span className="rt-emt-rail-count">{TEMPLATE_ORDER.length}</span>
+            <span className="rt-emt-rail-count">{order.length}</span>
           </button>
           {VIBE_ORDER.map((vId) => {
             const v = VIBES[vId];
@@ -326,7 +330,7 @@ export default function EmailTemplateGallery({ onClose, onUseTemplate }) {
             <button className="rt-emt-rail-item rt-on" disabled>
               <span className="rt-emt-rail-glyph rt-tint-email"><Icons.Mail size={13} /></span>
               <span className="rt-emt-rail-name">Email</span>
-              <span className="rt-emt-rail-count">{TEMPLATE_ORDER.length}</span>
+              <span className="rt-emt-rail-count">{order.length}</span>
             </button>
             <button className="rt-emt-rail-item rt-locked" disabled>
               <span className="rt-emt-rail-glyph"><Icons.Sms size={13} /></span>
@@ -342,11 +346,12 @@ export default function EmailTemplateGallery({ onClose, onUseTemplate }) {
             <div>
               <h1 className="t-display-2" style={{ margin: 0 }}>Pick a <em style={{ fontFamily: "var(--font-display)" }}>look</em>, then make it yours</h1>
               <p className="t-body muted" style={{ margin: "10px 0 0", maxWidth: 580 }}>
-                Ten complete email designs across five vibes — each carries its own type pairing, palette and copy. Find the closest match; everything is editable from there.
+                {order.length} complete email designs across {VIBE_ORDER.length} vibes — each carries its own type pairing, palette and copy. Find the closest match; everything is editable from there.
+                {!isShopify && " Designs built around a product grid or an auto-generated discount code need a connected store, so they're not shown here."}
               </p>
             </div>
             <div className="rt-emt-hero-stat">
-              <div className="rt-emt-hero-stat-num">{TEMPLATE_ORDER.length}</div>
+              <div className="rt-emt-hero-stat-num">{order.length}</div>
               <div className="rt-emt-hero-stat-label">designs ·<br />{VIBE_ORDER.length} vibes</div>
             </div>
           </div>

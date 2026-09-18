@@ -40,6 +40,7 @@ export async function getOnboardingState(shop) {
     // skippable, so an unverified/absent domain never blocks activation.
     domain: !!settings?.domainVerified,
     popup: !!popup?.enabled,
+    website: !!popup?.enabled && !!popup?.lastSeenAt,
     flow: journeyCount > 0,
     // Direct workspaces have no storefront capture, so the list has to come
     // from somewhere — an import or a manual add. Either way, contacts exist.

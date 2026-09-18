@@ -167,7 +167,7 @@ function loadOfflineSession(shop) {
  * and guessing "healthy" for an unrecognised key is the one error this module
  * must never make.
  */
-async function isNonShopifyWorkspace(shop) {
+export async function isNonShopifyWorkspace(shop) {
   const account = await prisma.account.findUnique({
     where: { key: shop },
     select: { kind: true },

@@ -6,7 +6,9 @@ import { getDefaults, mergeOnTemplateSwitch, TEMPLATES } from "../lib/popup-temp
 import { findMissingHooks } from "../lib/popup-templates/html-sanitize.js";
 import PopupsPage from "../components/popups/PopupsPage.jsx";
 import PopupEditor from "../components/popups/PopupEditor.jsx";
-import StorefrontOnly from "../components/ui/StorefrontOnly.jsx";
+import WebsiteInstall from "../components/popups/WebsiteInstall.jsx";
+import { PopupEnv } from "../lib/popup-templates/shared.jsx";
+import { ensureSiteKey, parseDomains } from "../lib/popup/embed.server.js";
 
 // Derive legacy scalar columns from the new template config. Kept in sync on every
 // write so other code paths still reading from PopupSettings.discountPct etc. (e.g.
@@ -43,10 +45,11 @@ function legacyToConfig(row) {
 
 export const loader = async ({ request }) => {
   const ctx = await requireAccount(request);
-  // Gate below: this whole page depends on a storefront.
-  if (!ctx.isShopify) return { storefrontOnly: true };
-  const { shop } = ctx;
+  const { shop, isShopify } = ctx;
 
+  // A website outside Shopify installs the popup with a script tag, which
+  // needs a site key before there is anything to copy.
+  if (!isShopify) await ensureSiteKey(shop);
   const row = await prisma.popupSettings.findUnique({ where: { shop } });
 
   // "Subscribers" used to be a raw count of every popup signup row, including
@@ -59,7 +62,9 @@ export const loader = async ({ request }) => {
     prisma.popupSignup.count({ where: { shop, createdAt: { gte: since30 } } }),
   ]);
   const signupCount = { total, confirmed, last30 };
-  const storeDomain = shop.replace(".myshopify.com", "");
+  const storeDomain = isShopify
+    ? shop.replace(".myshopify.com", "")
+    : row?.siteDomains?.[0] || "your-website.com";
   // The merchant's own name for their store, for the preview chrome.
   const shopSettings = await prisma.shopSettings.findUnique({
     where: { shop },
@@ -70,8 +75,21 @@ export const loader = async ({ request }) => {
       ? shopSettings.senderName
       : storeDomain;
 
-  if (!row) {
-    return { popup: null, signupCount, storeDomain, storeName };
+  // eslint-disable-next-line no-undef
+  const appUrl = (process.env.SHOPIFY_APP_URL || "").replace(/\/$/, "");
+  const embed = isShopify
+    ? null
+    : {
+        siteKey: row?.siteKey || "",
+        domains: row?.siteDomains || [],
+        lastSeenAt: row?.lastSeenAt || null,
+        lastSeenOrigin: row?.lastSeenOrigin || "",
+        scriptUrl: `${appUrl}/embed/popup.js`,
+      };
+
+  // A row can exist with no popup chosen yet (the site key is created first).
+  if (!row || !row.config) {
+    return { popup: row ? { enabled: row.enabled, template: null, config: null } : null, signupCount, storeDomain, storeName, isShopify, embed };
   }
 
   const config = row.config ?? legacyToConfig(row);
@@ -85,6 +103,8 @@ export const loader = async ({ request }) => {
     signupCount,
     storeDomain,
     storeName,
+    isShopify,
+    embed,
   };
 };
 
@@ -94,19 +114,35 @@ export const action = async ({ request }) => {
   const formData = await request.formData();
   const intent = formData.get("intent");
 
+  if (intent === "save-domains") {
+    if (ctx.isShopify) return { ok: false, error: "Shopify stores install the popup through the theme embed." };
+    const { domains, invalid, truncated } = parseDomains(formData.get("domains"));
+    if (invalid.length) {
+      return { ok: false, domainsError: `Not a website domain: ${invalid.slice(0, 3).join(", ")}. Use just the address, like yourstore.com.` };
+    }
+    await ensureSiteKey(shop);
+    await prisma.popupSettings.update({ where: { shop }, data: { siteDomains: domains } });
+    return { ok: true, domainsSaved: true, truncated };
+  }
+
   if (intent === "toggle-enabled") {
     const current = await prisma.popupSettings.findUnique({ where: { shop } });
-    const defaults = getDefaults("editorial");
+    // A website starts from the newsletter popup: it promises no discount,
+    // which a site without Shopify can only give with a code of its own.
+    const defaults = getDefaults(ctx.isShopify ? "editorial" : "newsletter");
     await prisma.popupSettings.upsert({
       where: { shop },
       create: {
         shop,
         enabled: true,
-        template: "editorial",
+        template: defaults.template,
         config: defaults,
         ...configToLegacy(defaults),
       },
-      update: { enabled: !current?.enabled },
+      // Turning on a row that has no popup chosen yet gives it the default.
+      update: current?.config
+        ? { enabled: !current.enabled }
+        : { enabled: true, template: defaults.template, config: defaults, ...configToLegacy(defaults) },
     });
     return { ok: true, toggled: true };
   }
@@ -154,11 +190,16 @@ export const action = async ({ request }) => {
     }
 
     const legacy = configToLegacy(config);
+    if (config.offerCode !== undefined) config.offerCode = String(config.offerCode || "").trim().slice(0, 64);
 
+    // The first popup ever saved goes live. A website's row exists before
+    // that (it holds the site key) but starts paused, and saving a popup is
+    // the moment the merchant has something to show.
+    const existing = await prisma.popupSettings.findUnique({ where: { shop }, select: { config: true } });
     await prisma.popupSettings.upsert({
       where: { shop },
       create: { shop, enabled: true, template, config, ...legacy },
-      update: { template, config, ...legacy },
+      update: { template, config, ...legacy, ...(existing && !existing.config ? { enabled: true } : {}) },
     });
     return { ok: true, saved: true };
   }
@@ -167,7 +208,7 @@ export const action = async ({ request }) => {
 };
 
 function PopupRouteInner() {
-  const { popup, signupCount, storeDomain, storeName } = useLoaderData();
+  const { popup, signupCount, storeDomain, storeName, isShopify = true, embed } = useLoaderData();
   const [searchParams, setSearchParams] = useSearchParams();
   const fetcher = useFetcher();
   const toggleFetcher = useFetcher();
@@ -221,6 +262,7 @@ function PopupRouteInner() {
         : { ...getDefaults(editingTemplate), template: editingTemplate };
 
     return (
+      <PopupEnv.Provider value={{ isShopify }}>
       <PopupEditor
         storeDomain={storeDomain}
         storeName={storeName}
@@ -233,6 +275,7 @@ function PopupRouteInner() {
         onCancel={exitEditor}
         onSwitchTemplate={handleSwitchTemplate}
       />
+      </PopupEnv.Provider>
     );
   }
 
@@ -242,6 +285,8 @@ function PopupRouteInner() {
       signupCount={signupCount}
       storeDomain={storeDomain}
       storeName={storeName}
+      isShopify={isShopify}
+      install={embed ? <WebsiteInstall embed={embed} popup={popup} /> : null}
       onEnterEditor={enterEditor}
       onToggle={handleToggle}
       onUseTemplate={handleUseTemplate}
@@ -252,15 +297,5 @@ function PopupRouteInner() {
 export const headers = (headersArgs) => boundary.headers(headersArgs);
 
 export default function PopupRoute() {
-  // A direct workspace can still reach this URL by bookmark or shared link.
-  const data = useLoaderData();
-  if (data?.storefrontOnly) {
-    return (
-      <StorefrontOnly
-        feature="Popup"
-        what="The signup popup is injected into your storefront by the Retainify theme embed."
-      />
-    );
-  }
   return <PopupRouteInner />;
 }

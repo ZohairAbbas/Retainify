@@ -1,6 +1,6 @@
 // Retainify — Email Template Library (send-safe)
 //
-// Ten predesigned email layouts surfaced in the editor's "Browse templates"
+// The predesigned email layouts surfaced in the editor's "Browse templates"
 // gallery. Each template is pure data: a brand kit + an ordered block list that
 // loads straight into the visual editor's `emailBlocks`/`emailBrand`.
 //
@@ -11,7 +11,8 @@
 // app/components/EmailEditor.jsx) AND the renderer support:
 //
 //   blocks      logo, heading, paragraph, button, image, spacer, divider,
-//               product, discount, footer
+//               product, discount, footer, quote, list, callout, social,
+//               video, columns, coupon
 //   fontPair    editorial | modern | classic | display | mono | hand |
 //               brutal | moody  (editor + email <head> load the webfonts;
 //               clients that drop them fall back to serif/sans/mono)
@@ -47,8 +48,11 @@ export const JOURNEYS = {
   post:     { id: "post",     name: "Post-Purchase",  icon: "Heart",    tint: "email",   oneliner: "Thank, delight, and drive a second order." },
   winback:  { id: "winback",  name: "Win-back",       icon: "Refresh",  tint: "delay",   oneliner: "Revive lapsed customers before they churn." },
   birthday: { id: "birthday", name: "Birthday",       icon: "Sparkles", tint: "split",   oneliner: "Celebrate customers with a yearly treat." },
+  news:     { id: "news",     name: "Newsletter",     icon: "Mail",     tint: "email",   oneliner: "A regular letter your readers look forward to." },
+  announce: { id: "announce", name: "Announcement",   icon: "Megaphone", tint: "trigger", oneliner: "A launch, an event, or news worth an email." },
+  onboard:  { id: "onboard",  name: "Onboarding",     icon: "Check",    tint: "delay",   oneliner: "Get someone to their first win." },
 };
-export const JOURNEY_ORDER = ["welcome", "cart", "post", "winback", "birthday"];
+export const JOURNEY_ORDER = ["welcome", "cart", "post", "winback", "birthday", "news", "announce", "onboard"];
 
 // ── Block constructors (send-safe) ───────────────────────────────────────
 let _bid = 0;
@@ -68,6 +72,17 @@ const pr = (count = 3, showPrice = true) => ({ id: id(), type: "product", count,
 const dc = (label, percent) => ({ id: id(), type: "discount", label, percent });
 const ft = (storeName, address) => ({ id: id(), type: "footer", storeName, address, unsubscribe: true });
 
+// ── Newer blocks ─────────────────────────────────────────────────────────
+const q  = (text, author, stars = 5, align = "center") => ({ id: id(), type: "quote", text, author, stars, align });
+const li = (items, style = "check") => ({ id: id(), type: "list", items, style });
+const co = (html, label = "", align = "center") => ({ id: id(), type: "callout", html, label, align });
+const so = (networks, label = "Follow along") => ({ id: id(), type: "social", label, align: "center", links: networks.map((n) => ({ network: n, url: "" })) });
+// No src: same rule as im() — the merchant adds the thumbnail, and until then
+// the renderer skips it rather than sending a broken image.
+const vi = (caption) => ({ id: id(), type: "video", src: "", url: "", caption, alt: "" });
+const col = (heading, html, linkText = "", imageSide = "left") => ({ id: id(), type: "columns", src: "", alt: "", heading, html, linkText, url: "{store_url}", imageSide });
+const cp = (code, label, note) => ({ id: id(), type: "coupon", code, label, note });
+
 // ── Down-mapped constructors (prototype block → supported block) ─────────
 // eyebrow → small uppercase paragraph (styling is the renderer's fixed
 // paragraph style; we keep the all-caps text so the intent survives).
@@ -81,7 +96,10 @@ const sig = (text, align = "left") =>
 const bn = (value, unit = "", align = "center") => h(`${value}${unit ? ` ${unit}` : ""}`, 1, align);
 
 // ════════════════════════════════════════════════════════════════════════
-// TEMPLATES — 10 designs across 5 journeys
+// TEMPLATES
+//
+// Several carry no product or discount block on purpose: those are the ones a
+// workspace without a Shopify store can send (templatesFor() below).
 // ════════════════════════════════════════════════════════════════════════
 export const TEMPLATES = {
   // ── WELCOME ────────────────────────────────────────────────────────────
@@ -312,15 +330,329 @@ export const TEMPLATES = {
       ft("Olive & Honey", "PO Box 224, Topanga, CA 90290"),
     ],
   },
+
+  // ── WELCOME (no store needed) ───────────────────────────────────────────
+  "welcome-what-to-expect": {
+    id: "welcome-what-to-expect", journey: "welcome", vibeGroup: "modernist",
+    name: "What to Expect", vibe: "Modernist · Plain",
+    oneliner: "Sets expectations in the first email — the single best way to stay out of spam. Needs no store.",
+    brandPersona: "OPUS", brandCategory: "Any business",
+    tags: ["No discount", "Expectations", "Any website"], discount: 0,
+    subject: "You're in — here's what happens next",
+    preview: "What we send, how often, and how to leave whenever you like.",
+    brand: { logoText: "OPUS", accent: "#1F3D2F", bg: "#FFFFFF", ink: "#0E0E0E", subInk: "#5A5A5A", onAccent: "#FFFFFF", fontPair: "modern" },
+    blocks: [
+      sp(24), lo("OPUS", "small", "left"), sp(16),
+      h("You're in, {first_name}.", 1, "left"), sp(10),
+      pa("Thanks for subscribing. So you know exactly what you signed up for:", "left"), sp(14),
+      li("One email a week, on Thursday mornings\nPractical ideas you can use the same day\nFirst look at anything new we make\nOne click to unsubscribe, always", "check"), sp(22),
+      btn("Start here", "filled", "left"), sp(28),
+      so(["instagram", "linkedin", "website"], "Elsewhere"), sp(24),
+      ft("Opus Design Co.", "88 Bridge St, Brooklyn, NY 11201"),
+    ],
+  },
+
+  "welcome-first-steps": {
+    id: "welcome-first-steps", journey: "onboard", vibeGroup: "modernist",
+    name: "First Steps", vibe: "Onboarding · Numbered",
+    oneliner: "Three numbered steps to a first win. For software, services and memberships.",
+    brandPersona: "OPUS", brandCategory: "SaaS · Services",
+    tags: ["Onboarding", "No discount", "Any website"], discount: 0,
+    subject: "Your first three steps",
+    preview: "Ten minutes today saves you an afternoon later.",
+    brand: { logoText: "OPUS", accent: "#2A4A8C", bg: "#F7F8FA", ink: "#10131A", subInk: "#555C6A", onAccent: "#FFFFFF", fontPair: "modern" },
+    blocks: [
+      sp(24), lo("OPUS", "small", "left"), sp(16),
+      h("Let's get you set up.", 2, "left"), sp(8),
+      pa("Most people are up and running in under ten minutes. Here's the short version:", "left"), sp(14),
+      li("Finish your profile so your work is saved\nInvite one teammate — it's better with two\nStart your first project from a template", "number"), sp(20),
+      btn("Open your dashboard", "filled", "left"), sp(24),
+      vi("Watch the 2-minute tour"), sp(24),
+      pa("Stuck on any of it? Reply to this email — a real person reads every one.", "left"), sp(28),
+      ft("Opus Design Co.", "88 Bridge St, Brooklyn, NY 11201"),
+    ],
+  },
+
+  // ── CART ────────────────────────────────────────────────────────────────
+  "cart-social-proof": {
+    id: "cart-social-proof", journey: "cart", vibeGroup: "warm",
+    name: "Others Loved It", vibe: "Warm · Social proof",
+    oneliner: "Answers the real objection with a customer's own words, then shows the item again.",
+    brandPersona: "Olive & Honey", brandCategory: "Beauty · Lifestyle",
+    tags: ["Cart recovery", "Testimonial", "Product grid"], discount: 0,
+    subject: "Still thinking it over?",
+    preview: "What other people said after they took the plunge.",
+    brand: { logoText: "olive & honey", accent: "#C7522A", bg: "#FFFBF6", ink: "#4A2E1F", subInk: "#7A4E3A", onAccent: "#FFFBF6", fontPair: "display" },
+    blocks: [
+      sp(24), lo("olive & honey", "small", "center"), sp(20),
+      h("Still thinking it over?", 1, "center"), sp(10),
+      pa("Completely fair. Here's what someone said after they stopped thinking about it:", "center"), sp(16),
+      q("I put it off for a month and then used it every single day. Should have bought it sooner.", "Priya R., verified customer", 5), sp(20),
+      pa("Your bag is still saved:", "center"), sp(8),
+      pr(3, true), sp(20),
+      btn("Return to your cart", "filled", "center"), sp(24),
+      li("Free shipping over $50\n30-day returns, no questions\nReal humans answer every email", "check"), sp(28),
+      ft("Olive & Honey", "PO Box 224, Topanga, CA 90290"),
+    ],
+  },
+
+  "cart-free-shipping": {
+    id: "cart-free-shipping", journey: "cart", vibeGroup: "modernist",
+    name: "Shipping's On Us", vibe: "Modernist · One offer",
+    oneliner: "One clear reason to come back now, with no discount to train people to wait for.",
+    brandPersona: "ATELIER 84", brandCategory: "DTC · Any store",
+    tags: ["Cart recovery", "No discount", "Callout"], discount: 0,
+    subject: "Your cart — shipping's on us today",
+    preview: "One less reason to wait.",
+    brand: { logoText: "ATELIER 84", accent: "#1B2BFF", bg: "#FFFFFF", ink: "#0E0E0E", subInk: "#5A5A5A", onAccent: "#FFFFFF", fontPair: "modern" },
+    blocks: [
+      sp(24), lo("ATELIER 84", "small", "left"), sp(18),
+      h("You left something behind.", 2, "left"), sp(10),
+      pa("It's still in your bag, in your size. To make the decision easier:", "left"), sp(12),
+      co("Free shipping on your order — today only", "One less reason to wait"), sp(18),
+      pr(3, true), sp(18),
+      btn("Finish checking out", "filled", "center"), sp(26),
+      ft("Atelier 84", "500 Geary, San Francisco, CA 94102"),
+    ],
+  },
+
+  // ── POST-PURCHASE ───────────────────────────────────────────────────────
+  "post-how-to-use": {
+    id: "post-how-to-use", journey: "post", vibeGroup: "editorial",
+    name: "How To Use It", vibe: "Editorial · Helpful",
+    oneliner: "Lands while they wait for delivery. Fewer returns, more second orders.",
+    brandPersona: "Northhill & Co.", brandCategory: "Any store",
+    tags: ["Post-purchase", "No discount", "Video"], discount: 0,
+    subject: "Getting the most out of your order",
+    preview: "Three things worth knowing before it arrives.",
+    brand: { logoText: "NORTHHILL & CO.", accent: "#1F3D2F", bg: "#FDFBF5", ink: "#14201A", subInk: "#5C625A", onAccent: "#FAF6EC", fontPair: "editorial" },
+    blocks: [
+      sp(28), lo("NORTHHILL & CO.", "small", "center"), sp(24),
+      h("While you wait.", 1, "center"), sp(12),
+      pa("Your order is on its way. Three things worth knowing so it lasts as long as it should:", "center"), sp(16),
+      li("Wash cold, dry flat — it keeps its shape for years\nThe linen softens after three washes; that's meant to happen\nAnything wrong, reply to this email and we'll sort it", "number"), sp(20),
+      vi("Watch: caring for linen (90 seconds)"), sp(24),
+      btn("Read the full care guide", "outline", "center"), sp(32),
+      ft("Northhill & Co.", "142 Mercer St, New York, NY 10012"),
+    ],
+  },
+
+  "post-review-request": {
+    id: "post-review-request", journey: "post", vibeGroup: "modernist",
+    name: "How Did We Do?", vibe: "Modernist · One ask",
+    oneliner: "A single question and one button. Reviews are the cheapest conversion lift there is.",
+    brandPersona: "OPUS", brandCategory: "Any business",
+    tags: ["Reviews", "No discount", "One ask"], discount: 0,
+    subject: "How did we do, {first_name}?",
+    preview: "Two minutes, and it genuinely helps.",
+    brand: { logoText: "OPUS", accent: "#1F3D2F", bg: "#FFFFFF", ink: "#0E0E0E", subInk: "#5A5A5A", onAccent: "#FFFFFF", fontPair: "modern" },
+    blocks: [
+      sp(28), lo("OPUS", "small", "center"), sp(20),
+      h("How did we do?", 1, "center"), sp(10),
+      pa("You've had your order a couple of weeks now. If it's working out — or if it isn't — we'd genuinely like to know.", "center"), sp(20),
+      btn("Leave a review", "filled", "center"), sp(14),
+      pa("Something not right? Reply to this email instead and we'll fix it before you write anything.", "center"), sp(28),
+      ft("Opus Design Co.", "88 Bridge St, Brooklyn, NY 11201"),
+    ],
+  },
+
+  "post-pairs-well": {
+    id: "post-pairs-well", journey: "post", vibeGroup: "bold",
+    name: "Pairs Well With", vibe: "Bold · Cross-sell",
+    oneliner: "The second-order email: what people usually buy next, shown plainly.",
+    brandPersona: "ATELIER 84", brandCategory: "Streetwear · DTC",
+    tags: ["Cross-sell", "Product grid", "Second order"], discount: 10,
+    subject: "Goes with what you just bought",
+    preview: "What people usually pick up next.",
+    brand: { logoText: "ATELIER 84", accent: "#0E0E0E", bg: "#FFFFFF", ink: "#0E0E0E", subInk: "#5A5A5A", onAccent: "#FFFFFF", fontPair: "brutal" },
+    blocks: [
+      sp(20), lo("ATELIER 84", "small", "left"), sp(18),
+      h("Pairs well with.", 1, "left"), sp(12),
+      pa("People who bought what you bought usually pick up one of these next.", "left"), sp(20),
+      pr(3, true), sp(20),
+      dc("Because you're a customer", 10), sp(20),
+      btn("Shop the pairings", "filled", "center"), sp(30),
+      ft("Atelier 84", "500 Geary, San Francisco, CA 94102"),
+    ],
+  },
+
+  // ── WIN-BACK ────────────────────────────────────────────────────────────
+  "winback-still-want": {
+    id: "winback-still-want", journey: "winback", vibeGroup: "editorial",
+    name: "Still Want These?", vibe: "Editorial · Honest",
+    oneliner: "A list-hygiene email that asks rather than assumes. Protects your deliverability.",
+    brandPersona: "Northhill & Co.", brandCategory: "Any business",
+    tags: ["Re-engagement", "No discount", "Deliverability"], discount: 0,
+    subject: "Still want to hear from us?",
+    preview: "No hard feelings either way.",
+    brand: { logoText: "NORTHHILL & CO.", accent: "#1F3D2F", bg: "#FFFFFF", ink: "#14201A", subInk: "#5C625A", onAccent: "#FFFFFF", fontPair: "editorial" },
+    blocks: [
+      sp(32), h("Still want these letters?", 1, "center"), sp(12),
+      pa("We noticed you haven't opened one in a while, which is completely fine — inboxes are full places. But we'd rather send to people who want us there.", "center"), sp(20),
+      btn("Yes, keep them coming", "filled", "center"), sp(10),
+      pa("If we don't hear from you, we'll quietly stop sending. You can always come back.", "center"), sp(32),
+      ft("Northhill & Co.", "142 Mercer St, New York, NY 10012"),
+    ],
+  },
+
+  "winback-last-chance": {
+    id: "winback-last-chance", journey: "winback", vibeGroup: "bold",
+    name: "Last Chance", vibe: "Bold · Deadline",
+    oneliner: "The final email in a win-back series, with a real deadline and one button.",
+    brandPersona: "ATELIER 84", brandCategory: "DTC",
+    tags: ["Win-back", "Urgency", "Final email"], discount: 20,
+    subject: "Last chance — your 20% expires tonight",
+    preview: "After tonight it's gone, and so is this series.",
+    brand: { logoText: "ATELIER 84", accent: "#FF3D2E", bg: "#0E0E0E", ink: "#F4EFE4", subInk: "#A8A8A0", onAccent: "#FFFFFF", fontPair: "brutal" },
+    blocks: [
+      sp(24), lo("ATELIER 84", "small", "left"), sp(18),
+      h("Last chance.", 1, "left"), sp(12),
+      co("Your 20% code expires at midnight tonight", "Ends tonight"), sp(18),
+      pa("This is the last email in this series — after tonight we'll leave you alone.", "left"), sp(16),
+      dc("Your final code", 20), sp(20),
+      btn("Use it before midnight", "filled", "center"), sp(30),
+      ft("Atelier 84", "500 Geary, San Francisco, CA 94102"),
+    ],
+  },
+
+  // ── NEWSLETTER ──────────────────────────────────────────────────────────
+  "news-digest": {
+    id: "news-digest", journey: "news", vibeGroup: "editorial",
+    name: "The Digest", vibe: "Editorial · Multi-story",
+    oneliner: "Two or three stories with images beside the text. The workhorse newsletter layout.",
+    brandPersona: "Northhill & Co.", brandCategory: "Any website",
+    tags: ["Newsletter", "No discount", "Any website"], discount: 0,
+    subject: "The dispatch — issue no. 14",
+    preview: "Three things worth your time this week.",
+    brand: { logoText: "THE DISPATCH", accent: "#8C3A2A", bg: "#FAF6EC", ink: "#14201A", subInk: "#5C625A", onAccent: "#FAF6EC", fontPair: "editorial" },
+    blocks: [
+      sp(24), lo("THE DISPATCH", "medium", "center"), sp(8),
+      pa("<strong>ISSUE NO. 14 · THURSDAY</strong>", "center"), sp(18),
+      di("solid"), sp(18),
+      col("The first story", "A sentence or two on what it is and why your reader should care enough to click.", "Read the story", "left"), sp(10),
+      di("solid"),
+      col("The second story", "Another short summary. Keep each one to two sentences — the click is the goal, not the whole piece.", "Read the story", "right"), sp(10),
+      di("solid"),
+      col("The third story", "And one more. Three is plenty for a weekly letter that people actually finish.", "Read the story", "left"), sp(22),
+      so(["instagram", "linkedin", "website"]), sp(24),
+      ft("Northhill & Co.", "142 Mercer St, New York, NY 10012"),
+    ],
+  },
+
+  "news-one-thing": {
+    id: "news-one-thing", journey: "news", vibeGroup: "modernist",
+    name: "One Thing", vibe: "Plain text · Personal",
+    oneliner: "One idea, written like a letter. The format people reply to — and replies help deliverability.",
+    brandPersona: "OPUS", brandCategory: "Any website",
+    tags: ["Newsletter", "Plain text", "High reply rate"], discount: 0,
+    subject: "One thing this week",
+    preview: "A short letter, and a question at the end.",
+    brand: { logoText: "", accent: "#1F3D2F", bg: "#FFFFFF", ink: "#14201A", subInk: "#2D362F", onAccent: "#FFFFFF", fontPair: "modern" },
+    blocks: [
+      sp(36),
+      pa("Hi {first_name},", "left"), sp(8),
+      pa("One idea this week, and then I'll leave you alone.", "left"), sp(4),
+      pa("Write the idea here as if you were emailing one person you like. Three or four short paragraphs is plenty — anything longer and people save it for later, which means never.", "left"), sp(4),
+      pa("End with a question. People reply to questions, and replies are the strongest signal there is that your emails belong in the inbox.", "left"), sp(16),
+      pa("What are you working on this week?", "left"), sp(16),
+      pa("— Anna", "left"), sp(36),
+      ft("Opus Design Co.", "88 Bridge St, Brooklyn, NY 11201"),
+    ],
+  },
+
+  // ── ANNOUNCEMENT ────────────────────────────────────────────────────────
+  "announce-launch": {
+    id: "announce-launch", journey: "announce", vibeGroup: "bold",
+    name: "It's Live", vibe: "Bold · Launch",
+    oneliner: "A launch email: one image, one claim, one button. Works with or without a store.",
+    brandPersona: "ATELIER 84", brandCategory: "Any business",
+    tags: ["Launch", "Announcement", "Any website"], discount: 0,
+    subject: "It's live.",
+    preview: "The thing we've been working on all year is out today.",
+    brand: { logoText: "ATELIER 84", accent: "#1B2BFF", bg: "#FFFFFF", ink: "#0E0E0E", subInk: "#5A5A5A", onAccent: "#FFFFFF", fontPair: "brutal" },
+    blocks: [
+      sp(20), lo("ATELIER 84", "small", "center"), sp(18),
+      im("Hero · the new thing", 300), sp(24),
+      h("It's live.", 1, "center"), sp(12),
+      pa("The thing we've been working on all year is out today. Here's what's new:", "center"), sp(14),
+      li("What it does, in one line\nThe second thing people will care about\nAnd the detail you're most proud of", "check"), sp(20),
+      btn("See it now", "filled", "center"), sp(24),
+      so(["instagram", "tiktok", "website"]), sp(24),
+      ft("Atelier 84", "500 Geary, San Francisco, CA 94102"),
+    ],
+  },
+
+  "announce-event": {
+    id: "announce-event", journey: "announce", vibeGroup: "warm",
+    name: "You're Invited", vibe: "Warm · Invitation",
+    oneliner: "An invitation with the details impossible to miss. For events, workshops and openings.",
+    brandPersona: "Olive & Honey", brandCategory: "Any business",
+    tags: ["Event", "Invitation", "Any website"], discount: 0,
+    subject: "You're invited — Thursday the 14th",
+    preview: "Drinks, a short talk, and the new collection early.",
+    brand: { logoText: "olive & honey", accent: "#C7522A", bg: "#F8E8D8", ink: "#4A2E1F", subInk: "#7A4E3A", onAccent: "#F8E8D8", fontPair: "display" },
+    blocks: [
+      sp(24), lo("olive & honey", "small", "center"), sp(20),
+      h("<em>You're invited.</em>", 1, "center"), sp(12),
+      pa("We're opening the studio for an evening — drinks, a short talk, and first look at the new collection.", "center"), sp(16),
+      co("Thursday 14th · 6–9pm · 142 Mercer St", "Save the date"), sp(18),
+      im("Hero · the space", 240), sp(20),
+      btn("Save me a spot", "filled", "center"), sp(26),
+      ft("Olive & Honey", "PO Box 224, Topanga, CA 90290"),
+    ],
+  },
+
+  "announce-flash-sale": {
+    id: "announce-flash-sale", journey: "announce", vibeGroup: "bold",
+    name: "Flash Sale", vibe: "Bold · Coupon",
+    oneliner: "A sale email built on a code you set yourself, so it works on any website.",
+    brandPersona: "ATELIER 84", brandCategory: "Any business",
+    tags: ["Sale", "Coupon code", "Any website"], discount: 0,
+    subject: "48 hours only",
+    preview: "One code, everything included, ends Sunday night.",
+    brand: { logoText: "ATELIER 84", accent: "#E5FF36", bg: "#0E0E0E", ink: "#F4EFE4", subInk: "#A8A8A0", onAccent: "#0E0E0E", fontPair: "brutal" },
+    blocks: [
+      sp(22), lo("ATELIER 84", "small", "center"), sp(18),
+      h("48 hours only.", 1, "center"), sp(12),
+      pa("Everything included. No exclusions, no small print, ends Sunday at midnight.", "center"), sp(18),
+      cp("FLASH20", "Your code", "20% off everything · ends Sunday midnight"), sp(20),
+      btn("Shop the sale", "filled", "center"), sp(26),
+      ft("Atelier 84", "500 Geary, San Francisco, CA 94102"),
+    ],
+  },
 };
 
 export const TEMPLATE_ORDER = [
-  "welcome-le-salon", "welcome-opus", "welcome-olive-honey",
-  "cart-last-look", "cart-quiet-reminder",
-  "post-thank-you-card", "post-founder-note",
-  "winback-long-time", "winback-something-new",
+  "welcome-le-salon", "welcome-opus", "welcome-olive-honey", "welcome-what-to-expect", "welcome-first-steps",
+  "cart-last-look", "cart-quiet-reminder", "cart-social-proof", "cart-free-shipping",
+  "post-thank-you-card", "post-founder-note", "post-how-to-use", "post-review-request", "post-pairs-well",
+  "winback-long-time", "winback-something-new", "winback-still-want", "winback-last-chance",
   "birthday-confetti",
+  "news-digest", "news-one-thing",
+  "announce-launch", "announce-event", "announce-flash-sale",
 ];
+
+/**
+ * Blocks that only work with a Shopify store behind them — see
+ * app/components/email-blocks.js. A product grid has no catalogue to draw
+ * from without one, and a discount block makes the send worker mint a code in
+ * Shopify, which fails the send outright.
+ */
+const COMMERCE_BLOCKS = new Set(["product", "discount"]);
+
+export function templateNeedsStore(template) {
+  return (template?.blocks || []).some((b) => COMMERCE_BLOCKS.has(b.type));
+}
+
+/**
+ * The templates a workspace can actually send. A workspace with no store is
+ * only offered store-free designs: applying one of the others would load a
+ * block whose send can only fail.
+ */
+export function templatesFor(isShopify) {
+  const ids = isShopify ? TEMPLATE_ORDER : TEMPLATE_ORDER.filter((id) => !templateNeedsStore(TEMPLATES[id]));
+  return ids;
+}
 
 // Deep-clone a template's blocks with fresh ids, for loading into the editor.
 export function cloneBlocks(template) {
