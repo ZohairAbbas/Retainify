@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link, useLoaderData, useFetcher, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
+import { canManage } from "../lib/auth/roles.js";
 import prisma from "../db.server.js";
 import { resolveFrom, resolveProvider, validateReplyTo } from "../lib/email/index.server.js";
 import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
@@ -36,11 +37,31 @@ export const loader = async ({ request }) => {
     domainRecords = [];
   }
 
-  return { settings: settings ?? {}, sendingFromAddress, slotAvailable, domainRecords, domainGate, isShopify: ctx.isShopify };
+  return {
+    settings: settings ?? {},
+    sendingFromAddress,
+    slotAvailable,
+    domainRecords,
+    domainGate,
+    isShopify: ctx.isShopify,
+    // So the page can show a member the settings read-only rather than letting
+    // them fill the form and meet a 403 on save. The action enforces this
+    // regardless — this only decides what the page looks like.
+    canManage: canManage(ctx.role),
+  };
 };
 
 export const action = async ({ request }) => {
-  const ctx = await requireAccount(request);
+  // Sender identity and the custom sending domain are workspace-level identity,
+  // not content: they decide what every email from this workspace claims to be,
+  // and a custom domain consumes one of the scarce Resend slots. ROLE_HELP tells
+  // a member they "can build and send, but can't manage people or billing" —
+  // changing who the mail comes from is on the far side of that line.
+  //
+  // requireManage is a no-op for an embedded Shopify session, which resolves to
+  // owner: a store's Shopify admins are all owners of the workspace, so
+  // behaviour inside Shopify is unchanged.
+  const ctx = await requireAccount(request, { requireManage: true });
   const { shop } = ctx;
   const formData = await request.formData();
   const intent = formData.get("intent");
@@ -140,7 +161,18 @@ const HOURS = Array.from({ length: 24 }, (_, i) => ({
 }));
 
 export default function Settings() {
-  const { settings, sendingFromAddress, slotAvailable, domainRecords, domainGate, isShopify = true } = useLoaderData();
+  const {
+    settings,
+    sendingFromAddress,
+    slotAvailable,
+    domainRecords,
+    domainGate,
+    isShopify = true,
+    // Defaults to true so an embedded Shopify session — which has no role in our
+    // user table and always manages — is never accidentally locked out by a
+    // loader that didn't send the field.
+    canManage: allowed = true,
+  } = useLoaderData();
   const fetcher = useFetcher();
   const location = useLocation();
   const saving = fetcher.state !== "idle";
@@ -485,11 +517,23 @@ export default function Settings() {
           </Link>
         </section>
 
-        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: allowed ? "flex-end" : "space-between",
+            alignItems: "center",
+            gap: 12,
+          }}
+        >
+          {!allowed && (
+            <p className="muted" style={{ margin: 0 }}>
+              Only owners and admins can change these settings.
+            </p>
+          )}
           <button
             className="btn btn-primary"
             onClick={saveSettings}
-            disabled={saving}
+            disabled={saving || !allowed}
           >
             {saved && !saving ? "Saved" : "Save settings"}
           </button>

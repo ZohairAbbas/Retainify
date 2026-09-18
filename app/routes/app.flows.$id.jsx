@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, Fragment } from "react";
 import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
+import { canManage } from "../lib/auth/roles.js";
 import prisma from "../db.server.js";
 import { saveDraft, publishJourney, pauseJourney, unpublishToDraft, archiveJourney } from "../lib/journey/journey-lifecycle.server.js";
 import { validateFlowForPublish } from "../lib/journey/flow-validation.server.js";
@@ -321,6 +322,12 @@ export const action = async ({ request, params }) => {
 
   const journey = await prisma.journey.findFirst({ where: { id, shop } });
   if (!journey) return { ok: false };
+
+  // Same rule as the flows index: editing and publishing stay open to members,
+  // archiving does not. Embedded Shopify sessions resolve to owner.
+  if (intent === "archive" && !canManage(ctx.role)) {
+    return { ok: false, error: "Only owners and admins can archive a flow." };
+  }
 
   // save-draft and publish share the same payload shape. Publishing a dirty
   // canvas used to be two separate fetcher submissions 100ms apart, which React
