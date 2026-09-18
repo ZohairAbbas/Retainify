@@ -13,6 +13,7 @@
  *     session messages, which this path never produces).
  */
 import prisma from "../../db.server.js";
+import { WA_SKIP_PREFIX } from "./skip.js";
 import { isInQuietHours, quietHoursRetryDelay } from "../journey/quiet-hours.server.js";
 import { incrementUsage } from "../billing/entitlements.server.js";
 import { partitionByShopHealth, cancelReasonFor } from "../shopify/shop-health.server.js";
@@ -98,10 +99,15 @@ async function processWhatsappJob(job) {
     return;
   }
 
-  // Channel disabled or no connected WABA — nothing to send.
+  // Channel disabled or no connected WABA — nothing to send. The reason is
+  // recorded on the job: a flow whose channel was switched off after publishing
+  // used to skip every WhatsApp step with nothing anywhere to say why.
   if (!settings.whatsappEnabled || !account || account.status !== "connected") {
     console.warn(`[whatsapp-worker] job=${job.id} shop=${job.shop} not connected/enabled — skipping`);
-    await markWhatsappJobDone(job.id);
+    await markWhatsappJobSkipped(
+      job.id,
+      !account || account.status !== "connected" ? "WhatsApp is not connected" : "the WhatsApp channel is switched off",
+    );
     return;
   }
 
@@ -167,7 +173,7 @@ async function processWhatsappJob(job) {
     console.warn(
       `[whatsapp-worker] job=${job.id} no ${requireOptIn ? "confirmed opt-in" : "phone"} for contactEmail=${enrollment.contactEmail} on shop=${job.shop} — skipping`,
     );
-    await markWhatsappJobDone(job.id);
+    await markWhatsappJobSkipped(job.id, requireOptIn ? "no confirmed WhatsApp opt-in" : "no phone number on the contact");
     return;
   }
 
@@ -188,7 +194,7 @@ async function processWhatsappJob(job) {
     console.warn(
       `[whatsapp-worker] job=${job.id} phone for contactEmail=${enrollment.contactEmail} is not in international format — ${shape.error} — skipping`,
     );
-    await markWhatsappJobDone(job.id);
+    await markWhatsappJobSkipped(job.id, "phone number is not in international format");
     return;
   }
   phoneNumber = shape.phone;
@@ -199,7 +205,7 @@ async function processWhatsappJob(job) {
   });
   if (suppressed) {
     console.warn(`[whatsapp-worker] job=${job.id} phone suppressed (${suppressed.reason}) — skipping`);
-    await markWhatsappJobDone(job.id);
+    await markWhatsappJobSkipped(job.id, "the number opted out of WhatsApp");
     return;
   }
 
@@ -387,6 +393,11 @@ function resolveVar(ref, payload, enrollment) {
   if (key === "recoveryUrl") return payload.recoveryUrl || "";
   // Literal fallback (e.g. a static discount string).
   return key;
+}
+
+/** A deliberate non-send, recorded — see ./skip.js. */
+async function markWhatsappJobSkipped(jobId, reason) {
+  await markWhatsappJobDone(jobId, { lastError: `${WA_SKIP_PREFIX}${reason}`.slice(0, 500) });
 }
 
 async function markWhatsappJobDone(jobId, extras = {}) {

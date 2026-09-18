@@ -12,7 +12,10 @@ import {
   createBlankJourney,
 } from "../lib/journey/journey-templates.server.js";
 import Icons from "../components/ui/Icons.jsx";
-import { TRIGGER_CONFIG, STATUS_PILL, timeAgo } from "../lib/triggerConfig.js";
+import { TRIGGER_CONFIG, STATUS_PILL, timeAgo, triggersFor, defaultTriggerFor } from "../lib/triggerConfig.js";
+import { isInternalShop } from "../lib/internal/tenant.js";
+import { whatsappReadiness, flowsUsingWhatsapp } from "../lib/whatsapp/readiness.server.js";
+import { WHATSAPP_PROBLEMS } from "../lib/whatsapp/problems.js";
 import { requireQuota } from "../lib/billing/gate.server.js";
 
 export const loader = async ({ request }) => {
@@ -84,6 +87,14 @@ export const loader = async ({ request }) => {
     // those triggers would enrol nobody. Filtered here rather than in the UI so
     // the create-from-template action can't be posted for one either.
     templates: templates.filter((t) => ctx.isShopify || !TRIGGER_CONFIG[t.trigger]?.commerce),
+    // Published flows whose WhatsApp steps are being skipped right now because
+    // the channel can't send. Empty when WhatsApp is fine or unused.
+    whatsappAlert: await (async () => {
+      const using = await flowsUsingWhatsapp(shop);
+      if (!using.length) return null;
+      const w = await whatsappReadiness(shop);
+      return w.ready ? null : { problem: w.problem, flows: using };
+    })(),
   };
 };
 
@@ -128,14 +139,19 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "create-blank") {
-    const trigger = String(fd.get("trigger") || "customer_created");
+    // The workspace decides the default: a trigger that can fire here. A
+    // direct workspace used to get "customer_created", which only Shopify's
+    // webhook ever fires, so its blank flows could never start.
+    const available = triggersFor(ctx.isShopify, { isInternal: isInternalShop(shop) });
+    const requested = String(fd.get("trigger") || "");
+    const trigger = available[requested]
+      ? requested
+      : defaultTriggerFor(ctx.isShopify, { isInternal: isInternalShop(shop) });
     const triggerSegmentKey = String(fd.get("triggerSegmentKey") || "") || null;
     const name = String(fd.get("name") || "") || undefined;
-    // Segment trigger requires a segment key — bail out otherwise so we
-    // don't create a half-configured flow the worker can't process.
-    if (trigger === "segment_entered" && !triggerSegmentKey) {
-      return { ok: false, error: "Pick a segment for this trigger" };
-    }
+    // A segment trigger without its segment is allowed as a DRAFT: the
+    // builder asks for it, the enrollment worker ignores drafts, and publish
+    // validation refuses to publish without one.
     const journey = await createBlankJourney(shop, { name, trigger, triggerSegmentKey });
     const url = new URL(request.url);
     return redirect(`/app/flows/${journey.id}${url.search}`);
@@ -229,7 +245,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Flows() {
-  const { journeys, templates } = useLoaderData();
+  const { journeys, templates, whatsappAlert = null } = useLoaderData();
   const navigate = useNavigate();
   const location = useLocation();
   const fetcher = useFetcher();
@@ -253,6 +269,8 @@ export default function Flows() {
   return (
     <>
       <FlowsList
+        whatsappAlert={whatsappAlert}
+        onFixWhatsapp={() => navigate(`/app/whatsapp${location.search ? location.search + "&" : "?"}return=${encodeURIComponent("/app/flows")}`)}
         journeys={journeys}
         onCreate={() => setShowModal(true)}
         onOpen={(id) => navigate(`/app/flows/${id}${location.search}`)}
@@ -338,7 +356,35 @@ function FlowsListEmpty({ onCreate }) {
   );
 }
 
-function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArchive }) {
+/**
+ * Live flows are sending WhatsApp steps into a channel that can't deliver —
+ * disconnected, switched off, or blocked at Meta. Those steps are skipped, so
+ * the flows look healthy while half their messages go nowhere.
+ */
+function WhatsappFlowsAlert({ alert, onFix }) {
+  if (!alert) return null;
+  const copy = WHATSAPP_PROBLEMS[alert.problem];
+  const n = alert.flows.length;
+  return (
+    <div
+      role="alert"
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
+        border: "1px solid var(--warn-ink)", background: "var(--warn-bg)", color: "var(--warn-ink)",
+        borderRadius: "var(--r-3)", padding: "12px 16px", marginBottom: 20,
+      }}
+    >
+      <div className="t-small" style={{ lineHeight: 1.5 }}>
+        <strong>{copy.title}.</strong>{" "}
+        {n} live flow{n === 1 ? "" : "s"} ({alert.flows.slice(0, 3).map((f) => f.name).join(", ")}
+        {n > 3 ? ` and ${n - 3} more` : ""}) {n === 1 ? "has" : "have"} WhatsApp steps that are being skipped until this is fixed.
+      </div>
+      <button type="button" className="btn btn-primary btn-sm" onClick={onFix}>{copy.action}</button>
+    </div>
+  );
+}
+
+function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArchive, whatsappAlert = null, onFixWhatsapp }) {
   const [filter, setFilter] = useState("all");
   const [query, setQuery] = useState("");
   const [openMenu, setOpenMenu] = useState(null);
@@ -389,6 +435,7 @@ function FlowsList({ journeys, onCreate, onOpen, onAnalytics, onDuplicate, onArc
           </button>
         </div>
       </header>
+      <WhatsappFlowsAlert alert={whatsappAlert} onFix={onFixWhatsapp} />
 
       <section className="rt-stats">
         <div className="rt-stat">
@@ -629,7 +676,8 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
   // (including to `segment_entered`) from the builder's TriggerPicker — the
   // modal stays focused on template browsing.
   const startBlank = () => {
-    fetcher.submit({ intent: "create-blank", trigger: "customer_created" }, { method: "post" });
+    // No trigger sent: the server picks one that can fire in this workspace.
+    fetcher.submit({ intent: "create-blank" }, { method: "post" });
   };
 
   const useTemplate = () => {

@@ -9,10 +9,14 @@
 
 export const TRIGGER_CONFIG = {
   customer_created: {
+    // Commerce too: the ONLY thing that fires it is Shopify's customers/create
+    // webhook. It used to be offered — and set as the default for a blank
+    // flow — in direct workspaces, where it can never enrol anyone.
+    commerce: true,
     label: "Subscribed to Marketing",
     tint: "trigger",
     icon: "Users",
-    desc: "Starts when a new contact opts in.",
+    desc: "Starts when a new Shopify customer is created.",
     subLabel: "Lifecycle",
   },
   cart_abandoned: {
@@ -151,4 +155,14 @@ export function timeAgo(date) {
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
   if (s < 604800) return `${Math.floor(s / 86400)} days ago`;
   return new Date(date).toLocaleDateString();
+}
+
+/**
+ * The trigger a blank flow starts on: one that can actually fire in this
+ * workspace. A draft may be incomplete (a segment trigger with no segment yet);
+ * publish validation asks for the missing piece.
+ */
+export function defaultTriggerFor(isShopify, { isInternal = false } = {}) {
+  if (isShopify) return "customer_created";
+  return isInternal ? "api_event" : "segment_entered";
 }

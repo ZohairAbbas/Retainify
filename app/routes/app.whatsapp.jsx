@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useFetcher, useLoaderData } from "react-router";
+import { useFetcher, useLoaderData, useNavigate } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
 import { canManage } from "../lib/auth/roles.js";
@@ -21,6 +21,7 @@ import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import { mintConnectToken, appBaseUrl } from "../lib/whatsapp/connect-link.server.js";
+import { safeReturnPath } from "../lib/whatsapp/problems.js";
 
 /** Subscription states in the merchant's language. */
 const SUB_STATUS = {
@@ -106,6 +107,9 @@ export const loader = async ({ request }) => {
   return {
     gate,
     isShopify: ctx.isShopify,
+    // Set when the flow builder sent the merchant here to fix WhatsApp; the
+    // page offers the way back. Only in-app flow paths are accepted.
+    returnTo: safeReturnPath(new URL(request.url).searchParams.get("return")),
     account: account
       ? {
           status: account.status,
@@ -362,7 +366,7 @@ export const action = async ({ request }) => {
 };
 
 function WhatsappPageInner() {
-  const { gate, isShopify = true, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
+  const { gate, isShopify = true, returnTo = "", account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -482,6 +486,12 @@ function WhatsappPageInner() {
           <h1 className="t-display-2" style={{ margin: 0 }}>WhatsApp</h1>
         </div>
       </header>
+
+      {/* Came here from a flow: say where they'll go back to, and — once the
+          channel can actually send — say so, so they know they're done. */}
+      {returnTo && (
+        <BackToFlow returnTo={returnTo} ready={isConnected && whatsappEnabled && approvedTemplates.length > 0} />
+      )}
 
       {/* Plan gate. `locked` is only true once enforcement is on, so this stays
           hidden during shadow mode. An already-connected shop keeps its panels
@@ -752,10 +762,13 @@ function WhatsappPageInner() {
                     : "Messages go to any enrolled contact who has a phone number, even without a WhatsApp opt-in."}
                 </div>
               </div>
+              {/* The switch shows the setting it is labelled with. It was
+                  inverted: "Require opt-in: On" rendered as OFF, so the obvious
+                  action — switching it on — turned the consent requirement off. */}
               <label className="rt-toggle">
                 <input
                   type="checkbox"
-                  checked={!requireOptIn}
+                  checked={requireOptIn}
                   onChange={toggleRequireOptIn}
                   disabled={optInFetcher.state !== "idle"}
                 />
@@ -1142,6 +1155,30 @@ function WhatsappPageInner() {
           </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+function BackToFlow({ returnTo, ready }) {
+  const navigate = useNavigate();
+  return (
+    <div
+      role="status"
+      style={{
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12,
+        padding: "12px 16px", marginBottom: 16, borderRadius: "var(--r-3)",
+        border: `1px solid ${ready ? "var(--success-ink)" : "var(--hair-2)"}`,
+        background: ready ? "var(--success-bg)" : "var(--paper-3)",
+      }}
+    >
+      <span className="t-small" style={{ color: ready ? "var(--success-ink)" : "var(--ink-2)" }}>
+        {ready
+          ? "WhatsApp is ready: connected, switched on, with an approved template."
+          : "Finish setting up WhatsApp here, then head back to your flow."}
+      </span>
+      <button type="button" className={`btn ${ready ? "btn-primary" : "btn-secondary"} btn-sm`} onClick={() => navigate(returnTo)}>
+        ← Back to your flow
+      </button>
     </div>
   );
 }

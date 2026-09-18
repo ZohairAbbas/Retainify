@@ -31,6 +31,8 @@ import {
   walkFrom,
 } from "./graph.server.js";
 import { flowFieldsForSplit, validateSplitCondition } from "./split-conditions.server.js";
+import { whatsappReadiness } from "../whatsapp/readiness.server.js";
+import { TRIGGER_CONFIG } from "../triggerConfig.js";
 
 /**
  * @typedef {{ message: string, stepNumber?: number }} FlowIssue
@@ -75,6 +77,30 @@ export async function validateFlowForPublish(journeyId) {
     errors.push({
       message:
         "This flow has no enabled steps that send anything. Add an email, push or WhatsApp step before publishing.",
+    });
+  }
+
+  // What this workspace can actually do. A direct (non-Shopify) workspace has
+  // no storefront: no Shopify webhook will ever fire a commerce trigger, and
+  // no browser ever subscribes to push. The builder hides both there, but a
+  // flow created before that — or copied between workspaces — can still carry
+  // them, and would publish as a flow that silently does nothing.
+  const account = await prisma.account.findUnique({
+    where: { key: journey.shop },
+    select: { kind: true },
+  });
+  const isDirect = account?.kind === "direct";
+  if (isDirect && TRIGGER_CONFIG[journey.trigger]?.commerce) {
+    errors.push({
+      message:
+        `"${TRIGGER_CONFIG[journey.trigger].label}" only fires for a connected Shopify store, so this flow would never start here. ` +
+        "Change the trigger — for example to a segment.",
+    });
+  }
+  if (isDirect && sendable.some((s) => s.nodeType === "push")) {
+    errors.push({
+      message:
+        "Push notifications need a storefront, which this workspace doesn't have, so push steps would never send. Remove them or use email or WhatsApp.",
     });
   }
 
@@ -224,9 +250,8 @@ export async function validateFlowForPublish(journeyId) {
   // mistake that produces Meta's opaque "template not found" at send time.
   let approvedTemplates = new Map();
   if (usesWhatsapp) {
-    const [account, settings, templates] = await Promise.all([
-      prisma.whatsappAccount.findUnique({ where: { shop: journey.shop } }),
-      prisma.shopSettings.findUnique({ where: { shop: journey.shop } }),
+    const [readiness, templates] = await Promise.all([
+      whatsappReadiness(journey.shop),
       prisma.whatsappTemplate.findMany({
         where: { shop: journey.shop, status: "APPROVED" },
         select: { name: true, language: true, bodyText: true, components: true },
@@ -234,13 +259,22 @@ export async function validateFlowForPublish(journeyId) {
     ]);
     approvedTemplates = new Map(templates.map((t) => [`${t.name}|${t.language}`, t]));
 
-    if (!account || account.status !== "connected") {
+    // Same readiness the builder shows, so the builder's banner and this
+    // error can never disagree. `fix` lets the UI offer the button.
+    if (readiness.problem === "not_connected") {
       errors.push({
+        fix: "whatsapp",
         message:
           "This flow sends on WhatsApp, but no WhatsApp Business account is connected. Connect one in WhatsApp settings first.",
       });
-    } else if (!settings?.whatsappEnabled) {
+    } else if (readiness.problem === "blocked") {
       errors.push({
+        fix: "whatsapp",
+        message: `This flow sends on WhatsApp, but Meta is refusing sends for this account: ${readiness.blockedReason}`,
+      });
+    } else if (readiness.problem === "disabled") {
+      errors.push({
+        fix: "whatsapp",
         message:
           "This flow sends on WhatsApp, but the WhatsApp channel is switched off. Turn it on in WhatsApp settings first.",
       });

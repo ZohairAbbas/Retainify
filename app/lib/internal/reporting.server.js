@@ -19,6 +19,7 @@
  */
 import prisma from "../../db.server.js";
 import { INTERNAL_SHOP } from "./tenant.js";
+import { WA_SKIP_PREFIX } from "../whatsapp/skip.js";
 
 const MAX_PAGE = 5000;
 
@@ -80,7 +81,7 @@ async function engagementFor(enrollmentIds) {
   if (!enrollmentIds.length) return out;
   const blank = () => ({
     emailStats: { sent: 0, delivered: 0, opened: 0, clicked: 0, failed: 0, pending: 0, firstOpenedAt: null, firstClickedAt: null, lastSentAt: null },
-    whatsappStats: { sent: 0, delivered: 0, read: 0, replied: 0, clicked: 0, failed: 0, pending: 0, firstReadAt: null, lastSentAt: null },
+    whatsappStats: { sent: 0, delivered: 0, read: 0, replied: 0, clicked: 0, failed: 0, pending: 0, skipped: 0, skipReason: null, firstReadAt: null, lastSentAt: null },
   });
   const min = (a, b) => (!a ? b : !b ? a : a < b ? a : b);
   const max = (a, b) => (!a ? b : !b ? a : a > b ? a : b);
@@ -92,7 +93,7 @@ async function engagementFor(enrollmentIds) {
     }),
     prisma.whatsappJob.findMany({
       where: { enrollmentId: { in: enrollmentIds } },
-      select: { enrollmentId: true, status: true, sentAt: true, deliveredAt: true, readAt: true, repliedAt: true, clickedAt: true, failedAt: true },
+      select: { enrollmentId: true, status: true, sentAt: true, deliveredAt: true, readAt: true, repliedAt: true, clickedAt: true, failedAt: true, lastError: true },
     }),
   ]);
   for (const j of emailJobs) {
@@ -116,6 +117,12 @@ async function engagementFor(enrollmentIds) {
     if (j.clickedAt) s.clicked += 1;
     if (j.status === "failed" || j.failedAt) s.failed += 1;
     if (j.status === "pending" || j.status === "processing") s.pending += 1;
+    // Deliberately not sent (channel off, no opt-in, opted out) — see
+    // WA_SKIP_PREFIX in the WhatsApp worker.
+    if (j.status === "done" && !j.sentAt && !j.failedAt && String(j.lastError || "").startsWith(WA_SKIP_PREFIX)) {
+      s.skipped += 1;
+      s.skipReason = String(j.lastError).slice(WA_SKIP_PREFIX.length);
+    }
     s.firstReadAt = min(s.firstReadAt, j.readAt);
     s.lastSentAt = max(s.lastSentAt, j.sentAt);
   }

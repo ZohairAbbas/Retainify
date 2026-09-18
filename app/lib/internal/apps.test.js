@@ -47,10 +47,14 @@ test("nor to a Shopify store", () => {
   assert.ok(!("api_event" in triggersFor(true)));
 });
 
-test("the internal tenant still loses the commerce triggers", () => {
+test("the internal tenant loses every trigger only a store can fire", () => {
   const t = triggersFor(false, { isInternal: true });
   assert.ok(!("order_placed" in t));
-  assert.ok("customer_created" in t);
+  // customer_created included: the ONLY thing that fires it is Shopify's
+  // customers/create webhook, so in the internal tenant it was a trigger that
+  // could be chosen — and was the default for a blank flow — and never fire.
+  assert.ok(!("customer_created" in t));
+  assert.ok("api_event" in t, "the internal tenant keeps the trigger it actually uses");
 });
 
 test("apps a configured broker speaks for are offered as trigger sources", () => {

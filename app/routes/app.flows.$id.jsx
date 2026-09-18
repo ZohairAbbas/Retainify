@@ -1,5 +1,5 @@
-import { useState, useMemo, useEffect, Fragment } from "react";
-import { useLoaderData, useFetcher, useNavigate, useLocation } from "react-router";
+import { useState, useMemo, useEffect, Fragment, createContext, useContext } from "react";
+import { useLoaderData, useFetcher, useNavigate, useLocation, useRevalidator } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
 import { canManage } from "../lib/auth/roles.js";
@@ -24,6 +24,8 @@ import { emptyGroup } from "../components/segments/constants.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
 import TagChip from "../components/contacts/TagChip.jsx";
 import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
+import { whatsappReadiness } from "../lib/whatsapp/readiness.server.js";
+import { WHATSAPP_PROBLEMS, whatsappSetupUrl } from "../lib/whatsapp/problems.js";
 import {
   TRIGGER_ID,
   NEXT,
@@ -179,8 +181,20 @@ export const loader = async ({ request, params }) => {
     segmentChoices,
     triggerSegmentCount,
     whatsappTemplates,
+    // Whether WhatsApp can send right now, and the next fix if not. The step
+    // inspector, the step card, the add-step menu and publish all read it.
+    whatsapp: await whatsappReadiness(shop),
   };
 };
+
+/**
+ * What the builder's nested pieces need to know about the workspace, without
+ * threading props through the canvas, branch columns and connectors:
+ * whether it has a store, whether WhatsApp can send, the approved templates,
+ * and goTo(path) — navigation that goes through the unsaved-changes dialog
+ * instead of silently discarding the canvas.
+ */
+const FlowEnv = createContext({ isShopify: true, whatsapp: null, whatsappTemplates: [], flowId: "", goTo: () => {} });
 
 function safeJson(s, fb) {
   try { return JSON.parse(s); } catch { return fb; }
@@ -554,7 +568,7 @@ async function persistDraft({ id, journey, fd }) {
 }
 
 export default function FlowBuilder() {
-  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [], testEmailDefault = "", sendingFromAddress = "", isShopify = true, isInternal = false, internalApps = [], filterFields = [], filterOperators = {}, filterTags = [] } = useLoaderData();
+  const { journey, canvasNodes: initialNodes, settings, stats, segmentChoices = [], triggerSegmentCount, whatsappTemplates = [], testEmailDefault = "", sendingFromAddress = "", isShopify = true, isInternal = false, internalApps = [], filterFields = [], filterOperators = {}, filterTags = [], whatsapp = null } = useLoaderData();
   const fetcher = useFetcher();
   const navigate = useNavigate();
   const location = useLocation();
@@ -928,7 +942,17 @@ export default function FlowBuilder() {
     }
   }
 
+  // Leave for another page (WhatsApp setup, a segment…) without losing work:
+  // unsaved changes go through the same Save / Discard dialog as the back
+  // arrow, and saving waits for the save to land before navigating.
+  const goTo = (path) => {
+    if (isDirty) setPendingLeavePath(path);
+    else navigate(path);
+  };
+  const flowEnv = { isShopify, whatsapp, whatsappTemplates, flowId: journey.id, goTo };
+
   return (
+    <FlowEnv.Provider value={flowEnv}>
     <div className="rt-builder-shell">
       {/* Top bar */}
       <div className="rt-builder-topbar">
@@ -1247,6 +1271,7 @@ export default function FlowBuilder() {
         />
       )}
     </div>
+    </FlowEnv.Provider>
   );
 }
 
@@ -1604,6 +1629,7 @@ function NodeCard({ node, journey, selected, onSelect, onDuplicate, onDelete, st
           <div className="rt-node-line muted">
             {node.waTemplateName ? `Template · ${node.waLanguage || "en_US"}` : "No template selected"}
           </div>
+          <WhatsappNodeWarning node={node} />
         </div>
       </div>
     );
@@ -1851,6 +1877,7 @@ function Connector({ id, openMenuId, setOpenMenuId, onInsert, allowSplit = false
 }
 
 function InsertMenu({ open, onClose, onAdd, allowSplit = false }) {
+  const env = useContext(FlowEnv);
   if (!open) return null;
   const item = (iconName, label, type, soon = false) => {
     const Icon = Icons[iconName];
@@ -1876,8 +1903,11 @@ function InsertMenu({ open, onClose, onAdd, allowSplit = false }) {
       <div className="rt-insert-menu">
         <div className="t-micro muted rt-insert-heading">Send</div>
         {item("Mail", "Email", "email")}
-        {item("Bell", "Push notification", "push")}
-        {item("Whatsapp", "WhatsApp message", "whatsapp")}
+        {/* Push needs a storefront (the theme extension registers the service
+            worker); in a direct workspace it could never deliver, so it is
+            not offered — same rule as the nav. */}
+        {env.isShopify && item("Bell", "Push notification", "push")}
+        {item("Whatsapp", env.whatsapp && !env.whatsapp.ready ? "WhatsApp message · needs setup" : "WhatsApp message", "whatsapp")}
         {/* SMS is not planned this year, so its placeholder is gone rather
             than sitting here disabled. A "Soon" chip is a promise, and the
             product should not make one it has no date for. FB-5 stays on the
@@ -1970,6 +2000,15 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
             isShopify={isShopify}
             isInternal={isInternal}
           />
+          {/* A trigger this workspace can never fire — a flow made before
+              direct workspaces stopped being offered them. The picker hides
+              such triggers, so without this it would just read as selected. */}
+          {!isShopify && trig.commerce && (
+            <div className="field-help" style={{ color: "var(--warn-ink)", marginTop: 8 }}>
+              &ldquo;{trig.label}&rdquo; only fires for a connected Shopify store, so this flow would never start in
+              this workspace. Pick another trigger above.
+            </div>
+          )}
           {/* Which app's event starts this flow. One decision with the trigger:
               "App event" with no app or event is a flow nothing can start, and
               publish validation rejects exactly that. */}
@@ -2191,6 +2230,14 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
             </div>
           </div>
         </div>
+        {!isShopify && (
+          <div className="rt-ins-section">
+            <div className="field-help" style={{ color: "var(--warn-ink)" }}>
+              Push notifications need a storefront, which this workspace doesn't have, so this step can never send.
+              Remove it, or use an email or WhatsApp step instead.
+            </div>
+          </div>
+        )}
 
         <div className="rt-ins-section">
           <div className="t-micro muted" style={{ marginBottom: 12 }}>Content</div>
@@ -2556,19 +2603,146 @@ const WA_MERGE_TAGS = [
   { value: "recoveryUrl", label: "Cart recovery URL" },
 ];
 
+/** The template a WhatsApp step points at, if it is still approved. */
+function approvedTemplateFor(node, templates) {
+  if (!node.waTemplateName) return null;
+  return (
+    // "en_US" when unset: the same default publish validation and the worker
+    // use, so the builder can never call a step fine that publish rejects.
+    templates.find((t) => t.name === node.waTemplateName && t.language === (node.waLanguage || "en_US")) || null
+  );
+}
+
+/**
+ * Go to WhatsApp setup and come back here afterwards. Used by the publish
+ * errors, which are about the channel rather than one step.
+ */
+function FixWhatsappLink() {
+  const env = useContext(FlowEnv);
+  return (
+    <button
+      type="button"
+      className="btn btn-secondary btn-sm"
+      style={{ marginLeft: 8 }}
+      onClick={() => env.goTo(whatsappSetupUrl(`/app/flows/${env.flowId}`))}
+    >
+      Open WhatsApp settings
+    </button>
+  );
+}
+
+/**
+ * The one line on a WhatsApp step card that says it will not send, and why.
+ * Without it a flow could look finished on the canvas while every WhatsApp
+ * step in it was being skipped.
+ */
+function WhatsappNodeWarning({ node }) {
+  const env = useContext(FlowEnv);
+  if (node.isEnabled === false) return null;
+  let text = "";
+  if (env.whatsapp && env.whatsapp.problem && env.whatsapp.problem !== "no_templates") {
+    text = WHATSAPP_PROBLEMS[env.whatsapp.problem].title;
+  } else if (!node.waTemplateName) {
+    text = "Pick a template";
+  } else if (!approvedTemplateFor(node, env.whatsappTemplates)) {
+    text = "Template is no longer approved";
+  }
+  if (!text) return null;
+  return (
+    <div className="rt-node-line" style={{ color: "var(--warn-ink)", display: "flex", alignItems: "center", gap: 6 }}>
+      <span aria-hidden="true">⚠</span> {text}
+    </div>
+  );
+}
+
+/**
+ * Why WhatsApp can't send yet, and the button that fixes it.
+ *
+ * The fix happens on the WhatsApp page, so the button leaves the builder —
+ * through goTo, which offers to save the draft first — and the WhatsApp page
+ * links straight back here. "Check again" covers the other way people do it:
+ * setting WhatsApp up in another tab and returning to this one.
+ */
+function WhatsappReadinessPanel() {
+  const env = useContext(FlowEnv);
+  const revalidator = useRevalidator();
+  const sync = useFetcher();
+  useEffect(() => {
+    if (sync.state === "idle" && sync.data) revalidator.revalidate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sync.state, sync.data]);
+
+  const w = env.whatsapp;
+  if (!w || w.ready) return null;
+  const copy = WHATSAPP_PROBLEMS[w.problem];
+  const setupUrl = whatsappSetupUrl(`/app/flows/${env.flowId}`);
+  const checking = revalidator.state !== "idle" || sync.state !== "idle";
+
+  return (
+    <div
+      role="status"
+      style={{
+        border: "1px solid var(--warn-ink)", background: "var(--warn-bg)", color: "var(--warn-ink)",
+        borderRadius: "var(--r-3)", padding: 12, marginBottom: 12,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>{copy.title}</div>
+      <div className="t-small" style={{ lineHeight: 1.5 }}>
+        {w.problem === "blocked" && w.blockedReason ? `${copy.body} Meta says: ${w.blockedReason}` : copy.body}
+        {w.problem === "no_templates" && w.pendingTemplates > 0 &&
+          ` ${w.pendingTemplates} template${w.pendingTemplates === 1 ? " is" : "s are"} waiting for Meta's approval.`}
+        {" "}You can keep building — the flow can't be published until this is fixed.
+      </div>
+      <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+        <button type="button" className="btn btn-primary btn-sm" onClick={() => env.goTo(setupUrl)}>
+          {copy.action}
+        </button>
+        {w.problem === "no_templates" && (
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            disabled={checking}
+            onClick={() => sync.submit({ intent: "sync-templates" }, { method: "post", action: "/app/whatsapp" })}
+          >
+            {sync.state !== "idle" ? "Syncing…" : "Sync from Meta"}
+          </button>
+        )}
+        <button
+          type="button"
+          className="btn btn-ghost btn-sm"
+          disabled={checking}
+          onClick={() => revalidator.revalidate()}
+        >
+          {revalidator.state !== "idle" ? "Checking…" : "Check again"}
+        </button>
+      </div>
+      {sync.data?.ok === false && (
+        <div className="t-small" style={{ marginTop: 8, color: "var(--danger-ink)" }}>{sync.data.error}</div>
+      )}
+    </div>
+  );
+}
+
 function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
-  const selectedTpl = whatsappTemplates.find((t) => t.name === node.waTemplateName) || null;
+  const env = useContext(FlowEnv);
+  const selectedTpl = approvedTemplateFor(node, whatsappTemplates);
+  // Picked earlier, since rejected, paused or deleted at Meta. The select would
+  // otherwise just show "Select a template…" as if nothing had been chosen.
+  const templateGone = Boolean(node.waTemplateName) && !selectedTpl;
   // Positional params {{1}},{{2}}… declared in the template body.
   const paramNums = selectedTpl
     ? Array.from(new Set([...(selectedTpl.bodyText || "").matchAll(/\{\{\s*(\d+)\s*\}\}/g)].map((m) => Number(m[1]))))
         .sort((a, b) => a - b)
     : [];
   const vars = node.waVariables || {};
+  const hasImageHeader = Array.isArray(selectedTpl?.components)
+    && selectedTpl.components.some((c) => c?.type === "HEADER" && c?.format === "IMAGE");
 
   function pickTemplate(name) {
-    const tpl = whatsappTemplates.find((t) => t.name === name);
+    const [tplName, lang] = name.split("|");
+    const tpl = whatsappTemplates.find((t) => t.name === tplName && t.language === lang);
     // Reset variable mappings when the template changes.
-    onChange({ waTemplateName: name, waLanguage: tpl?.language || "", waVariables: {} });
+    onChange({ waTemplateName: tplName || "", waLanguage: tpl?.language || "", waVariables: {} });
   }
 
   function setVar(num, value) {
@@ -2588,21 +2762,27 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
       </div>
 
       <div className="rt-ins-section">
+        <WhatsappReadinessPanel />
         <div className="t-micro muted" style={{ marginBottom: 12 }}>Template</div>
-        {whatsappTemplates.length === 0 ? (
-          <div className="field-help">
-            No approved templates yet. <a href="/app/whatsapp">Connect WhatsApp and sync templates</a> to pick one here.
+        {/* Only when the channel itself is fine: with WhatsApp disconnected
+            every template is "not approved", and the panel above already says
+            the one thing to do about it. */}
+        {templateGone && (!env.whatsapp || env.whatsapp.ready) && (
+          <div className="field-help" style={{ color: "var(--warn-ink)", marginBottom: 8 }}>
+            &ldquo;{node.waTemplateName}&rdquo; ({node.waLanguage || "en_US"}) is no longer approved by Meta. Pick another
+            template, or fix it in WhatsApp settings.
           </div>
-        ) : (
+        )}
+        {whatsappTemplates.length > 0 && (
           <>
             <select
               className="input"
-              value={node.waTemplateName || ""}
+              value={selectedTpl ? `${selectedTpl.name}|${selectedTpl.language}` : ""}
               onChange={(e) => pickTemplate(e.target.value)}
             >
               <option value="">Select a template…</option>
               {whatsappTemplates.map((t) => (
-                <option key={t.id} value={t.name}>{t.name} ({t.language})</option>
+                <option key={t.id} value={`${t.name}|${t.language}`}>{t.name} ({t.language})</option>
               ))}
             </select>
             {selectedTpl?.bodyText && (
@@ -2652,16 +2832,27 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
         </div>
       )}
 
-      <div className="rt-ins-section">
-        <label className="field-label">Header image URL <span className="faint">(optional)</span></label>
-        <input
-          className="input"
-          value={node.waMediaUrl || ""}
-          onChange={(e) => onChange({ waMediaUrl: e.target.value })}
-          placeholder="https://…"
-        />
-        <div className="field-help">Only if the template has a media header.</div>
-      </div>
+      {/* Only when the template has an image header — where it is required,
+          not optional — or when a URL is already set and would otherwise be
+          invisible but still sent. */}
+      {(hasImageHeader || node.waMediaUrl) && (
+        <div className="rt-ins-section">
+          <label className="field-label">
+            Header image URL {hasImageHeader ? <span className="muted">(required)</span> : null}
+          </label>
+          <input
+            className="input"
+            value={node.waMediaUrl || ""}
+            onChange={(e) => onChange({ waMediaUrl: e.target.value })}
+            placeholder="https://…"
+          />
+          <div className="field-help">
+            {hasImageHeader
+              ? "This template has an image header, so every message needs an image."
+              : "This template has no image header, so this URL is ignored — you can clear it."}
+          </div>
+        </div>
+      )}
 
       {selectedTpl && (selectedTpl.bodyText || selectedTpl.components) && (
         <div className="rt-ins-section">
@@ -3193,7 +3384,10 @@ function PublishModal({ isPublished, onCancel, onConfirm, loading, segmentBackfi
             }}
           >
             {errors.map((e, i) => (
-              <li key={i}>{e.message}</li>
+              <li key={i}>
+                {e.message}
+                {e.fix === "whatsapp" && <FixWhatsappLink />}
+              </li>
             ))}
           </ul>
         )}
