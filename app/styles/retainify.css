@@ -37,8 +37,10 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
    the "highlight" was invisible and only a faint colour shift marked the current
    page. It now uses the brand tint plus a left rail, which reads at a glance. */
 .rt-subnav-item.rt-on {
-  background: var(--brand-100);
-  color: var(--brand-700);
+  /* Solid brand, not a tint: the tint measured 1.18:1 against the sidebar, so
+     "which page am I on" was a guess. White on brand is 8.8:1. */
+  background: var(--brand-700);
+  color: var(--on-brand);
   font-weight: 600;
 }
 .rt-subnav-item.rt-on::before {
@@ -48,8 +50,34 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   width: 3px; height: 16px; border-radius: 2px;
   background: var(--brand-700);
 }
-.rt-subnav-item.rt-on:hover { background: var(--brand-100); }
-.rt-subnav-item.rt-on svg { color: var(--brand-700); }
+.rt-subnav-item.rt-on:hover { background: var(--brand-600); }
+.rt-subnav-item.rt-on svg { color: var(--on-brand); }
+.rt-subnav-item.rt-on::before { display: none; }
+
+/* ── Nav groups ─────────────────────────────────────────────────────────
+   Eleven items in one flat list gave equal weight to "Flows" and "Plans".
+   Four labelled groups (Engage / Audience / Channels / Workspace) let the eye
+   skip to the right part of the product. */
+.rt-subnav-group { margin-top: 14px; padding: 0 12px 4px; }
+.rt-subnav-group:first-child { margin-top: 0; }
+.rt-subnav-group-label {
+  font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink-4);
+}
+.rt-nav-collapsed .rt-subnav-group { padding: 0; margin-top: 10px; border-top: 1px solid var(--hair-1); }
+.rt-nav-collapsed .rt-subnav-group-label { display: none; }
+
+/* A dot on a nav item: something in there needs attention (WhatsApp not
+   connected, a channel switched off). Colour alone never carries it — the page
+   it leads to states the problem in words. */
+.rt-subnav-dot {
+  margin-left: auto; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--warn-ink); flex-shrink: 0;
+}
+.rt-subnav-item.rt-on .rt-subnav-dot { background: var(--accent); }
+.rt-subnav-item.rt-collapsed .rt-subnav-dot {
+  position: absolute; top: 6px; right: 6px; margin: 0;
+}
 
 /* Collapsed rail: the ::before bar would collide with the centred icon. */
 .rt-subnav-item.rt-collapsed { padding: 8px 0; justify-content: center; }
@@ -64,7 +92,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 
 .rt-stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 32px; }
 .rt-stat {
-  background: var(--paper-3); border: 1px solid var(--hair-1);
+  background: var(--paper-3); border: 1px solid var(--hair-1); box-shadow: var(--sh-1);
   border-radius: var(--r-4); padding: 18px 20px;
   display: flex; flex-direction: column; gap: 6px;
 }
@@ -73,7 +101,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   color: var(--ink-1); letter-spacing: -0.01em;
 }
 .rt-stat-unit { font-size: 18px; color: var(--ink-3); margin-left: 2px; }
-.rt-stat-delta { font-family: var(--font-mono); font-size: 11px; color: var(--brand-600); }
+.rt-stat-delta { font-size: 11.5px; font-variant-numeric: tabular-nums; color: var(--brand-600); }
 .rt-stat-delta.muted, .rt-stat-delta:has(.muted) { color: var(--ink-4); }
 .rt-stat-feature { background: var(--accent); border-color: var(--accent-deep); }
 .rt-stat-feature .rt-stat-value { color: var(--brand-ink); }
@@ -92,7 +120,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 }
 .rt-chip:hover { border-color: var(--hair-3); }
 .rt-chip-on { background: var(--brand-700); border-color: var(--brand-700); color: var(--on-brand); }
-.rt-chip-count { font-family: var(--font-mono); font-size: 11px; background: rgba(0,0,0,0.06); padding: 0 6px; border-radius: 10px; }
+.rt-chip-count { font-size: 11px; font-variant-numeric: tabular-nums; background: rgba(0,0,0,0.06); padding: 0 6px; border-radius: 10px; }
 .rt-chip-on .rt-chip-count { background: rgba(255,255,255,0.12); color: var(--on-brand); }
 
 .rt-search {
@@ -113,7 +141,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   gap: 16px; align-items: center;
   padding: var(--row-pad-y) 24px;
 }
-.rt-thead { background: var(--paper-2); border-bottom: 1px solid var(--hair-1); font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--ink-3); font-weight: 500; padding-top: 12px; padding-bottom: 12px; }
+.rt-thead { background: var(--paper-2); border-bottom: 1px solid var(--hair-2); font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); font-weight: 600; padding-top: 12px; padding-bottom: 12px; }
 .rt-thead .rt-tnum, .rt-trow .rt-tnum { text-align: right; }
 .rt-trow { border-bottom: 1px solid var(--hair-1); cursor: pointer; transition: background var(--t-fast) var(--ease); position: relative; }
 .rt-trow:last-child { border-bottom: 0; }
@@ -143,7 +171,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-tcell-name { display: flex; align-items: center; gap: 12px; }
 .rt-flow-name { font-weight: 600; color: var(--ink-1); font-size: 14px; margin-bottom: 2px; }
 .rt-flow-meta { font-size: 12px; color: var(--ink-3); }
-.rt-tdate { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); }
+.rt-tdate { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
 .rt-tnum { font-size: 13px; color: var(--ink-1); }
 .rt-tactions { display: flex; justify-content: flex-end; position: relative; }
 .rt-menu { position: absolute; top: 36px; right: 0; background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-3); box-shadow: var(--sh-3); padding: 4px; min-width: 160px; z-index: 5; }
@@ -228,7 +256,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 .rt-cm-radio-dot { width: 14px; height: 14px; border-radius: 50%; border: 1.5px solid var(--hair-3); flex-shrink: 0; position: relative; transition: all var(--t-fast) var(--ease); }
 .rt-cm-radio.rt-on .rt-cm-radio-dot { border-color: var(--brand-700); }
 .rt-cm-radio.rt-on .rt-cm-radio-dot::after { content: ''; position: absolute; inset: 2px; background: var(--brand-700); border-radius: 50%; }
-.rt-cm-radio-count { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--ink-4); }
+.rt-cm-radio-count { margin-left: auto; font-size: 11px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
 .rt-cm-radio.rt-locked { color: var(--ink-4); cursor: default; }
 .rt-cm-foot { margin-top: auto; padding: 20px 16px 0 0; }
 
@@ -648,7 +676,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 
 /* Form view */
 .rt-form-view { padding: 40px 48px; max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
-.rt-form-section { background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4); padding: 24px; }
+.rt-form-section { background: var(--paper-3); border: 1px solid var(--hair-1); box-shadow: var(--sh-1); border-radius: var(--r-4); padding: 24px; }
 .rt-form-section.rt-form-selected { border-color: var(--brand-700); box-shadow: 0 0 0 1px var(--brand-700); }
 .rt-form-section-head { display: flex; align-items: center; gap: 12px; }
 .rt-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
@@ -746,7 +774,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 }
 .rt-emb-inbox-hint { width: 600px; max-width: 100%; display: flex; justify-content: space-between; align-items: baseline; padding: 0 4px 10px; font-size: 12px; color: var(--ink-3); }
 .rt-emb-inbox-from { font-weight: 500; color: var(--ink-2); }
-.rt-emb-inbox-time { font-size: 11px; color: var(--ink-4); font-family: var(--font-mono); }
+.rt-emb-inbox-time { font-size: 11px; color: var(--ink-3); font-variant-numeric: tabular-nums; }
 .rt-emb-frame { background: #FFFFFF; box-shadow: 0 4px 24px rgba(20,32,26,0.10), 0 1px 4px rgba(20,32,26,0.06); border-radius: var(--r-3); position: relative; transition: width 200ms var(--ease); max-width: 100%; }
 
 /* Block wrapper */
@@ -1787,8 +1815,9 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   display: inline-flex; align-items: center; gap: 6px;
   height: 22px; padding: 0 9px;
   border-radius: var(--r-pill);
-  font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
-  text-transform: uppercase;
+  /* Sentence case: status and lifecycle are words to read, not labels to
+     shout — and in capitals every pill on a row had the same weight. */
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0;
   white-space: nowrap;
 }
 .rt-pill-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex-shrink: 0; }
@@ -1918,10 +1947,11 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
   gap: 14px; align-items: center;
   padding: var(--row-pad-y) 20px;
 }
+/* Same header as every other table (.rt-thead). */
 .rt-cthead {
-  background: var(--paper-2); border-bottom: 1px solid var(--hair-1);
-  font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
-  letter-spacing: 0.1em; color: var(--ink-3); font-weight: 500;
+  background: var(--paper-2); border-bottom: 1px solid var(--hair-2);
+  font-size: 11px; text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--ink-2); font-weight: 600;
   padding-top: 12px; padding-bottom: 12px;
 }
 .rt-cthead .rt-tnum, .rt-ctrow .rt-tnum { text-align: right; }
@@ -1957,7 +1987,7 @@ html { --row-pad-y: 16px; --section-gap: 40px; --canvas-gap: 24px; }
 
 .rt-ctags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
 .rt-tmoney { font-family: var(--font-mono); font-size: 12.5px; color: var(--ink-1); }
-.rt-ctrow .rt-tdate { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-3); }
+.rt-ctrow .rt-tdate { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
 
 /* Row actions / kebab */
 .rt-kebab-wrap { position: relative; }
@@ -2285,7 +2315,7 @@ a.rt-bulk-btn:hover { color: var(--on-brand); }
 .rt-subhead .rt-tnum, .rt-subrow .rt-tnum { text-align: right; }
 .rt-subrow { border-bottom: 1px solid var(--hair-1); font-size: 13px; color: var(--ink-1); }
 .rt-subrow:last-child { border-bottom: 0; }
-.rt-subrow .rt-tdate { font-family: var(--font-mono); font-size: 12px; color: var(--ink-3); }
+.rt-subrow .rt-tdate { font-size: 12.5px; font-variant-numeric: tabular-nums; color: var(--ink-3); }
 .rt-yes {
   display: inline-flex; align-items: center; justify-content: center;
   width: 20px; height: 20px; border-radius: 50%;
@@ -2381,20 +2411,9 @@ a.rt-bulk-btn:hover { color: var(--on-brand); }
 .rt-rail-lockedbody { display: flex; gap: 10px; align-items: start; padding-top: 4px; }
 .rt-rail-lockedbody svg { color: var(--ink-4); flex-shrink: 0; margin-top: 2px; }
 
-/* ── Toggle (reuse existing-looking one for sub-cards) ────────────────── */
-.rt-toggle { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; font-size: 13px; }
-.rt-toggle input { display: none; }
-.rt-toggle-switch {
-  width: 30px; height: 18px; background: var(--hair-2); border-radius: 999px; position: relative; transition: background var(--t-fast) var(--ease);
-}
-.rt-toggle-switch::after {
-  content: ''; position: absolute; top: 2px; left: 2px;
-  width: 14px; height: 14px; border-radius: 50%; background: var(--paper-3);
-  transition: transform var(--t-fast) var(--ease);
-  box-shadow: 0 1px 2px rgba(0,0,0,0.15);
-}
-.rt-toggle input:checked + .rt-toggle-switch { background: var(--brand-700); }
-.rt-toggle input:checked + .rt-toggle-switch::after { transform: translateX(12px); }
+/* Toggle: defined once, near the form controls above. A second copy used to
+   live here and win by source order, so the switch people saw was not the
+   switch the rest of the file described. */
 
 /* ── Responsive (compress profile rail at narrower widths) ───────────── */
 @media (max-width: 1100px) {
@@ -3349,3 +3368,15 @@ a.rt-bulk-btn:hover { color: var(--on-brand); }
    label, which is uppercase 10px mono. A node card inheriting it would have
    rendered its whole body as a tiny caption. */
 .rt-node-tagaction { width: 240px; }
+
+
+/* ── Data in tables ──────────────────────────────────────────────────────
+   Numbers, dates and "just now" in table rows were set in monospace via
+   `t-mono`, which reads as code and fights the rest of the row. They use the
+   UI font with fixed-width digits instead, so columns still line up. A header
+   cell keeps the header's size rather than inheriting the cell's 13px. */
+.rt-trow .t-mono, .rt-ctrow .t-mono, .rt-tnum.t-mono {
+  font-family: var(--font-ui);
+  font-variant-numeric: tabular-nums;
+}
+.rt-thead .rt-tnum, .rt-cthead .rt-tnum { font-size: inherit; color: inherit; }

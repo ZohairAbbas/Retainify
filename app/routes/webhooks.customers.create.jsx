@@ -29,9 +29,16 @@ export const action = async ({ request }) => {
     console.error("[webhook] upsertContact (customers.create) failed:", err.message),
   );
 
-  await enrollInAllFlows(shop, "customer_created", email, name, {}).catch((err) =>
-    console.error("[webhook] welcome enroll failed:", err.message),
-  );
+  // The trigger is "Subscribed to Marketing", so only a customer who is. It
+  // used to enrol every new customer with an email — someone who checked out
+  // without ticking the box got the whole welcome series anyway, because flows
+  // (unlike broadcasts) never look at consent. The contact is still stored
+  // above either way; they just aren't mailed marketing they didn't ask for.
+  if (isSubscribed) {
+    await enrollInAllFlows(shop, "customer_created", email, name, {}).catch((err) =>
+      console.error("[webhook] welcome enroll failed:", err.message),
+    );
+  }
 
   return new Response(null, { status: 200 });
 };

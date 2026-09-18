@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { Form, Outlet, redirect, useLoaderData, useLocation, useRouteError, useRouteLoaderData } from "react-router";
 import { Link } from "react-router";
+import { Fragment } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import Icons, { IconChevron } from "../components/ui/Icons.jsx";
 import { getOnboardingState } from "../lib/onboarding/onboarding.server.js";
+import { whatsappReadiness, flowsUsingWhatsapp } from "../lib/whatsapp/readiness.server.js";
+import { WHATSAPP_PROBLEMS } from "../lib/whatsapp/problems.js";
 import { syncSubscription } from "../lib/billing/sync.server.js";
 import { requireAccount } from "../lib/auth/require.server.js";
 import { listWorkspaces } from "../lib/auth/accounts.server.js";
@@ -54,8 +57,27 @@ export const loader = async ({ request }) => {
     user: ctx.user ? { name: ctx.user.name, email: ctx.user.email } : null,
     role: ctx.role || "owner",
     workspaces,
+    // A dot beside a nav item when that page has something to fix. Only
+    // computed for channels a flow can already be built on, and never the
+    // whole message — the page says what is wrong and offers the fix.
+    navAlerts: await navAlerts(shop),
   };
 };
+
+/** @returns {Promise<Record<string, string>>} nav item id → what needs attention */
+async function navAlerts(shop) {
+  const out = {};
+  try {
+    const usingWhatsapp = await flowsUsingWhatsapp(shop);
+    if (usingWhatsapp.length) {
+      const w = await whatsappReadiness(shop);
+      if (!w.ready) out.whatsapp = WHATSAPP_PROBLEMS[w.problem].title;
+    }
+  } catch {
+    // A nav decoration must never take the whole shell down.
+  }
+  return out;
+}
 
 /**
  * Switch workspace from the sidebar. Posting to the layout route keeps the
@@ -112,22 +134,31 @@ export const action = async ({ request }) => {
  * usage worth seeing. Only the checkout differs, which the page handles via its
  * billing-provider seam.
  */
-const NAV_ACTIVE = [
-  { id: "home",      label: "Dashboard", href: "/app",           icon: "Home" },
-  { id: "flows",     label: "Flows",     href: "/app/flows",     icon: "Flow" },
-  { id: "campaigns", label: "Campaigns", href: "/app/campaigns", icon: "Send" },
-  { id: "push",      label: "Push",      href: "/app/push",      icon: "Bell",     shopifyOnly: true },
-  { id: "whatsapp",  label: "WhatsApp",  href: "/app/whatsapp",  icon: "Whatsapp" },
-  { id: "contacts",  label: "Contacts",  href: "/app/contacts",  icon: "Users" },
-  { id: "segments",  label: "Segments",  href: "/app/segments",  icon: "Sliders" },
-  { id: "popup",     label: "Popup",     href: "/app/popup",     icon: "Tab",      shopifyOnly: true },
-  { id: "content",   label: "Content",   href: "/app/content",   icon: "Image" },
-  { id: "team",      label: "Team",      href: "/app/team",      icon: "Users",    directOnly: true },
-  { id: "plans",     label: "Plans",     href: "/app/plans",     icon: "Ticket" },
-  { id: "settings",  label: "Settings",  href: "/app/settings",  icon: "Settings" },
+/** Nav groups, in the order the work happens. */
+const NAV_GROUPS = [
+  { id: "overview", label: "" },
+  { id: "engage", label: "Engage" },
+  { id: "audience", label: "Audience" },
+  { id: "channels", label: "Channels" },
+  { id: "workspace", label: "Workspace" },
 ];
 
-function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces }) {
+const NAV_ACTIVE = [
+  { id: "home",      label: "Dashboard", href: "/app",           icon: "Home", group: "overview" },
+  { id: "flows",     label: "Flows",     href: "/app/flows",     icon: "Flow", group: "engage" },
+  { id: "campaigns", label: "Campaigns", href: "/app/campaigns", icon: "Send", group: "engage" },
+  { id: "push",      label: "Push",      href: "/app/push",      icon: "Bell",     shopifyOnly: true, group: "channels" },
+  { id: "whatsapp",  label: "WhatsApp",  href: "/app/whatsapp",  icon: "Whatsapp", group: "channels" },
+  { id: "contacts",  label: "Contacts",  href: "/app/contacts",  icon: "Users", group: "audience" },
+  { id: "segments",  label: "Segments",  href: "/app/segments",  icon: "Sliders", group: "audience" },
+  { id: "popup",     label: "Popup",     href: "/app/popup",     icon: "Tab",      shopifyOnly: true, group: "channels" },
+  { id: "content",   label: "Media library", href: "/app/content", icon: "Image", group: "audience" },
+  { id: "team",      label: "Team",      href: "/app/team",      icon: "Users",    directOnly: true, group: "workspace" },
+  { id: "plans",     label: "Plans",     href: "/app/plans",     icon: "Ticket", group: "workspace" },
+  { id: "settings",  label: "Settings",  href: "/app/settings",  icon: "Settings", group: "workspace" },
+];
+
+function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces, alerts = {} }) {
   const [collapsed, setCollapsed] = useState(false);
 
   const navItems = [
@@ -141,8 +172,14 @@ function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces }
     }),
   ];
 
+  // Grouped for scanning; a group with nothing in it (Channels in a workspace
+  // with no storefront) disappears rather than showing an empty heading.
+  const groups = NAV_GROUPS
+    .map((g) => ({ ...g, items: navItems.filter((n) => (n.group || "overview") === g.id) }))
+    .filter((g) => g.items.length > 0);
+
   return (
-    <aside style={{
+    <aside className={collapsed ? "rt-nav-collapsed" : undefined} style={{
       width: collapsed ? 48 : 220,
       background: "var(--paper-2)",
       borderRight: "1px solid var(--hair-1)",
@@ -178,26 +215,39 @@ function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces }
         )}
       </div>
 
-      {/* Active nav items */}
+      {/* Active nav items, in labelled groups */}
       <div className="rt-retainify-subnav">
-        {navItems.map((n) => {
-          const Icon = Icons[n.icon];
-          const active =
-            n.href === "/app"
-              ? currentPath === "/app"
-              : currentPath.startsWith(n.href);
-          return (
-            <Link
-              key={n.id}
-              to={n.href}
-              title={collapsed ? n.label : undefined}
-              className={`rt-subnav-item${active ? " rt-on" : ""}${collapsed ? " rt-collapsed" : ""}`}
-            >
-              {Icon && <Icon size={15} style={{ flexShrink: 0 }} />}
-              {!collapsed && <span>{n.label}</span>}
-            </Link>
-          );
-        })}
+        {groups.map((g) => (
+          <Fragment key={g.id}>
+            {g.label && (
+              <div className="rt-subnav-group">
+                <span className="rt-subnav-group-label">{g.label}</span>
+              </div>
+            )}
+            {g.items.map((n) => {
+              const Icon = Icons[n.icon];
+              const active =
+                n.href === "/app"
+                  ? currentPath === "/app"
+                  : currentPath.startsWith(n.href);
+              // Something on that page needs attention. The dot is a pointer,
+              // never the message: the page itself says what is wrong.
+              const alert = alerts[n.id];
+              return (
+                <Link
+                  key={n.id}
+                  to={n.href}
+                  title={collapsed ? (alert ? `${n.label} — ${alert}` : n.label) : undefined}
+                  className={`rt-subnav-item${active ? " rt-on" : ""}${collapsed ? " rt-collapsed" : ""}`}
+                >
+                  {Icon && <Icon size={15} style={{ flexShrink: 0 }} />}
+                  {!collapsed && <span>{n.label}</span>}
+                  {alert && <span className="rt-subnav-dot" title={alert} aria-label={alert} />}
+                </Link>
+              );
+            })}
+          </Fragment>
+        ))}
       </div>
 
       {/* Account block. Only for a direct login — inside the Shopify admin the
@@ -337,7 +387,7 @@ function AccountMenu({ account, user, workspaces }) {
 }
 
 export default function App() {
-  const { apiKey, embedded, setupComplete, activated, account, user, workspaces } = useLoaderData();
+  const { apiKey, embedded, setupComplete, activated, account, user, workspaces, navAlerts: navAlertsData = {} } = useLoaderData();
   const location = useLocation();
 
   // Hide the whole shell while the pre-activation onboarding takeover is on
@@ -379,6 +429,7 @@ export default function App() {
         account={account}
         user={user}
         workspaces={workspaces}
+        alerts={navAlertsData}
       />
       <main
         ref={mainRef}

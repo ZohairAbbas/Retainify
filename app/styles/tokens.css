@@ -11,16 +11,38 @@
   --ink-5: #B5B8AE;        /* extra muted icon strokes */
 
   /* ── Paper (background + surface lights) ──────────────────────────── */
-  --paper-0: #EFE8D7;       /* deepest paper, app bg edge */
-  --paper-1: #F4EFE4;       /* app background */
-  --paper-2: #FAF6EC;       /* elevated surface (sidebar, cards) */
-  --paper-3: #FDFBF5;       /* highest surface (modal, dropdown) */
+  /* Surfaces step DOWN as they recede, not up: cards are white and the page
+     behind them is warm. Before this, page/card measured 1.11:1 and
+     sidebar/page 1.06:1 — every layer melted into the next and the screen
+     read as one flat sheet. Separation now comes from a white card on a warm
+     page, plus a border that is actually visible (--hair-1) and --sh-1. */
+  --paper-0: #E7E3D6;       /* deepest paper, app bg edge */
+  --paper-1: #F3F1EA;       /* app background */
+  --paper-2: #EDEAE0;       /* recessed surface (sidebar, chips, table head) */
+  --paper-3: #FFFFFF;       /* raised surface (cards, inputs, modals) */
   --paper-pure: #FFFFFF;    /* pure white — for previews/iframes */
 
   /* ── Hairlines + dividers ─────────────────────────────────────────── */
-  --hair-1: #E4DDCB;        /* default border */
-  --hair-2: #D2C9B0;        /* stronger divider */
-  --hair-3: #C0B697;        /* prominent border */
+  --hair-1: #DDD7C8;        /* default border — 1.5:1 on white, a visible edge */
+  --hair-2: #C6BEA8;        /* stronger divider */
+  --hair-3: #A79E85;        /* prominent border */
+  /* Interactive boundaries (inputs, secondary buttons) must reach 3:1 against
+     their surface to be perceivable — WCAG 1.4.11. The old --hair-2 managed
+     1.6:1, which is why fields did not read as fields. This is 3.6:1. */
+  --field-border: #8C8674;
+
+  /* ── Links ────────────────────────────────────────────────────────────
+     There was no link colour at all: `a { color: inherit }` made every link
+     look like text, so only the few with a manual underline were findable.
+     6.4:1 on white, 5.7:1 on the page. */
+  --link: #1D6B4A;
+  --link-hover: #14512F;
+
+  /* ── Disabled ─────────────────────────────────────────────────────────
+     A flat surface, not 45% opacity: a faded green button read as a
+     dimmer green button rather than as "not available", at 2.6:1. */
+  --disabled-bg: #ECE9E0;
+  --disabled-ink: #6B685E;
 
   /* ── Brand ────────────────────────────────────────────────────────── */
   --brand-ink: #14271D;     /* darkest forest (used as text-on-paper for emphasis) */
@@ -93,6 +115,15 @@
   --t-base: 200ms;
   --t-slow: 320ms;
 
+  /* ── Compatibility aliases ───────────────────────────────────────────
+     Used in components but never defined, so these borders and this text
+     colour silently fell back to nothing. Defined here rather than edited
+     away in 30 files. */
+  --line: var(--hair-1);
+  --rt-border: var(--hair-1);
+  --warn-border: var(--warn-ink);
+  --danger: var(--danger-ink);
+
   /* ── Layout ───────────────────────────────────────────────────────── */
   --nav-w: 240px;
   --inspector-w: 380px;
@@ -115,7 +146,23 @@ body {
 }
 button { font-family: inherit; cursor: pointer; }
 input, textarea, select { font-family: inherit; font-size: inherit; color: inherit; }
+/* A link that carries no component class is body-copy link: coloured and
+   underlined, so it can be told from the text around it. Anything with a
+   class (nav items, buttons, cards) keeps its own styling. */
 a { color: inherit; text-decoration: none; }
+a:not([class]) {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+a:not([class]):hover { color: var(--link-hover); }
+.link { color: var(--link); text-decoration: underline; text-underline-offset: 2px; }
+.link:hover { color: var(--link-hover); }
+
+/* Figures line up in columns, and dates/counts stop needing a monospace font
+   to do it. */
+table, .t-num, .tabular { font-variant-numeric: tabular-nums; }
 
 /* ── Type utilities ───────────────────────────────────────────────────── */
 .t-display-1 { font-family: var(--font-display); font-size: var(--fs-display-1); line-height: var(--lh-display-1); letter-spacing: -0.01em; font-weight: 400; }
@@ -144,13 +191,16 @@ a { color: inherit; text-decoration: none; }
 }
 .btn:hover { transform: translateY(-0.5px); }
 .btn:active { transform: translateY(0); }
-.btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
+.btn:disabled {
+  background: var(--disabled-bg); color: var(--disabled-ink); border-color: var(--hair-2);
+  cursor: not-allowed; transform: none; box-shadow: none;
+}
 
 .btn-primary { background: var(--brand-700); color: var(--on-brand); border-color: var(--brand-700); }
 .btn-primary:hover { background: var(--brand-600); border-color: var(--brand-600); }
 
-.btn-secondary { background: var(--paper-3); border-color: var(--hair-2); color: var(--ink-1); }
-.btn-secondary:hover { border-color: var(--ink-3); background: var(--paper-2); }
+.btn-secondary { background: var(--paper-3); border-color: var(--field-border); color: var(--ink-1); }
+.btn-secondary:hover { border-color: var(--ink-2); background: var(--paper-2); }
 
 .btn-ghost { background: transparent; color: var(--ink-2); }
 .btn-ghost:hover { background: var(--paper-2); color: var(--ink-1); }
@@ -158,7 +208,7 @@ a { color: inherit; text-decoration: none; }
 .btn-accent { background: var(--accent); color: var(--accent-ink); border-color: var(--accent-deep); }
 .btn-accent:hover { background: var(--accent-deep); }
 
-.btn-danger { background: var(--paper-3); color: var(--danger-ink); border-color: var(--hair-2); }
+.btn-danger { background: var(--paper-3); color: var(--danger-ink); border-color: var(--danger-ink); }
 .btn-danger:hover { background: var(--danger-bg); border-color: var(--danger-ink); }
 
 .btn-sm { height: 28px; padding: 0 10px; font-size: 12px; border-radius: var(--r-2); }
@@ -173,7 +223,7 @@ a { color: inherit; text-decoration: none; }
   height: 36px;
   padding: 0 12px;
   background: var(--paper-3);
-  border: 1px solid var(--hair-2);
+  border: 1px solid var(--field-border);
   border-radius: var(--r-2);
   font-size: 13px;
   color: var(--ink-1);
@@ -189,7 +239,7 @@ a { color: inherit; text-decoration: none; }
   display: inline-flex; align-items: center; gap: 6px;
   height: 22px; padding: 0 9px;
   border-radius: var(--r-pill);
-  font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase;
+  font-size: 11.5px; font-weight: 600; letter-spacing: 0;
   background: var(--status-draft-bg); color: var(--status-draft-ink);
 }
 .pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
@@ -205,6 +255,7 @@ a { color: inherit; text-decoration: none; }
   background: var(--paper-3);
   border: 1px solid var(--hair-1);
   border-radius: var(--r-4);
+  box-shadow: var(--sh-1);
   overflow: hidden;
 }
 .card-pad { padding: 20px; }

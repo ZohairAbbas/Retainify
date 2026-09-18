@@ -2763,7 +2763,11 @@ function WhatsappInspector({ node, onChange, whatsappTemplates = [] }) {
 
       <div className="rt-ins-section">
         <WhatsappReadinessPanel />
-        <div className="t-micro muted" style={{ marginBottom: 12 }}>Template</div>
+        {/* Nothing to pick and nothing picked: the panel above already says
+            why, and an empty "Template" heading only looked broken. */}
+        {(whatsappTemplates.length > 0 || (templateGone && (!env.whatsapp || env.whatsapp.ready))) && (
+          <div className="t-micro muted" style={{ marginBottom: 12 }}>Template</div>
+        )}
         {/* Only when the channel itself is fine: with WhatsApp disconnected
             every template is "not approved", and the panel above already says
             the one thing to do about it. */}
