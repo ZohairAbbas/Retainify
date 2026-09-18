@@ -59,6 +59,18 @@ export const TASKS = [
     panel: "domain",
   },
   {
+    // Optional: many stores run on email alone. Completes itself once a
+    // WhatsApp Business account is connected and the channel is switched on —
+    // the same two conditions a WhatsApp step needs to send.
+    id: "whatsapp",
+    title: "Connect WhatsApp (optional)",
+    sub: "Reach customers where they read messages",
+    time: "5 min",
+    optional: true,
+    detect: "auto",
+    panel: "whatsapp",
+  },
+  {
     id: "embed",
     title: "Enable the on-site popup",
     sub: "Turn on the Retainify embed in your theme",

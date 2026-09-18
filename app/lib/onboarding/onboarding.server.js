@@ -13,12 +13,13 @@ import { MANUAL_IDS, essentialIdsFor, tasksFor } from "./tasks.js";
  * Skips are always honored from the stored JSON (any task can be skipped).
  */
 export async function getOnboardingState(shop) {
-  const [settings, popup, journeyCount, account, contactCount] = await Promise.all([
+  const [settings, popup, journeyCount, account, contactCount, waAccount] = await Promise.all([
     prisma.shopSettings.findUnique({ where: { shop } }),
     prisma.popupSettings.findUnique({ where: { shop } }),
     prisma.journey.count({ where: { shop, archivedAt: null } }),
     prisma.account.findUnique({ where: { key: shop }, select: { kind: true } }),
     prisma.contact.count({ where: { shop } }),
+    prisma.whatsappAccount.findUnique({ where: { shop }, select: { status: true } }),
   ]);
 
   // Which checklist this workspace gets. An account row is created on the first
@@ -43,6 +44,9 @@ export async function getOnboardingState(shop) {
     // Direct workspaces have no storefront capture, so the list has to come
     // from somewhere — an import or a manual add. Either way, contacts exist.
     contacts: contactCount > 0,
+    // Connected AND switched on: a connected account with the channel off
+    // still sends nothing, so it is not done.
+    whatsapp: waAccount?.status === "connected" && !!settings?.whatsappEnabled,
   };
 
   const done = {};

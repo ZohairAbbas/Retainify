@@ -8,7 +8,6 @@ import { resubscribeWebhooks } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
 import {
   sendWhatsapp,
-  sendWhatsappText,
   registerWhatsappNumber,
   syncRegistrationState,
   sendBlockedReason,
@@ -56,7 +55,7 @@ export const loader = async ({ request }) => {
   // the page hides that one option when there is none (isShopify below).
   const { shop } = ctx;
 
-  const [account, settings, subCount, subscribers, templates, popup] = await Promise.all([
+  const [account, settings, subCount, subscribers, templates, popup, flowsWithWhatsapp] = await Promise.all([
     prisma.whatsappAccount.findUnique({ where: { shop } }),
     prisma.shopSettings.findUnique({ where: { shop } }),
     prisma.whatsappSubscription.count({ where: { shop, status: "subscribed" } }),
@@ -87,6 +86,10 @@ export const loader = async ({ request }) => {
       },
     }),
     prisma.popupSettings.findUnique({ where: { shop }, select: { config: true } }),
+    // For the setup checklist's last step.
+    prisma.journey.count({
+      where: { shop, archivedAt: null, steps: { some: { nodeType: "whatsapp", isArchived: false } } },
+    }),
   ]);
 
   // WhatsApp is a Growth-tier feature (Meta bills per conversation). In shadow
@@ -107,6 +110,7 @@ export const loader = async ({ request }) => {
   return {
     gate,
     isShopify: ctx.isShopify,
+    flowsWithWhatsapp,
     // Set when the flow builder sent the merchant here to fix WhatsApp; the
     // page offers the way back. Only in-app flow paths are accepted.
     returnTo: safeReturnPath(new URL(request.url).searchParams.get("return")),
@@ -322,21 +326,17 @@ export const action = async ({ request }) => {
     const check = toE164(String(fd.get("to") || ""));
     if (!check.ok) return { ok: false, error: check.error };
     const to = check.phone;
-    const mode = String(fd.get("mode") || "template"); // template | text
-
-    if (mode === "text") {
-      const text = String(fd.get("text") || "");
-      if (!text.trim()) return { ok: false, error: "Enter a message to send." };
-      const result = await sendWhatsappText({ to, text }, { shop });
-      if (!result.ok) return { ok: false, error: result.error || "Send failed." };
-      return { ok: true, sent: true };
-    }
-
+    // Template tests only. A free-text test proved nothing a flow can do —
+    // flows can only ever send approved templates — and it failed for anyone
+    // who hadn't messaged the number in the last 24 hours, which read as the
+    // channel being broken.
     const templateName = String(fd.get("templateName") || "");
+    const templateLanguage = String(fd.get("templateLanguage") || "");
     if (!templateName) return { ok: false, error: "Pick an approved template." };
     const tpl = await prisma.whatsappTemplate.findFirst({
-      where: { shop, name: templateName, status: "APPROVED" },
+      where: { shop, name: templateName, status: "APPROVED", ...(templateLanguage ? { language: templateLanguage } : {}) },
     });
+    if (!tpl) return { ok: false, error: "That template isn't approved any more. Sync templates and pick another." };
 
     // Fill every {{n}} the template declares with a visible placeholder.
     // Sending components: [] meant any template WITH variables was rejected by
@@ -366,7 +366,7 @@ export const action = async ({ request }) => {
 };
 
 function WhatsappPageInner() {
-  const { gate, isShopify = true, returnTo = "", account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
+  const { gate, isShopify = true, returnTo = "", flowsWithWhatsapp = 0, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -401,9 +401,7 @@ function WhatsappPageInner() {
   }, [templatesStale, syncFetcher]);
 
   const [testPhone, setTestPhone] = useState("");
-  const [testTemplate, setTestTemplate] = useState("");
-  const [testMode, setTestMode] = useState("template"); // template | text
-  const [testText, setTestText] = useState("Hello from Retainify 👋");
+  const [testTemplate, setTestTemplate] = useState(""); // "name|language"
 
   // Template composer
   const [tplName, setTplName] = useState("");
@@ -441,11 +439,11 @@ function WhatsappPageInner() {
     syncFetcher.submit({ intent: "sync-templates" }, { method: "post" });
   }
   function sendTest() {
-    const payload =
-      testMode === "text"
-        ? { intent: "send-test", mode: "text", to: testPhone, text: testText }
-        : { intent: "send-test", mode: "template", to: testPhone, templateName: testTemplate };
-    testFetcher.submit(payload, { method: "post" });
+    const [templateName, templateLanguage] = testTemplate.split("|");
+    testFetcher.submit(
+      { intent: "send-test", to: testPhone, templateName, templateLanguage: templateLanguage || "" },
+      { method: "post" },
+    );
   }
   function createTemplateNow() {
     const payload = {
@@ -508,8 +506,8 @@ function WhatsappPageInner() {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
           {/* Connection */}
-          <section className="rt-form-section">
-            <div className="t-micro muted" style={{ marginBottom: 16 }}>Connection</div>
+          <section className="rt-form-section" id="wa-connect" style={{ scrollMarginTop: 16 }}>
+            <h2 className="t-h3" style={{ margin: "0 0 16px" }}>Connect WhatsApp</h2>
             {isConnected ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -579,7 +577,7 @@ function WhatsappPageInner() {
                   <div style={{ borderTop: "1px solid var(--line)", paddingTop: 16 }}>
                     <div className="t-small" style={{ marginBottom: 10, background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "10px 12px", borderRadius: "var(--r-2)" }}>
                       This number must be registered for the Cloud API before it can send any message
-                      (template or free-text). Enter a 6-digit PIN to register it. This becomes the
+                      (templates). Enter a 6-digit PIN to register it. This becomes the
                       number's two-step verification PIN — save it somewhere safe.
                     </div>
                     <label className="field-label">Registration PIN (6 digits)</label>
@@ -619,179 +617,10 @@ function WhatsappPageInner() {
             )}
           </section>
 
-          {/* Test — deliberately the first thing after Connection. Proving the
-              number can actually deliver a message is what a merchant wants to
-              do the moment they connect, not after configuring consent,
-              templates and a popup. It does not need the channel toggle on:
-              a test send goes through the Cloud API directly. */}
-          <section className="rt-form-section">
-            <div className="t-micro muted" style={{ marginBottom: 16 }}>Send a test</div>
-            {!canSend && (
-              <div className="t-small muted" style={{ marginBottom: 16 }}>
-                {!isConnected
-                  ? "Connect a WhatsApp account above to send a test."
-                  : "Register your number above to send a test."}
-              </div>
-            )}
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {/* Mode switch */}
-              <div style={{ display: "flex", gap: 8 }}>
-                <button
-                  type="button"
-                  className={`btn${testMode === "template" ? " btn-primary" : ""}`}
-                  style={{ flex: 1, justifyContent: "center" }}
-                  onClick={() => setTestMode("template")}
-                >
-                  Approved template
-                </button>
-                <button
-                  type="button"
-                  className={`btn${testMode === "text" ? " btn-primary" : ""}`}
-                  style={{ flex: 1, justifyContent: "center" }}
-                  onClick={() => setTestMode("text")}
-                >
-                  Free text
-                </button>
-              </div>
-
-              {testMode === "template" ? (
-                <div>
-                  <label className="field-label">Template</label>
-                  <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value)}>
-                    <option value="">Select an approved template…</option>
-                    {approvedTemplates.map((t) => (
-                      <option key={t.id} value={t.name}>{t.name} ({t.language})</option>
-                    ))}
-                  </select>
-                  {approvedTemplates.length === 0 && (
-                    <div className="field-help">
-                      No approved templates yet. They appear here once Meta approves them —
-                      or switch to Free text to test delivery now.
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div>
-                  <label className="field-label">Message</label>
-                  <textarea
-                    className="input"
-                    rows={3}
-                    value={testText}
-                    onChange={(e) => setTestText(e.target.value)}
-                    placeholder="Type a test message…"
-                  />
-                  <div className="field-help">
-                    Free text only works if this number has messaged your WhatsApp number in the last 24 hours.
-                    Text your business number first, then send the test.
-                  </div>
-                </div>
-              )}
-
-              <div>
-                <label className="field-label">Test phone (E.164)</label>
-                <input className="input" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+1 555 123 4567" />
-              </div>
-              {testFetcher.data?.ok && (
-                <div className="t-small" style={{ background: "var(--success-bg)", color: "var(--success-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
-                  Test sent.
-                </div>
-              )}
-              {testFetcher.data?.ok === false && (
-                <div className="t-small" style={{ background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
-                  {testFetcher.data.error}
-                </div>
-              )}
-              <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                <button
-                  className="btn btn-primary"
-                  onClick={sendTest}
-                  disabled={
-                    testFetcher.state !== "idle" ||
-                    !canSend ||
-                    !testPhone ||
-                    (testMode === "template" && approvedTemplates.length === 0) ||
-                    (testMode === "text" && !testText.trim())
-                  }
-                >
-                  {Icons.Send && <Icons.Send size={14} />}
-                  {testFetcher.state !== "idle" ? "Sending…" : "Send test"}
-                </button>
-              </div>
-            </div>
-          </section>
-
-          {/* Channel status */}
-          <section className="rt-form-section">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div>
-                <div className="t-micro muted" style={{ marginBottom: 4 }}>Status</div>
-                <div className="t-body" style={{ fontWeight: 500 }}>
-                  {whatsappEnabled ? "Enabled" : "Disabled"}
-                </div>
-                <div className="t-small muted" style={{ marginTop: 2 }}>
-                  {!isConnected
-                    ? "Connect an account first, then enable the channel."
-                    : !isRegistered
-                      ? "Register your number above before enabling the channel."
-                      : "WhatsApp steps in your flows will send once enabled."}
-                </div>
-              </div>
-              <label className="rt-toggle">
-                <input
-                  type="checkbox"
-                  checked={whatsappEnabled}
-                  onChange={toggleEnabled}
-                  disabled={toggleFetcher.state !== "idle" || !canSend}
-                />
-                <span className="rt-toggle-switch" />
-              </label>
-            </div>
-          </section>
-
-          {/* Audience / consent */}
-          <section className="rt-form-section">
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-              <div style={{ maxWidth: 460 }}>
-                <div className="t-micro muted" style={{ marginBottom: 4 }}>Require opt-in</div>
-                <div className="t-body" style={{ fontWeight: 500 }}>
-                  {requireOptIn ? "On — send only to opted-in contacts" : "Off — send to any contact with a phone"}
-                </div>
-                <div className="t-small muted" style={{ marginTop: 2 }}>
-                  {requireOptIn
-                    ? "Recommended. Only contacts who explicitly opted in to WhatsApp receive messages."
-                    : "Messages go to any enrolled contact who has a phone number, even without a WhatsApp opt-in."}
-                </div>
-              </div>
-              {/* The switch shows the setting it is labelled with. It was
-                  inverted: "Require opt-in: On" rendered as OFF, so the obvious
-                  action — switching it on — turned the consent requirement off. */}
-              <label className="rt-toggle">
-                <input
-                  type="checkbox"
-                  checked={requireOptIn}
-                  onChange={toggleRequireOptIn}
-                  disabled={optInFetcher.state !== "idle"}
-                />
-                <span className="rt-toggle-switch" />
-              </label>
-            </div>
-            {!requireOptIn && (
-              <div
-                className="t-small"
-                style={{ marginTop: 12, background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "10px 12px", borderRadius: "var(--r-2)" }}
-              >
-                <strong>Compliance warning:</strong> Meta's WhatsApp Business Policy requires opt-in before
-                messaging. Sending to non-opted-in contacts can lower your quality rating and lead to your
-                number being restricted or banned. Opt-outs (STOP) are always honored. Use only if you have a
-                lawful basis (e.g. phone collected at checkout).
-              </div>
-            )}
-          </section>
-
           {/* Templates */}
-          <section className="rt-form-section">
+          <section className="rt-form-section" id="wa-templates" style={{ scrollMarginTop: 16 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
-              <div className="t-micro muted">Message templates</div>
+              <h2 className="t-h3" style={{ margin: 0 }}>Message templates</h2>
               <button className="btn" onClick={syncTemplatesNow} disabled={syncFetcher.state !== "idle" || !isConnected}>
                 {syncFetcher.state !== "idle" ? "Syncing…" : "Sync from Meta"}
               </button>
@@ -867,8 +696,8 @@ function WhatsappPageInner() {
           </section>
 
           {/* Create template */}
-          <section className="rt-form-section">
-            <div className="t-micro muted" style={{ marginBottom: 16 }}>Create a template</div>
+          <section className="rt-form-section" id="wa-create" style={{ scrollMarginTop: 16 }}>
+            <h2 className="t-h3" style={{ margin: "0 0 16px" }}>Create a template</h2>
             <div className="t-small muted" style={{ marginBottom: 16 }}>
               Templates are reviewed by Meta before they can be sent. Approval usually takes a few minutes to a day.
             </div>
@@ -1028,9 +857,152 @@ function WhatsappPageInner() {
             </div>
           </section>
 
+          {/* Test — deliberately the first thing after Connection. Proving the
+              number can actually deliver a message is what a merchant wants to
+              do the moment they connect, not after configuring consent,
+              templates and a popup. It does not need the channel toggle on:
+              a test send goes through the Cloud API directly. */}
+          <section className="rt-form-section" id="wa-test" style={{ scrollMarginTop: 16 }}>
+            <h2 className="t-h3" style={{ margin: "0 0 16px" }}>Send yourself a test</h2>
+            {!canSend && (
+              <div className="t-small muted" style={{ marginBottom: 16 }}>
+                {!isConnected
+                  ? "Connect a WhatsApp account above to send a test."
+                  : "Register your number above to send a test."}
+              </div>
+            )}
+            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+              <div>
+                <label className="field-label">Template</label>
+                <select className="input" value={testTemplate} onChange={(e) => setTestTemplate(e.target.value)} disabled={approvedTemplates.length === 0}>
+                  <option value="">{approvedTemplates.length ? "Select an approved template…" : "No approved templates yet"}</option>
+                  {approvedTemplates.map((t) => (
+                    <option key={t.id} value={`${t.name}|${t.language}`}>{t.name} ({t.language})</option>
+                  ))}
+                </select>
+                {approvedTemplates.length === 0 ? (
+                  <div className="field-help">
+                    Tests use a Meta-approved template — the only kind of message a flow can send.
+                    Create one below or sync from Meta; it appears here once approved.
+                  </div>
+                ) : (() => {
+                  const [n, l] = testTemplate.split("|");
+                  const t = approvedTemplates.find((x) => x.name === n && x.language === l);
+                  return t?.bodyText ? (
+                    <div className="field-help" style={{ whiteSpace: "pre-wrap", background: "var(--paper-2)", padding: 10, borderRadius: "var(--r-2)", marginTop: 8 }}>
+                      {t.bodyText}
+                      {/\{\{\s*\d+\s*\}\}/.test(t.bodyText) && (
+                        <div className="muted" style={{ marginTop: 6 }}>Variables are filled with sample text in a test.</div>
+                      )}
+                    </div>
+                  ) : null;
+                })()}
+              </div>
+
+              <div>
+                <label className="field-label">Send to</label>
+                <input className="input" value={testPhone} onChange={(e) => setTestPhone(e.target.value)} placeholder="+92 300 1234567" />
+                <div className="field-help">Your own WhatsApp number, with country code.</div>
+              </div>
+              {testFetcher.data?.ok && (
+                <div className="t-small" style={{ background: "var(--success-bg)", color: "var(--success-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
+                  Test sent.
+                </div>
+              )}
+              {testFetcher.data?.ok === false && (
+                <div className="t-small" style={{ background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "8px 12px", borderRadius: "var(--r-2)" }}>
+                  {testFetcher.data.error}
+                </div>
+              )}
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  className="btn btn-primary"
+                  onClick={sendTest}
+                  disabled={
+                    testFetcher.state !== "idle" ||
+                    !canSend ||
+                    !testPhone ||
+                    !testTemplate
+                  }
+                >
+                  {Icons.Send && <Icons.Send size={14} />}
+                  {testFetcher.state !== "idle" ? "Sending…" : "Send test"}
+                </button>
+              </div>
+            </div>
+          </section>
+
+          {/* Channel status */}
+          <section className="rt-form-section" id="wa-status" style={{ scrollMarginTop: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div>
+                <h2 className="t-h3" style={{ margin: "0 0 8px" }}>Channel</h2>
+                <div className="t-body" style={{ fontWeight: 500 }}>
+                  {whatsappEnabled ? "Enabled" : "Disabled"}
+                </div>
+                <div className="t-small muted" style={{ marginTop: 2 }}>
+                  {!isConnected
+                    ? "Connect an account first, then enable the channel."
+                    : !isRegistered
+                      ? "Register your number above before enabling the channel."
+                      : "WhatsApp steps in your flows will send once enabled."}
+                </div>
+              </div>
+              <label className="rt-toggle">
+                <input
+                  type="checkbox"
+                  checked={whatsappEnabled}
+                  onChange={toggleEnabled}
+                  disabled={toggleFetcher.state !== "idle" || !canSend}
+                />
+                <span className="rt-toggle-switch" />
+              </label>
+            </div>
+          </section>
+
+          {/* Audience / consent */}
+          <section className="rt-form-section" id="wa-consent" style={{ scrollMarginTop: 16 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <div style={{ maxWidth: 460 }}>
+                <h2 className="t-h3" style={{ margin: "0 0 8px" }}>Consent</h2>
+                <div className="t-body" style={{ fontWeight: 500 }}>
+                  {requireOptIn ? "On — send only to opted-in contacts" : "Off — send to any contact with a phone"}
+                </div>
+                <div className="t-small muted" style={{ marginTop: 2 }}>
+                  {requireOptIn
+                    ? "Recommended. Only contacts who explicitly opted in to WhatsApp receive messages."
+                    : "Messages go to any enrolled contact who has a phone number, even without a WhatsApp opt-in."}
+                </div>
+              </div>
+              {/* The switch shows the setting it is labelled with. It was
+                  inverted: "Require opt-in: On" rendered as OFF, so the obvious
+                  action — switching it on — turned the consent requirement off. */}
+              <label className="rt-toggle">
+                <input
+                  type="checkbox"
+                  checked={requireOptIn}
+                  onChange={toggleRequireOptIn}
+                  disabled={optInFetcher.state !== "idle"}
+                />
+                <span className="rt-toggle-switch" />
+              </label>
+            </div>
+            {!requireOptIn && (
+              <div
+                className="t-small"
+                style={{ marginTop: 12, background: "var(--danger-bg)", color: "var(--danger-ink)", padding: "10px 12px", borderRadius: "var(--r-2)" }}
+              >
+                <strong>Compliance warning:</strong> Meta's WhatsApp Business Policy requires opt-in before
+                messaging. Sending to non-opted-in contacts can lower your quality rating and lead to your
+                number being restricted or banned. Opt-outs (STOP) are always honored. Use only if you have a
+                lawful basis (e.g. phone collected at checkout).
+              </div>
+            )}
+          </section>
+
           {/* Subscribers */}
-          <section className="rt-form-section">
-            <div className="t-micro muted" style={{ marginBottom: 16 }}>Subscribers</div>
+          <section className="rt-form-section" id="wa-subscribers" style={{ scrollMarginTop: 16 }}>
+            <h2 className="t-h3" style={{ margin: "0 0 16px" }}>Subscribers</h2>
             <div className="t-display-2 t-mono" style={{ lineHeight: 1, margin: 0 }}>{subCount}</div>
             <div className="t-small muted" style={{ marginTop: 6 }}>
               Contacts who explicitly opted in to WhatsApp.
@@ -1140,19 +1112,22 @@ function WhatsappPageInner() {
             )}
           </section>
 
+
         </div>
 
-        {/* Right: how it works */}
+        {/* Right: live setup checklist. Replaces a static "How it works" list
+            that looked the same whether you had done every step or none. */}
         <div style={{ position: "sticky", top: 16 }}>
-          <section className="rt-form-section">
-            <div className="t-micro muted" style={{ marginBottom: 16 }}>How it works</div>
-            <ol style={{ margin: 0, paddingLeft: 20, display: "flex", flexDirection: "column", gap: 10 }} className="t-small">
-              <li className="muted">Connect your WhatsApp Business account with the button. Your Meta-approved templates sync automatically.</li>
-              <li className="muted">Send yourself a test to confirm the number delivers.</li>
-              <li className="muted">Add a <strong style={{ color: "var(--ink-1)" }}>WhatsApp</strong> step to any flow and pick a template.</li>
-              <li className="muted">Enable the channel — sends go to opted-in contacts only.</li>
-            </ol>
-          </section>
+          <WhatsappChecklist
+            steps={[
+              { id: "wa-connect", label: "Connect your WhatsApp Business account", done: isConnected && isRegistered },
+              { id: "wa-templates", label: "Get a message template approved", done: approvedTemplates.length > 0,
+                hint: templates.some((t) => t.status === "PENDING") ? "Waiting for Meta's review" : "" },
+              { id: "wa-test", label: "Send yourself a test", done: testFetcher.data?.ok === true },
+              { id: "wa-status", label: "Turn the channel on", done: whatsappEnabled },
+              { id: "flows", label: "Add a WhatsApp step to a flow", done: flowsWithWhatsapp > 0, href: "/app/flows" },
+            ]}
+          />
         </div>
       </div>
     </div>
@@ -1180,6 +1155,52 @@ function BackToFlow({ returnTo, ready }) {
         ← Back to your flow
       </button>
     </div>
+  );
+}
+
+/**
+ * Where you are in WhatsApp setup, ticking itself off from real state, with
+ * each step a link to the section that does it.
+ */
+function WhatsappChecklist({ steps }) {
+  const navigate = useNavigate();
+  const done = steps.filter((s) => s.done).length;
+  const next = steps.find((s) => !s.done);
+  return (
+    <section className="rt-form-section">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 12 }}>
+        <h2 className="t-h3" style={{ margin: 0 }}>Setup</h2>
+        <span className="t-small muted tabular">{done} of {steps.length} done</span>
+      </div>
+      <div style={{ height: 6, background: "var(--paper-2)", borderRadius: 3, overflow: "hidden", marginBottom: 16 }}>
+        <div style={{ width: `${(done / steps.length) * 100}%`, height: "100%", background: "var(--brand-700)" }} />
+      </div>
+      <ol className="rt-checklist">
+        {steps.map((s, i) => (
+          <li key={s.id} className={s.done ? "rt-check-done" : next?.id === s.id ? "rt-check-next" : ""}>
+            <span className="rt-check-mark" aria-hidden="true">{s.done ? "✓" : i + 1}</span>
+            <span style={{ flex: 1 }}>
+              <button
+                type="button"
+                className="rt-check-link"
+                onClick={() => {
+                  if (s.href) navigate(s.href);
+                  else document.getElementById(s.id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+              >
+                {s.label}
+              </button>
+              {s.hint && !s.done && <span className="t-small muted" style={{ display: "block" }}>{s.hint}</span>}
+            </span>
+          </li>
+        ))}
+      </ol>
+      {!next && (
+        <p className="t-small" style={{ margin: "12px 0 0", color: "var(--success-ink)" }}>
+          WhatsApp is ready. Messages go to opted-in contacts only.
+        </p>
+      )}
+    </section>
   );
 }
 

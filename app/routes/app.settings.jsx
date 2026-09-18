@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useLoaderData, useFetcher, useLocation } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
@@ -9,6 +9,7 @@ import { canUseDomainSlot } from "../lib/email/domain-slots.server.js";
 import { featureState, requireFeature } from "../lib/billing/gate.server.js";
 import UpgradeNotice from "../components/billing/UpgradeNotice.jsx";
 import { addDomain, verifyOrCheckDomain, removeDomain } from "../lib/email/domain-actions.server.js";
+import ImageUpload from "../components/ui/ImageUpload.jsx";
 
 export const loader = async ({ request }) => {
   const ctx = await requireAccount(request);
@@ -176,7 +177,6 @@ export default function Settings() {
   const fetcher = useFetcher();
   const location = useLocation();
   const saving = fetcher.state !== "idle";
-  const saved = fetcher.data?.saved;
 
   const domainVerified = !!settings.domainVerified;
   const verifiedDomain = settings.verifiedDomain || "";
@@ -200,6 +200,45 @@ export default function Settings() {
 
   function submitIntent(fields) {
     fetcher.submit(fields, { method: "post" });
+  }
+
+  // What the form started from, so the save bar appears only when something
+  // actually changed, and Discard can put it back.
+  const initial = useMemo(() => ({
+    senderName: settings.senderName || "",
+    replyTo: settings.replyTo || "",
+    websiteUrl: settings.websiteUrl || "",
+    senderMailbox: (settings.senderEmail || "").split("@")[0] || "hello",
+    brandColor: settings.brandColor || "#000000",
+    logoUrl: settings.logoUrl || "",
+    quietHoursStart: String(settings.quietHoursStart ?? "22"),
+    quietHoursEnd: String(settings.quietHoursEnd ?? "8"),
+    storeTimezone: settings.storeTimezone || "UTC",
+  }), [settings]);
+  const current = { senderName, replyTo, websiteUrl, senderMailbox, brandColor, logoUrl, quietHoursStart, quietHoursEnd, storeTimezone };
+  // After a save, adopt what the server stored. It trims and lower-cases
+  // (the mailbox, for one), and without this the save bar would stay up over
+  // a form that is in fact saved. Only on a save: other actions on this page
+  // (domain setup) also reload the settings and must not wipe unsaved edits.
+  const lastSaved = fetcher.state === "idle" && fetcher.data?.saved ? fetcher.data : null;
+  const adoptedSave = useRef(null);
+  useEffect(() => {
+    if (!lastSaved || adoptedSave.current === lastSaved) return;
+    adoptedSave.current = lastSaved;
+    discard();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastSaved]);
+  const dirty = Object.keys(initial).some((k) => initial[k] !== current[k]);
+  function discard() {
+    setSenderName(initial.senderName);
+    setReplyTo(initial.replyTo);
+    setWebsiteUrl(initial.websiteUrl);
+    setSenderMailbox(initial.senderMailbox);
+    setBrandColor(initial.brandColor);
+    setLogoUrl(initial.logoUrl);
+    setQuietHoursStart(initial.quietHoursStart);
+    setQuietHoursEnd(initial.quietHoursEnd);
+    setStoreTimezone(initial.storeTimezone);
   }
 
   function saveSettings() {
@@ -226,14 +265,22 @@ export default function Settings() {
         <div>
           <div className="t-micro muted" style={{ marginBottom: 8 }}>Retainify</div>
           <h1 className="t-display-2" style={{ margin: 0 }}>Settings</h1>
+          <p className="muted" style={{ margin: "8px 0 0", maxWidth: 560 }}>
+            How your emails are sent and how they look. Each section explains what it changes.
+          </p>
+        </div>
+        <div className="rt-page-actions">
+          <Link className="btn btn-secondary" to={`/app/setup${location.search}`}>Open setup guide</Link>
         </div>
       </header>
 
-      <div style={{ maxWidth: 720, display: "flex", flexDirection: "column", gap: 16 }}>
+      <div className="rt-settings">
 
         {/* Sender details */}
-        <section className="rt-form-section">
-          <div className="t-micro muted" style={{ marginBottom: 16 }}>Sender details</div>
+        <SettingsSection
+          title="Sender"
+          description="Who your emails come from, and where replies and plain links go."
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div>
               <label className="field-label">Sender name</label>
@@ -319,14 +366,14 @@ export default function Settings() {
               )}
             </div>
           </div>
-        </section>
+        </SettingsSection>
 
         {/* Sending domain (custom, Mode A) */}
-        <section className="rt-form-section">
-          <div className="t-micro muted" style={{ marginBottom: 4 }}>Sending domain</div>
-          <div className="t-small muted" style={{ marginBottom: 16 }}>
-            Send emails from your own domain instead of the shared address.
-          </div>
+        <SettingsSection
+          title="Sending domain"
+          description="Send from your own domain instead of our shared address. Better deliverability, your brand in the inbox."
+          note="Saved separately — changes here take effect straight away."
+        >
 
           {domainError && (
             <div className="t-small" style={{ color: "var(--danger, #c0392b)", marginBottom: 12 }}>
@@ -415,11 +462,13 @@ export default function Settings() {
               Custom sending domains are currently full. Please contact us to request one.
             </div>
           )}
-        </section>
+        </SettingsSection>
 
         {/* Brand */}
-        <section className="rt-form-section">
-          <div className="t-micro muted" style={{ marginBottom: 16 }}>Brand</div>
+        <SettingsSection
+          title="Brand"
+          description="Your colour and logo, applied to buttons, accents and the top of every email."
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div>
               <label className="field-label">Brand color</label>
@@ -440,25 +489,22 @@ export default function Settings() {
               </div>
               <div className="field-help">Hex color used for buttons and accents in emails.</div>
             </div>
-            <div>
-              <label className="field-label">Logo URL</label>
-              <input
-                className="input"
-                value={logoUrl}
-                onChange={(e) => setLogoUrl(e.target.value)}
-                placeholder="https://yourstore.com/logo.png"
-              />
-              <div className="field-help">Shown at the top of every recovery email.</div>
-            </div>
+            <ImageUpload
+              label="Logo"
+              value={logoUrl}
+              onChange={setLogoUrl}
+              source="brand-logo"
+              disabled={!allowed}
+              help="Shown at the top of every email. A transparent PNG or SVG, at least 300px wide, looks best."
+            />
           </div>
-        </section>
+        </SettingsSection>
 
         {/* Quiet hours */}
-        <section className="rt-form-section">
-          <div className="t-micro muted" style={{ marginBottom: 4 }}>Quiet hours</div>
-          <div className="t-small muted" style={{ marginBottom: 16 }}>
-            Emails will not be sent during this window.
-          </div>
+        <SettingsSection
+          title="Quiet hours"
+          description="Nothing is sent inside this window. Messages due then wait and go out when it ends."
+        >
           <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
             <div>
               <label className="field-label">Start (don&apos;t send after)</label>
@@ -505,41 +551,51 @@ export default function Settings() {
               </div>
             </div>
           </div>
-        </section>
+        </SettingsSection>
 
-        <section className="rt-form-section">
-          <div className="t-micro muted" style={{ marginBottom: 4 }}>Setup</div>
-          <div className="t-small muted" style={{ marginBottom: 12 }}>
-            Revisit the guided setup steps at any time.
+        {!allowed && (
+          <p className="muted" style={{ margin: 0 }}>
+            Only owners and admins can change these settings.
+          </p>
+        )}
+
+        {/* Appears only with unsaved changes, and stays in reach however far
+            down the page they are. The old single Save button sat below every
+            section, a long scroll away from the field just edited. */}
+        {dirty && allowed && (
+          <div className="rt-savebar" role="region" aria-label="Unsaved changes">
+            <span className="t-small">
+              {fieldError ? fieldError : "You have unsaved changes."}
+            </span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={discard} disabled={saving}>Discard</button>
+              <button className="btn btn-accent btn-sm" onClick={saveSettings} disabled={saving}>
+                {saving ? "Saving…" : "Save changes"}
+              </button>
+            </div>
           </div>
-          <Link className="btn btn-secondary" to={`/app/setup${location.search}`}>
-            Open setup guide
-          </Link>
-        </section>
-
-        <div
-          style={{
-            display: "flex",
-            justifyContent: allowed ? "flex-end" : "space-between",
-            alignItems: "center",
-            gap: 12,
-          }}
-        >
-          {!allowed && (
-            <p className="muted" style={{ margin: 0 }}>
-              Only owners and admins can change these settings.
-            </p>
-          )}
-          <button
-            className="btn btn-primary"
-            onClick={saveSettings}
-            disabled={saving || !allowed}
-          >
-            {saved && !saving ? "Saved" : "Save settings"}
-          </button>
-        </div>
+        )}
       </div>
     </div>
+  );
+}
+
+/**
+ * One settings group: what it is and why it matters on the left, the fields
+ * on the right. The page used to be one column of identical cards labelled in
+ * 11px capitals, so nothing told a merchant which part mattered or what each
+ * one changed.
+ */
+function SettingsSection({ title, description, note, children }) {
+  return (
+    <section className="rt-settings-row">
+      <div className="rt-settings-intro">
+        <h2 className="t-h3" style={{ margin: 0 }}>{title}</h2>
+        {description && <p className="t-small muted" style={{ margin: "6px 0 0" }}>{description}</p>}
+        {note && <p className="t-small" style={{ margin: "8px 0 0", color: "var(--ink-3)" }}>{note}</p>}
+      </div>
+      <div className="rt-form-section">{children}</div>
+    </section>
   );
 }
 

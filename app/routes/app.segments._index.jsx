@@ -15,13 +15,15 @@ import {
   softDeleteSegment,
 } from "../lib/segments/segments.server.js";
 import { listSystemSegmentsWithCounts } from "../lib/segments/systemSegments.server.js";
-import { templatesFor } from "../lib/segments/fields.server.js";
+import { segmentTemplatesWithCounts } from "../lib/segments/templateRecommendations.server.js";
+import { listProperties } from "../lib/contacts/properties.server.js";
+import SegmentTemplateCard from "../components/segments/SegmentTemplateCard.jsx";
 import prisma from "../db.server.js";
 
 export const loader = async ({ request }) => {
   const ctx = await requireAccount(request);
   const { shop } = ctx;
-  const [segments, systemSegments, publishedSegmentFlows] = await Promise.all([
+  const [segments, systemSegments, publishedSegmentFlows, propertyDefs] = await Promise.all([
     listSegments(shop),
     listSystemSegmentsWithCounts(shop),
     prisma.journey.findMany({
@@ -34,7 +36,13 @@ export const loader = async ({ request }) => {
       },
       select: { id: true, name: true, triggerSegmentKey: true },
     }),
+    listProperties(shop),
   ]);
+  const templates = await segmentTemplatesWithCounts(shop, {
+    isShopify: ctx.isShopify,
+    propertyDefs,
+    savedNames: segments.map((s) => s.name),
+  });
   // Real size history for the row sparklines. SegmentSnapshot is written daily
   // by segmentSnapshotWorker and pruned to 30 days, so this is a bounded read.
   // The list previously rendered fakeSpark() — a synthetic curve derived from
@@ -67,7 +75,7 @@ export const loader = async ({ request }) => {
   return Response.json({
     segments,
     systemSegments,
-    templates: templatesFor(ctx.isShopify),
+    templates,
     flowsBySegment,
     snapshotsBySegment,
     totals: {
@@ -116,6 +124,8 @@ export default function SegmentsListPage() {
   const [confirmDelete, setConfirmDelete] = useState(null);
   const [kindFilter, setKindFilter] = useState("all");
   const [q, setQ] = useState("");
+  const [showAllTemplates, setShowAllTemplates] = useState(false);
+  const TEMPLATE_PREVIEW = 8;
   // Show skeleton rows on a real navigation load (route is being entered or
   // re-validated). useFetcher's state is intentionally not used here — we
   // don't want kebab actions to flash the skeleton.
@@ -193,35 +203,25 @@ export default function SegmentsListPage() {
               <div>
                 <h2>Start from a <em>template</em></h2>
                 <div className="rt-tpl-head-sub">
-                  Common groupings, pre-wired. Tweak the rules after.
+                  Common groupings, pre-wired, with how many contacts each would hold today.
+                  Tweak the rules after.
                 </div>
               </div>
             </div>
             <div className="rt-tpl-cards">
-              {templates.map((t) => (
-                <button
-                  type="button"
-                  key={t.id}
-                  className="rt-tpl-card"
-                  onClick={() => navigate(`/app/segments/new?template=${t.id}`)}
-                >
-                  <div className="rt-tpl-card-top">
-                    <span
-                      className="rt-tpl-icon"
-                      style={{ background: t.accent, color: t.accentInk }}
-                    >
-                      <Icons.Sparkles size={12} />
-                    </span>
-                    <span className="rt-tpl-card-name">{t.name}</span>
-                  </div>
-                  <div className="rt-tpl-card-desc">{t.description}</div>
-                  <div className="rt-tpl-card-foot">
-                    <strong>Use template</strong>
-                    <Icons.Arrow size={10} />
-                  </div>
-                </button>
+              {(showAllTemplates ? templates : templates.slice(0, TEMPLATE_PREVIEW)).map((t) => (
+                <SegmentTemplateCard key={t.id} template={t} />
               ))}
             </div>
+            {templates.length > TEMPLATE_PREVIEW && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm rt-tpl-more"
+                onClick={() => setShowAllTemplates((v) => !v)}
+              >
+                {showAllTemplates ? "Show fewer templates" : `Show all ${templates.length} templates`}
+              </button>
+            )}
           </div>
 
           {/* Quick views rail — system segments */}

@@ -3,6 +3,7 @@
 // Edits the email node's blocks/brand; on save the flow builder's inline preview updates.
 
 import { useState, useRef, useEffect, useMemo } from "react";
+import { useImageUpload } from "./ui/ImageUpload.jsx";
 import { useFetcher } from "react-router";
 import Icons from "./ui/Icons.jsx";
 import EmailTemplateGallery from "./email-templates/EmailTemplateGallery.jsx";
@@ -448,43 +449,8 @@ function DataTagsHint() {
   );
 }
 
-/**
- * Shared upload plumbing for the image block and the brand-kit logo. Both post
- * to /app/api/upload, which stores the file in Shopify Files and returns a CDN
- * URL — the logo button previously had no handler and did nothing at all.
- */
-function useImageUpload({ alt = "", source = "library", onUploaded }) {
-  const fileInputRef = useRef(null);
-  const [uploading, setUploading] = useState(false);
-  const [error, setError] = useState("");
-
-  async function uploadFile(file) {
-    if (!file) return;
-    setError("");
-    if (file.size > 4 * 1024 * 1024) { setError("File is larger than 4MB."); return; }
-    if (!/^image\/(jpeg|png|gif|webp|svg\+xml)$/.test(file.type)) {
-      setError("Use JPG, PNG, GIF, WebP or SVG.");
-      return;
-    }
-    setUploading(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      fd.append("alt", alt);
-      fd.append("source", source);
-      const resp = await fetch("/app/api/upload", { method: "POST", body: fd });
-      const json = await resp.json();
-      if (!resp.ok || !json.ok) throw new Error(json.message || json.error || "Upload failed");
-      onUploaded(json);
-    } catch (err) {
-      setError(err.message || "Upload failed");
-    } finally {
-      setUploading(false);
-    }
-  }
-
-  return { fileInputRef, uploading, error, setError, uploadFile };
-}
+// Upload plumbing for the image block and the brand-kit logo lives in
+// components/ui/ImageUpload.jsx, shared with Settings and the push icon.
 
 // ── Brand-kit logo uploader ───────────────────────────────────────────────
 function LogoUploader({ brand, onBrand }) {

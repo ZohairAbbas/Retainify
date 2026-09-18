@@ -251,6 +251,38 @@ function FlowPanel({ ctx, onComplete }) {
 }
 
 /**
+ * WhatsApp is set up on its own page (connect through Meta, get a template
+ * approved, switch the channel on), so this panel explains what it gets you
+ * and sends you there — the WhatsApp page links back to the setup guide.
+ */
+function WhatsappPanel({ ctx, onSkip }) {
+  const navigate = useNavigate();
+  return (
+    <div className="ob-panel-pad">
+      <p className="ob-panel-lede">
+        Add WhatsApp steps to your flows — cart reminders, order updates and win-backs
+        that land where customers actually read. You&rsquo;ll connect a WhatsApp Business
+        account through Meta, then send yourself a test.
+      </p>
+      <ul className="ob-panel-lede" style={{ margin: "0 0 16px", paddingLeft: 20 }}>
+        <li>Connect your WhatsApp Business account (about 2 minutes)</li>
+        <li>Create or sync a message template — Meta approves it, usually within the hour</li>
+        <li>Switch the channel on and add a WhatsApp step to any flow</li>
+      </ul>
+      <div className="ob-panel-actions">
+        <button
+          className="ob-btn ob-btn-primary"
+          onClick={() => navigate(`/app/whatsapp?return=${encodeURIComponent("/app/setup")}${ctx.search ? "&" + ctx.search.slice(1) : ""}`)}
+        >
+          <Icons.Whatsapp size={14} /> Set up WhatsApp
+        </button>
+        {onSkip && <button className="ob-skip-btn" onClick={onSkip}>Not now</button>}
+      </div>
+    </div>
+  );
+}
+
+/**
  * The scheduling link comes from resolveCallUrl (lib/onboarding/tasks.js), which
  * returns "" rather than a "#" sentinel when there is no real link configured.
  *
@@ -385,6 +417,7 @@ const PANELS = {
   embed: EmbedPanel,
   popup: PopupPanel,
   flow: FlowPanel,
+  whatsapp: WhatsappPanel,
   call: CallPanel,
 };
 

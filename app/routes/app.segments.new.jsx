@@ -22,7 +22,7 @@ export const loader = async ({ request }) => {
 
   let initial = null;
   if (templateId) {
-    const tpl = templatesFor(ctx.isShopify).find((t) => t.id === templateId);
+    const tpl = templatesFor(ctx.isShopify, await listProperties(shop)).find((t) => t.id === templateId);
     if (tpl) {
       initial = { name: tpl.name, description: tpl.description, kind: "dynamic", filterTree: tpl.rules };
     }

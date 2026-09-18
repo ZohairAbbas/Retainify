@@ -1,5 +1,6 @@
 import { useNavigate } from "react-router";
 import Icons from "../ui/Icons.jsx";
+import SegmentTemplateCard from "./SegmentTemplateCard.jsx";
 
 export default function SegmentsEmpty({ templates }) {
   const navigate = useNavigate();
@@ -29,26 +30,7 @@ export default function SegmentsEmpty({ templates }) {
       </div>
 
       <div className="rt-sg-empty-cards">
-        {templates.slice(0, 3).map((t) => (
-          <button
-            type="button"
-            key={t.id}
-            className="rt-tpl-card"
-            onClick={() => navigate(`/app/segments/new?template=${t.id}`)}
-          >
-            <div className="rt-tpl-card-top">
-              <span className="rt-tpl-icon" style={{ background: t.accent, color: t.accentInk }}>
-                <Icons.Sparkles size={14} />
-              </span>
-              <span className="rt-tpl-card-name">{t.name}</span>
-            </div>
-            <div className="rt-tpl-card-desc">{t.description}</div>
-            <div className="rt-tpl-card-foot">
-              <strong>Use template</strong>
-              <Icons.Arrow size={10} />
-            </div>
-          </button>
-        ))}
+        {templates.slice(0, 6).map((t) => <SegmentTemplateCard key={t.id} template={t} iconSize={14} />)}
       </div>
     </div>
   );

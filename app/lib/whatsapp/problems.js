@@ -35,5 +35,7 @@ export function whatsappSetupUrl(returnTo) {
 /** Only in-app flow pages are valid return targets — never an arbitrary URL. */
 export function safeReturnPath(raw) {
   const v = String(raw || "");
-  return /^\/app\/flows(\/[A-Za-z0-9_-]+)?$/.test(v) ? v : "";
+  // Flow pages, the flows list and the setup guide — the places that send
+  // someone to WhatsApp setup.
+  return /^\/app\/(flows(\/[A-Za-z0-9_-]+)?|setup)$/.test(v) ? v : "";
 }

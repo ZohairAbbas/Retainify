@@ -1,4 +1,5 @@
 import { useState } from "react";
+import ImageUpload from "../components/ui/ImageUpload.jsx";
 import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
@@ -71,6 +72,26 @@ export const action = async ({ request }) => {
   // shoppers. Web push has no address to type into (a push can only reach a
   // browser that granted permission), so the honest equivalent of "email it to
   // myself" is choosing the target explicitly.
+  // The workspace's default notification icon. Saved as soon as it changes —
+  // an upload is a deliberate act, and a separate Save would be one more
+  // thing to forget.
+  if (intent === "save-push-icon") {
+    const pushIconUrl = String(fd.get("pushIconUrl") || "").trim().slice(0, 2000);
+    // Absolute https only: the notification is drawn by the browser on the
+    // shopper's device, so a relative path would resolve against the
+    // storefront, and http is blocked as mixed content. Uploads are always
+    // absolute https.
+    if (pushIconUrl && !/^https:\/\/[^/\s]+/.test(pushIconUrl)) {
+      return { ok: false, error: "Upload the icon, or use a full https:// image URL." };
+    }
+    await prisma.shopSettings.upsert({
+      where: { shop },
+      create: { shop, pushIconUrl },
+      update: { pushIconUrl },
+    });
+    return { ok: true, iconSaved: true };
+  }
+
   if (intent === "send-test") {
     const title = String(fd.get("title") || "Test notification");
     const body = String(fd.get("body") || "This is a test push from Retainify.");
@@ -88,9 +109,14 @@ export const action = async ({ request }) => {
       return { ok: false, error: "That device is no longer subscribed. Pick another." };
     }
 
+    const iconSettings = await prisma.shopSettings.findUnique({
+      where: { shop },
+      select: { pushIconUrl: true, logoUrl: true },
+    });
     const result = await sendPushNotification(
       { endpoint: sub.endpoint, p256dh: sub.p256dh, auth: sub.auth },
-      { title, body, url },
+      // The test shows the same icon a real send would.
+      { title, body, url, icon: [iconSettings?.pushIconUrl, iconSettings?.logoUrl].find((u) => /^https:\/\/\S+$/.test(String(u || "").trim())) },
     );
 
     if (result.gone) {
@@ -114,6 +140,13 @@ function PushPageInner() {
   const { settings, subCount, subscribers = [], storeDomain } = useLoaderData();
   const toggleFetcher = useFetcher();
   const testFetcher = useFetcher();
+  const iconFetcher = useFetcher();
+  const [iconUrl, setIconUrl] = useState(settings.pushIconUrl || "");
+  function saveIcon(url) {
+    setIconUrl(url);
+    iconFetcher.submit({ intent: "save-push-icon", pushIconUrl: url }, { method: "post" });
+  }
+  const effectiveIcon = iconUrl || settings.logoUrl || "";
 
   const pushEnabled = settings.pushEnabled ?? false;
   const togglePending = toggleFetcher.state !== "idle";
@@ -173,6 +206,29 @@ function PushPageInner() {
                 <span className="rt-toggle-switch" />
               </label>
             </div>
+          </section>
+
+          {/* Notification icon */}
+          <section className="rt-form-section">
+            <div className="t-micro muted" style={{ marginBottom: 4 }}>Notification icon</div>
+            <div className="t-small muted" style={{ marginBottom: 14 }}>
+              Shown beside every push notification. Each push step can override it.
+            </div>
+            <ImageUpload
+              value={iconUrl}
+              onChange={saveIcon}
+              shape="square"
+              source="push-icon"
+              help={
+                iconFetcher.data?.error
+                  ? iconFetcher.data.error
+                  : iconUrl
+                    ? (iconFetcher.state !== "idle" ? "Saving…" : "Saved. A square image, 192×192 or larger, looks sharpest.")
+                    : settings.logoUrl
+                      ? "Not set — your brand logo from Settings is used. A square icon, 192×192 or larger, looks sharper."
+                      : "Not set — browsers will show a generic icon. Upload a square image, 192×192 or larger."
+              }
+            />
           </section>
 
           {/* Subscribers */}
@@ -321,7 +377,7 @@ function PushPageInner() {
             alignItems: "flex-start",
             justifyContent: "center",
           }}>
-            <NotificationPreview title={title} body={body} url={url} storeDomain={storeDomain} />
+            <NotificationPreview title={title} body={body} url={url} storeDomain={storeDomain} iconUrl={effectiveIcon} />
           </div>
         </div>
       </div>
@@ -338,7 +394,7 @@ function safeHost(url) {
   }
 }
 
-function NotificationPreview({ title, body, url, storeDomain }) {
+function NotificationPreview({ title, body, url, storeDomain, iconUrl = "" }) {
   return (
     <div
       style={{
@@ -369,7 +425,9 @@ function NotificationPreview({ title, body, url, storeDomain }) {
           flexShrink: 0,
         }}
       >
-        {Icons.Bell && <Icons.Bell size={20} />}
+        {iconUrl
+          ? <img src={iconUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 8 }} />
+          : Icons.Bell && <Icons.Bell size={20} />}
       </div>
 
       {/* Content */}

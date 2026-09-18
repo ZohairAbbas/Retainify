@@ -173,6 +173,10 @@ model ShopSettings {
   // derived from real data at read time; manual tasks (store/embed/call) live here.
   onboardingProgress                 Json?
   pushEnabled                        Boolean   @default(false)
+  // Default icon for every push notification — a step's own icon wins, and
+  // the brand logo, then the store favicon, are the fallbacks after it. Push
+  // icons are shown small and square, so a wide logo is a poor default.
+  pushIconUrl                        String    @default("")
   // WhatsApp channel (Meta Cloud API). Off by default; flipped on per shop
   // once the merchant connects a WABA via Embedded Signup and approval lands.
   whatsappEnabled                    Boolean   @default(false)

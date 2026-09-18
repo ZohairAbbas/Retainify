@@ -68,33 +68,79 @@ function UsageMeter({ label, used, limit }) {
   const unlimited = isUnlimited(limit);
   const pct = unlimited ? 0 : Math.min(100, Math.round((used / limit) * 100));
   const over = !unlimited && used > limit;
+  const near = !unlimited && !over && pct >= 80;
+  const tone = over ? "var(--danger-ink)" : near ? "var(--warn-ink)" : "var(--brand-700)";
 
   return (
     <div className="rt-stat">
-      <div className="t-micro muted">{label}</div>
-      <div className="t-display-2 t-mono" style={{ lineHeight: 1, margin: 0 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+        <div className="t-micro muted">{label}</div>
+        {!unlimited && (
+          <span className="t-small tabular" style={{ color: over || near ? tone : "var(--ink-3)", fontWeight: over || near ? 600 : 400 }}>
+            {over ? "Over limit" : `${pct}% used`}
+          </span>
+        )}
+      </div>
+      <div className="t-display-2 tabular" style={{ lineHeight: 1, margin: 0 }}>
         {used.toLocaleString()}
         <span className="rt-stat-unit">/ {formatLimit(limit)}</span>
       </div>
       {!unlimited && (
-        <div
-          style={{
-            height: 4,
-            background: "var(--hair-1)",
-            borderRadius: 2,
-            overflow: "hidden",
-            marginTop: 8,
-          }}
-        >
-          <div
-            style={{
-              width: `${pct}%`,
-              height: "100%",
-              background: over ? "var(--danger, #b42318)" : "var(--brand-700)",
-            }}
-          />
+        <div style={{ height: 6, background: "var(--paper-2)", borderRadius: 3, overflow: "hidden", marginTop: 8 }}>
+          <div style={{ width: `${Math.max(pct, used > 0 ? 2 : 0)}%`, height: "100%", background: tone }} />
         </div>
       )}
+    </div>
+  );
+}
+
+/** The price line: "No charge" rather than a second "Free" under "Free". */
+function priceLabel(p) {
+  return p.price === 0 ? "No charge" : `$${p.price.toFixed(2)} / month`;
+}
+
+/**
+ * One plan as a card: what it costs, what you get, and what to do about it.
+ * The old page listed plans only as table columns, with a single contact line
+ * at the very bottom — there was no "choose this plan" anywhere near a plan.
+ */
+function PlanCard({ plan, current, provider, planUrl, contactEmail, rank, currentRank }) {
+  const highlights = [
+    `${formatLimit(plan.limits.contacts)} contacts`,
+    `${formatLimit(plan.limits.emails)} emails / month`,
+    `${formatLimit(plan.limits.flows)} flows · ${formatLimit(plan.limits.segments)} segments`,
+    ...(plan.features.includes("whatsapp") ? ["WhatsApp"] : []),
+    ...(plan.features.includes("custom_domain") ? ["Your own sending domain"] : []),
+    ...(plan.features.includes("no_branding") ? ["No Retainify branding"] : []),
+  ];
+  const direction = rank > currentRank ? "Upgrade" : "Switch";
+  return (
+    <div className={`rt-plan-card${current ? " rt-plan-current" : ""}`}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+        <div className="t-h3">{plan.name}</div>
+        {current && <span className="pill active">Current plan</span>}
+      </div>
+      <div className="t-display-2 tabular" style={{ fontSize: 30, margin: "8px 0 14px" }}>{priceLabel(plan)}</div>
+      <ul className="rt-plan-list">
+        {highlights.map((h) => <li key={h}>{h}</li>)}
+      </ul>
+      <div style={{ marginTop: "auto", paddingTop: 16 }}>
+        {current ? (
+          <button className="btn btn-secondary" style={{ width: "100%" }} disabled>Your current plan</button>
+        ) : provider === "shopify" ? (
+          <a className="btn btn-primary" style={{ width: "100%" }} href={planUrl} target="_top" rel="noopener noreferrer">
+            {direction} to {plan.name}
+          </a>
+        ) : contactEmail ? (
+          <a
+            className="btn btn-primary"
+            style={{ width: "100%" }}
+            href={`mailto:${contactEmail}?subject=${encodeURIComponent(`Switch Retainify to the ${plan.name} plan`)}`}
+          >
+            {direction} to {plan.name}
+          </a>
+        ) : null}
+      </div>
     </div>
   );
 }
@@ -223,8 +269,23 @@ function PlansPageInner() {
         </div>
       )}
 
+      <div className="rt-plan-grid">
+        {plans.map((p, i) => (
+          <PlanCard
+            key={p.key}
+            plan={p}
+            current={p.key === planKey}
+            provider={provider}
+            planUrl={planUrl}
+            contactEmail={contactEmail}
+            rank={i}
+            currentRank={Math.max(0, plans.findIndex((x) => x.key === planKey))}
+          />
+        ))}
+      </div>
+
       <section className="rt-form-section">
-        <div className="t-micro muted" style={{ marginBottom: 16 }}>Compare plans</div>
+        <h2 className="t-h3" style={{ margin: "0 0 16px" }}>Compare every feature</h2>
 
         <div style={{ overflowX: "auto" }}>
           <table
@@ -241,19 +302,13 @@ function PlansPageInner() {
                       key={p.key}
                       style={{
                         textAlign: "left",
-                        padding: "8px 12px",
-                        borderBottom: "1px solid var(--hair-1)",
+                        padding: "10px 12px",
+                        borderBottom: "1px solid var(--hair-2)",
+                        background: current ? "var(--brand-50)" : undefined,
                       }}
                     >
                       <div className="t-body" style={{ fontWeight: 600 }}>{p.name}</div>
-                      <div className="t-small muted">
-                        {p.price === 0 ? "Free" : `$${p.price.toFixed(2)}/mo`}
-                      </div>
-                      {current && (
-                        <span className="pill" style={{ marginTop: 6, display: "inline-block" }}>
-                          Current
-                        </span>
-                      )}
+                      <div className="t-small muted">{priceLabel(p)}</div>
                     </th>
                   );
                 })}
@@ -271,21 +326,26 @@ function PlansPageInner() {
                   >
                     {row.label}
                     {row.note && (
-                      <div className="t-micro muted" style={{ marginTop: 2 }}>{row.note}</div>
+                      <div className="t-small muted" style={{ marginTop: 2 }}>{row.note}</div>
                     )}
                   </td>
-                  {plans.map((p) => (
-                    <td
-                      key={p.key}
-                      style={{
-                        padding: "10px 12px",
-                        borderBottom: "1px solid var(--hair-1)",
-                        color: "var(--ink-2)",
-                      }}
-                    >
-                      {cellFor(p, row)}
-                    </td>
-                  ))}
+                  {plans.map((p) => {
+                    const v = cellFor(p, row);
+                    return (
+                      <td
+                        key={p.key}
+                        style={{
+                          padding: "10px 12px",
+                          borderBottom: "1px solid var(--hair-1)",
+                          color: v === "—" ? "var(--ink-4)" : v === "✓" ? "var(--brand-700)" : "var(--ink-1)",
+                          fontWeight: v === "✓" ? 700 : 400,
+                          background: p.key === planKey ? "var(--brand-50)" : undefined,
+                        }}
+                      >
+                        {v === "—" ? <span aria-label="Not included">—</span> : v === "✓" ? <span aria-label="Included">✓</span> : v}
+                      </td>
+                    );
+                  })}
                 </tr>
               ))}
             </tbody>

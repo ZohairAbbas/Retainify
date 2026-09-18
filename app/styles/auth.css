@@ -434,7 +434,7 @@
 }
 .rt-member-row:last-child { border-bottom: none; }
 .rt-member-name  { font-size: var(--fs-body); color: var(--ink-1); }
-.rt-member-email { font-size: var(--fs-micro); color: var(--ink-4); }
+.rt-member-email { font-size: var(--fs-small); color: var(--ink-3); }
 
 /* ── Public landing page ──────────────────────────────────────────────────
    Two audiences arrive here and they want different things: a Shopify merchant

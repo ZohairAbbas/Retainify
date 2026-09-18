@@ -3388,3 +3388,71 @@ a.rt-bulk-btn:hover { color: var(--on-brand); }
 .rt-trow-link { color: inherit; }
 .rt-trow-link:hover .rt-trow-chevron, .rt-trow-link:focus-visible .rt-trow-chevron { color: var(--brand-700); }
 .rt-trow-chevron { display: flex; justify-content: flex-end; color: var(--ink-4); }
+
+/* ── Settings layout ─────────────────────────────────────────────────────
+   Title and explanation on the left, fields on the right: the pattern every
+   settings page people know uses, because it lets you scan the left column
+   to find the section and only read fields where you stop. */
+.rt-settings { display: flex; flex-direction: column; gap: 28px; max-width: 1040px; padding-bottom: 72px; }
+.rt-settings-row { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 32px; align-items: start; }
+.rt-settings-row + .rt-settings-row { border-top: 1px solid var(--hair-1); padding-top: 28px; }
+.rt-settings-intro { padding-top: 4px; }
+@media (max-width: 900px) {
+  .rt-settings-row { grid-template-columns: 1fr; gap: 12px; }
+}
+
+/* Sticky save bar: visible only with unsaved changes. */
+.rt-savebar {
+  position: sticky; bottom: 16px; z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 16px;
+  padding: 12px 16px; border-radius: var(--r-4);
+  background: var(--ink-1); color: var(--paper-1); box-shadow: var(--sh-4);
+}
+.rt-savebar .btn-ghost { color: var(--paper-1); }
+.rt-savebar .btn-ghost:hover { background: rgba(255,255,255,0.1); color: var(--paper-3); }
+
+/* ── Plans ──────────────────────────────────────────────────────────────── */
+.rt-plan-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; margin-bottom: 28px; }
+.rt-plan-card {
+  display: flex; flex-direction: column;
+  background: var(--paper-3); border: 1px solid var(--hair-1); border-radius: var(--r-4);
+  box-shadow: var(--sh-1); padding: 20px;
+}
+.rt-plan-current { border-color: var(--brand-700); box-shadow: 0 0 0 1px var(--brand-700), var(--sh-2); }
+.rt-plan-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; font-size: 13px; color: var(--ink-2); }
+.rt-plan-list li { display: flex; gap: 8px; }
+.rt-plan-list li::before { content: "✓"; color: var(--brand-700); font-weight: 700; }
+
+/* ── Team ───────────────────────────────────────────────────────────────── */
+.rt-invite-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.rt-invite-row .input { flex: 1 1 260px; width: auto; min-width: 0; }
+.rt-invite-row .select { width: 160px; flex: 0 0 auto; }
+
+/* ── Setup checklists (WhatsApp page) ──────────────────────────────────── */
+.rt-checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.rt-checklist li { display: flex; gap: 10px; align-items: flex-start; font-size: 13px; color: var(--ink-2); }
+.rt-check-mark {
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700; border: 1px solid var(--hair-2); color: var(--ink-3); background: var(--paper-3);
+}
+.rt-check-done .rt-check-mark { background: var(--brand-700); border-color: var(--brand-700); color: var(--on-brand); }
+.rt-check-done .rt-check-link { color: var(--ink-3); text-decoration: line-through; }
+.rt-check-next .rt-check-mark { border-color: var(--brand-700); color: var(--brand-700); }
+.rt-check-next .rt-check-link { font-weight: 600; color: var(--ink-1); }
+.rt-check-link { background: none; border: 0; padding: 0; text-align: left; font: inherit; color: var(--link); cursor: pointer; }
+.rt-check-link:hover { text-decoration: underline; }
+
+/* ── Template gallery: recommended cards and channel icons ─────────────── */
+.rt-tmpl-card { position: relative; }
+.rt-tmpl-rec { border-color: var(--brand-700); }
+.rt-tmpl-rec-badge {
+  position: absolute; top: -9px; right: 12px;
+  background: var(--brand-700); color: var(--on-brand);
+  font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: var(--r-pill);
+}
+.rt-tmpl-channels { display: inline-flex; gap: 6px; color: var(--ink-3); }
+.rt-mini-whatsapp { background: var(--node-whatsapp-bg); color: var(--node-whatsapp-ink); }
+.rt-mini-push { background: var(--node-push-bg); color: var(--node-push-ink); }
+.rt-seq-whatsapp { background: var(--node-whatsapp-bg); color: var(--node-whatsapp-ink); font-size: 9px; font-weight: 700; }
+.rt-seq-push { background: var(--node-push-bg); font-size: 8px; }

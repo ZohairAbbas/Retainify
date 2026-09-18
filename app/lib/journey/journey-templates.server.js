@@ -5,112 +5,19 @@
  * by the Create Flow modal. Idempotent — re-running upserts on `key`.
  */
 import prisma from "../../db.server.js";
+import { FLOW_TEMPLATES } from "./template-library.js";
 
-const TEMPLATES = [
-  {
-    key: "welcome_series",
-    name: "Welcome Series",
-    description: "Turn new subscribers into first-time customers with a proven email series.",
-    trigger: "customer_created",
-    category: "welcome",
-    bestFor: [
-      "Introducing new subscribers to your brand",
-      "Converting subscribers to first-time customers",
-      "Establishing regular email touchpoints",
-    ],
-    definition: {
-      entryFrequency: "no_reentry",
-      exitCriteria: ["order_placed", "unsubscribed"],
-      steps: [
-        { nodeType: "email", emailName: "Welcome", subject: "Welcome to {store}!", previewText: "We're glad you're here.", templateStyle: "classic", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 48 },
-        { nodeType: "email", emailName: "What makes us different", subject: "Here's what makes us different", previewText: "", templateStyle: "classic", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 72 },
-        { nodeType: "email", emailName: "First order discount", subject: "Your first order — 10% off", previewText: "A welcome gift from us.", templateStyle: "bold", discountPct: 10, isEnabled: true },
-        { nodeType: "exit" },
-      ],
-    },
-  },
-  {
-    key: "abandoned_cart",
-    name: "Abandoned Cart",
-    description: "Prevent lost sales through targeted emails when a customer abandons their cart.",
-    trigger: "cart_abandoned",
-    category: "cart",
-    bestFor: [
-      "Recovering abandoned checkouts",
-      "Reminding shoppers what they left behind",
-      "Closing sales with a time-sensitive discount",
-    ],
-    definition: {
-      entryFrequency: "no_reentry",
-      exitCriteria: ["order_placed", "cart_recovered", "unsubscribed"],
-      steps: [
-        // Industry-standard delay before the first nudge. Without this, the
-        // email can land while the customer is still typing their shipping
-        // address — annoying for the customer and polluting "recovery"
-        // attribution with checkouts that would have completed anyway.
-        { nodeType: "delay", delayHours: 1 },
-        { nodeType: "email", emailName: "Reminder", subject: "You left something behind", previewText: "Pick up where you left off.", templateStyle: "classic", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 23 },
-        { nodeType: "email", emailName: "Follow-up", subject: "Still thinking it over?", previewText: "", templateStyle: "classic", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 48 },
-        { nodeType: "email", emailName: "Last chance", subject: "Last chance — 10% off", previewText: "Your code expires soon.", templateStyle: "bold", discountPct: 10, isEnabled: true },
-        { nodeType: "exit" },
-      ],
-    },
-  },
-  {
-    key: "post_purchase",
-    name: "Post-Purchase",
-    description: "Build loyalty after a purchase with thank-you, review, and replenishment emails.",
-    trigger: "order_placed",
-    category: "post_purchase",
-    bestFor: [
-      "Thanking customers after an order",
-      "Collecting reviews and feedback",
-      "Driving repeat purchases on consumables",
-    ],
-    definition: {
-      entryFrequency: "immediate",
-      exitCriteria: ["unsubscribed"],
-      steps: [
-        { nodeType: "email", emailName: "Thank you", subject: "Thank you for your order!", previewText: "", templateStyle: "classic", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 70 },
-        { nodeType: "email", emailName: "Review request", subject: "How's your order? Leave a review", previewText: "", templateStyle: "minimal", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 264 },
-        { nodeType: "email", emailName: "Replenish", subject: "Time to restock?", previewText: "Save 15% on your next order.", templateStyle: "bold", discountPct: 15, isEnabled: true },
-        { nodeType: "exit" },
-      ],
-    },
-  },
-  {
-    key: "winback",
-    name: "Customer Win-back",
-    description: "Re-engage customers who haven't purchased in a while and bring them back.",
-    trigger: "win_back",
-    category: "winback",
-    bestFor: [
-      "Re-engaging dormant customers",
-      "Driving repeat purchase",
-      "Cleaning your list of disengaged contacts",
-    ],
-    definition: {
-      entryFrequency: "delayed_2160",
-      exitCriteria: ["order_placed", "unsubscribed"],
-      steps: [
-        { nodeType: "email", emailName: "We miss you", subject: "We miss you!", previewText: "It's been a while.", templateStyle: "classic", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 72 },
-        { nodeType: "email", emailName: "Reminder", subject: "Still thinking about us?", previewText: "", templateStyle: "classic", discountPct: 0, isEnabled: true },
-        { nodeType: "delay", delayHours: 96 },
-        { nodeType: "email", emailName: "Offer", subject: "Come back — 15% off, just for you", previewText: "A welcome-back gift.", templateStyle: "bold", discountPct: 15, isEnabled: true },
-        { nodeType: "exit" },
-      ],
-    },
-  },
-];
+// The library lives in ./template-library.js, framework-free, so the Create
+// Flow modal shows exactly what gets built.
+const TEMPLATES = FLOW_TEMPLATES;
+
+// Seeding upserts every template; once per process is enough — it used to run
+// on every dashboard and flows page load.
+let seeded = false;
 
 export async function seedJourneyTemplates() {
+  if (seeded) return;
+  seeded = true;
   for (const t of TEMPLATES) {
     await prisma.journeyTemplate.upsert({
       where: { key: t.key },
@@ -135,23 +42,18 @@ export async function seedJourneyTemplates() {
   }
 }
 
+/** Every template, straight from the library (the DB copy is a mirror). */
 export async function getJourneyTemplates() {
-  const rows = await prisma.journeyTemplate.findMany({ orderBy: { name: "asc" } });
-  return rows.map((r) => ({
-    ...r,
-    bestFor: safeJson(r.bestFor, []),
-    definition: safeJson(r.definition, { steps: [] }),
-  }));
+  return TEMPLATES.map((t) => ({ ...t }));
 }
 
 export async function getJourneyTemplateByKey(key) {
+  const t = TEMPLATES.find((x) => x.key === key);
+  if (t) return { ...t };
+  // A key only the DB knows (a template retired from the library).
   const row = await prisma.journeyTemplate.findUnique({ where: { key } });
   if (!row) return null;
-  return {
-    ...row,
-    bestFor: safeJson(row.bestFor, []),
-    definition: safeJson(row.definition, { steps: [] }),
-  };
+  return { ...row, bestFor: safeJson(row.bestFor, []), definition: safeJson(row.definition, { steps: [] }) };
 }
 
 /**
@@ -166,6 +68,11 @@ export async function createJourneyFromTemplate(shop, templateKey, overrides = {
       shop,
       name: overrides.name || tpl.name,
       trigger: tpl.trigger,
+      // Segment and app-event templates carry what starts them. A segment
+      // template without a key is a draft that asks for its segment.
+      triggerSegmentKey: tpl.triggerSegmentKey || null,
+      triggerApp: tpl.triggerApp || null,
+      triggerEvent: tpl.triggerEvent || null,
       status: "draft",
       isActive: false,
       source: "flows",
@@ -189,6 +96,18 @@ export async function createJourneyFromTemplate(shop, templateKey, overrides = {
       });
     } else if (s.nodeType === "exit") {
       rows.push({ nodeType: "exit", delayHours: 0, positionY: pos++, stepNumber: pos });
+    } else if (s.nodeType === "whatsapp") {
+      // No template chosen: only the merchant's own Meta-approved templates
+      // can be sent, and the builder asks them to pick one.
+      rows.push({
+        nodeType: "whatsapp", delayHours: 0, positionY: pos++, stepNumber: pos,
+        emailName: s.emailName || "", isEnabled: s.isEnabled !== false,
+      });
+    } else if (s.nodeType === "push") {
+      rows.push({
+        nodeType: "push", delayHours: 0, positionY: pos++, stepNumber: pos,
+        pushTitle: s.pushTitle || "", pushBody: s.pushBody || "", isEnabled: s.isEnabled !== false,
+      });
     } else {
       rows.push({
         nodeType: "email",

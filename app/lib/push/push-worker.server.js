@@ -169,9 +169,15 @@ async function processPushJob(job) {
   const pushPayload = {
     title: step.pushTitle || "New message",
     body: step.pushBody || "",
-    // The inspector's help text promises "defaults to store favicon if empty".
-    // It previously sent undefined, so that was simply untrue.
-    icon: step.pushIconUrl || `https://${job.shop}/favicon.ico`,
+    // Step icon → workspace default push icon → brand logo → store favicon.
+    // The favicon was the only fallback, which for a direct workspace (whose
+    // "shop" is not a domain) was a URL that could never resolve.
+    // Only absolute https URLs count: anything else would resolve against the
+    // shopper's page or be blocked, and the browser then shows no icon at all
+    // rather than falling back — so skip it here and try the next one.
+    icon:
+      [step.pushIconUrl, settings.pushIconUrl, settings.logoUrl].find((u) => /^https:\/\/\S+$/.test(String(u || "").trim())) ||
+      (String(job.shop).includes(".") ? `https://${job.shop}/favicon.ico` : undefined),
     url: clickUrl,
     // Lets the service worker attribute a click back to this exact send.
     jobId: job.id,

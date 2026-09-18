@@ -24,6 +24,7 @@ import { emptyGroup } from "../components/segments/constants.js";
 import TriggerPicker from "../components/flows/TriggerPicker.jsx";
 import TagChip from "../components/contacts/TagChip.jsx";
 import TemplatePreview from "../components/whatsapp/TemplatePreview.jsx";
+import ImageUpload from "../components/ui/ImageUpload.jsx";
 import { whatsappReadiness } from "../lib/whatsapp/readiness.server.js";
 import { WHATSAPP_PROBLEMS, whatsappSetupUrl } from "../lib/whatsapp/problems.js";
 import {
@@ -2259,14 +2260,16 @@ function Inspector({ node, journey, sendingFromAddress, entryFrequency, setEntry
             maxLength={200}
           />
 
-          <label className="field-label" style={{ marginTop: 16 }}>Icon URL <span className="faint">(optional)</span></label>
-          <input
-            className="input"
-            value={node.pushIconUrl || ""}
-            onChange={(e) => onChange({ pushIconUrl: e.target.value })}
-            placeholder="https://..."
-          />
-          <div className="field-help">Defaults to store favicon if empty.</div>
+          <div style={{ marginTop: 16 }}>
+            <ImageUpload
+              label="Icon (optional)"
+              value={node.pushIconUrl || ""}
+              onChange={(url) => onChange({ pushIconUrl: url })}
+              shape="square"
+              source="push-icon"
+              help="Leave empty to use the default icon from the Push page, or your brand logo."
+            />
+          </div>
 
           <label className="field-label" style={{ marginTop: 16 }}>Click URL <span className="faint">(optional)</span></label>
           <input

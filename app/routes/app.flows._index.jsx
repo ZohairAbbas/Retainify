@@ -17,6 +17,12 @@ import { isInternalShop } from "../lib/internal/tenant.js";
 import { whatsappReadiness, flowsUsingWhatsapp } from "../lib/whatsapp/readiness.server.js";
 import { WHATSAPP_PROBLEMS } from "../lib/whatsapp/problems.js";
 import { requireQuota } from "../lib/billing/gate.server.js";
+import {
+  TEMPLATE_CATEGORIES,
+  recommendTemplates,
+  templateAvailable,
+  templateChannels,
+} from "../lib/journey/template-library.js";
 
 export const loader = async ({ request }) => {
   const ctx = await requireAccount(request);
@@ -83,10 +89,10 @@ export const loader = async ({ request }) => {
       // a dash, so an unmeasured flow doesn't claim to have earned nothing.
       revenue: revenueByFlow.get(j.id) || null,
     })),
-    // A direct workspace has no carts and no orders, so a template built on
-    // those triggers would enrol nobody. Filtered here rather than in the UI so
-    // the create-from-template action can't be posted for one either.
-    templates: templates.filter((t) => ctx.isShopify || !TRIGGER_CONFIG[t.trigger]?.commerce),
+    // Only templates this workspace can run (a direct workspace has no carts
+    // or orders; app-lifecycle templates are Growzar Internal's), each with
+    // the channels it sends on — and the best next ones, with the reason.
+    ...(await templateChoices(shop, ctx, templates, journeys)),
     // Published flows whose WhatsApp steps are being skipped right now because
     // the channel can't send. Empty when WhatsApp is fine or unused.
     whatsappAlert: await (async () => {
@@ -97,6 +103,55 @@ export const loader = async ({ request }) => {
     })(),
   };
 };
+
+/**
+ * The templates this workspace can use, marked with their channels, whether
+ * they need WhatsApp set up first, and which to recommend.
+ *
+ * Recommendations read what is actually true here: which triggers already
+ * have a flow (so we never suggest a second cart flow), whether WhatsApp can
+ * send, whether any browser has subscribed to push, and recent orders/carts
+ * for the reason text.
+ */
+async function templateChoices(shop, ctx, templates, journeys) {
+  const isInternal = isInternalShop(shop);
+  const available = templates.filter((t) => templateAvailable(t, { isShopify: ctx.isShopify, isInternal }));
+  const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [wa, pushSubscribers, orders, carts, contacts] = await Promise.all([
+    whatsappReadiness(shop),
+    ctx.isShopify ? prisma.pushSubscription.count({ where: { shop, isActive: true } }) : 0,
+    ctx.isShopify ? prisma.order.count({ where: { shop, processedAt: { gte: since } } }) : 0,
+    ctx.isShopify ? prisma.abandonedCart.count({ where: { shop, abandonedAt: { gte: since } } }) : 0,
+    prisma.contact.count({ where: { shop, deletedAt: null } }),
+  ]);
+  // Connected and switched on is enough to recommend a WhatsApp template:
+  // the merchant then picks (or creates) an approved template in the step.
+  const whatsappReady = wa.connected && wa.enabled && !wa.blockedReason;
+  const recommended = recommendTemplates(available, {
+    existing: journeys.map((j) => ({
+      trigger: j.trigger,
+      triggerApp: j.triggerApp,
+      triggerEvent: j.triggerEvent,
+      triggerSegmentKey: j.triggerSegmentKey,
+    })),
+    whatsappReady,
+    pushSubscribers,
+    orders,
+    carts,
+    contacts,
+  });
+  const recKeys = new Map(recommended.map((r) => [r.key, r.reason]));
+  return {
+    templates: available.map((t) => ({
+      ...t,
+      channels: templateChannels(t),
+      needsWhatsappSetup: (t.requires || []).includes("whatsapp") && !whatsappReady,
+      recommendedReason: recKeys.get(t.key) || null,
+    })),
+    recommendedKeys: recommended.map((r) => r.key),
+    showPushFilter: ctx.isShopify,
+  };
+}
 
 export const action = async ({ request }) => {
   const ctx = await requireAccount(request);
@@ -124,13 +179,12 @@ export const action = async ({ request }) => {
     const key = String(fd.get("templateKey") || "");
     if (!key) return { ok: false, error: "Missing template key" };
 
-    // The loader already hides commerce templates from a direct workspace; this
-    // is the backstop for a posted key from a stale page or a crafted request.
-    if (!ctx.isShopify) {
-      const tpl = (await getJourneyTemplates()).find((t) => t.key === key);
-      if (tpl && TRIGGER_CONFIG[tpl.trigger]?.commerce) {
-        return { ok: false, error: "That template needs a connected Shopify store." };
-      }
+    // The loader only offers templates this workspace can run; this is the
+    // backstop for a posted key from a stale page or a crafted request.
+    const tpl = (await getJourneyTemplates()).find((t) => t.key === key);
+    if (!tpl) return { ok: false, error: "That template no longer exists." };
+    if (!templateAvailable(tpl, { isShopify: ctx.isShopify, isInternal: isInternalShop(shop) })) {
+      return { ok: false, error: "That template isn't available in this workspace." };
     }
 
     const journey = await createJourneyFromTemplate(shop, key);
@@ -245,7 +299,7 @@ export const action = async ({ request }) => {
 };
 
 export default function Flows() {
-  const { journeys, templates, whatsappAlert = null } = useLoaderData();
+  const { journeys, templates, recommendedKeys = [], showPushFilter = false, whatsappAlert = null } = useLoaderData();
   const navigate = useNavigate();
   const location = useLocation();
   const fetcher = useFetcher();
@@ -258,6 +312,8 @@ export default function Flows() {
         {showModal && (
           <CreateFlowModal
             templates={templates}
+            recommendedKeys={recommendedKeys}
+            showPushFilter={showPushFilter}
             onClose={() => setShowModal(false)}
             fetcher={fetcher}
           />
@@ -281,6 +337,8 @@ export default function Flows() {
       {showModal && (
         <CreateFlowModal
           templates={templates}
+          recommendedKeys={recommendedKeys}
+          showPushFilter={showPushFilter}
           onClose={() => setShowModal(false)}
           fetcher={fetcher}
         />
@@ -620,8 +678,12 @@ function RowMenu({ open, onToggle, onClose, onView, onAnalytics, onDuplicate, on
   );
 }
 
+const STEP_ICON = { email: "Mail", whatsapp: "Whatsapp", push: "Bell" };
+const STEP_LABEL = { email: "Email", whatsapp: "WhatsApp", push: "Push" };
+
 function FlowMiniMap({ template }) {
-  const nodes = template.nodes || template.definition?.steps || [];
+  const nodes = (template.nodes || template.definition?.steps || []).filter((n) => (n.type || n.nodeType) !== "exit");
+  const counts = {};
   return (
     <div className="rt-minimap">
       <div className="rt-minimap-node rt-mini-trigger">
@@ -631,20 +693,20 @@ function FlowMiniMap({ template }) {
       <div className="rt-minimap-line" />
       {nodes.map((n, i) => {
         const type = n.type || n.nodeType;
+        const Icon = Icons[STEP_ICON[type]];
+        counts[type] = (counts[type] || 0) + 1;
         return (
           <Fragment key={n.id || i}>
-            {type === "email" && (
-              <div className="rt-minimap-node rt-mini-email">
-                <Icons.Mail size={10} />
-                <span className="rt-minimap-label">
-                  Email {nodes.slice(0, i).filter((x) => (x.type || x.nodeType) === "email").length + 1}
-                </span>
+            {STEP_ICON[type] && (
+              <div className={`rt-minimap-node rt-mini-${type === "email" ? "email" : type}`}>
+                {Icon && <Icon size={10} />}
+                <span className="rt-minimap-label">{STEP_LABEL[type]} {counts[type]}</span>
               </div>
             )}
             {type === "delay" && (
               <div className="rt-minimap-delay">
                 <Icons.Clock size={9} />
-                <span className="t-mono">{n.hours || n.delayHours || 0}h</span>
+                <span className="tabular">{formatWait(n.hours || n.delayHours || 0)}</span>
               </div>
             )}
             <div className="rt-minimap-line" />
@@ -659,27 +721,46 @@ function FlowMiniMap({ template }) {
   );
 }
 
-function CreateFlowModal({ templates, onClose, fetcher }) {
+/** "36 hours" reads worse than "1 day 12 h"; days from 48h up. */
+function formatWait(h) {
+  const n = Number(h) || 0;
+  if (n < 48) return `${n}h`;
+  const d = Math.floor(n / 24);
+  const r = n % 24;
+  return r ? `${d}d ${r}h` : `${d} days`;
+}
+
+function CreateFlowModal({ templates, recommendedKeys = [], showPushFilter = false, onClose, fetcher }) {
+  // Recommended first, so the best next flow is what the window opens on.
+  const ordered = [
+    ...recommendedKeys.map((k) => templates.find((t) => t.key === k)).filter(Boolean),
+    ...templates.filter((t) => !recommendedKeys.includes(t.key)),
+  ];
   const [typeFilter, setTypeFilter] = useState("all");
-  const [channelFilter, setChannelFilter] = useState("email");
-  const [selectedKey, setSelectedKey] = useState(templates[0]?.key || null);
+  const [channelFilter, setChannelFilter] = useState("all");
+  const [selectedKey, setSelectedKey] = useState(ordered[0]?.key || null);
 
-  const typeOptions = ["all", "Welcome Series", "Abandoned Cart", "Post Purchase", "Win-back"];
+  // The type filter compared "Welcome Series" against category ids like
+  // "welcome", so every filter but "All" showed nothing. Filters now use the
+  // category ids, with labels only for display.
+  const categories = TEMPLATE_CATEGORIES.filter((c) => templates.some((t) => t.category === c.id));
+  const channels = [
+    { id: "all", label: "All channels", icon: null },
+    { id: "email", label: "Email", icon: "Mail" },
+    { id: "whatsapp", label: "WhatsApp", icon: "Whatsapp" },
+    // Push is a real channel in the builder; it was listed here as "Soon".
+    ...(showPushFilter ? [{ id: "push", label: "Push", icon: "Bell" }] : []),
+  ].filter((c) => c.id === "all" || templates.some((t) => (t.channels || []).includes(c.id)));
 
-  const filtered = templates.filter(
-    (t) => typeFilter === "all" || t.category === typeFilter || t.type === typeFilter,
-  );
+  const matches = (t) =>
+    (typeFilter === "all" || t.category === typeFilter) &&
+    (channelFilter === "all" || (t.channels || []).includes(channelFilter));
+  const filtered = ordered.filter(matches);
+  const selected = ordered.find((t) => t.key === selectedKey) || filtered[0] || ordered[0];
 
-  const selected = templates.find((t) => t.key === selectedKey) || templates[0];
-
-  // Blank flows start on the safest default. Merchants change the trigger
-  // (including to `segment_entered`) from the builder's TriggerPicker — the
-  // modal stays focused on template browsing.
-  const startBlank = () => {
-    // No trigger sent: the server picks one that can fire in this workspace.
-    fetcher.submit({ intent: "create-blank" }, { method: "post" });
-  };
-
+  // No trigger sent for a blank flow: the server picks one that can fire in
+  // this workspace.
+  const startBlank = () => fetcher.submit({ intent: "create-blank" }, { method: "post" });
   const useTemplate = () => {
     if (!selected) return;
     fetcher.submit({ intent: "create-from-template", templateKey: selected.key }, { method: "post" });
@@ -694,16 +775,14 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
             <h2 className="t-display-2" style={{ margin: 0 }}>
               Start with a <em style={{ fontFamily: "var(--font-display)" }}>tested</em> sequence
             </h2>
-            <p className="muted t-small" style={{ margin: "8px 0 0", maxWidth: 480 }}>
-              Templates are fully editable. Pick the closest match and shape it from there.
+            <p className="muted t-small" style={{ margin: "8px 0 0", maxWidth: 520 }}>
+              {recommendedKeys.length
+                ? "We've put the flows that fit your store best first. Every template is fully editable."
+                : "Templates are fully editable. Pick the closest match and shape it from there."}
             </p>
           </div>
           <div className="rt-modal-head-right">
-            <button
-              className="btn btn-secondary"
-              onClick={startBlank}
-              disabled={fetcher.state !== "idle"}
-            >
+            <button className="btn btn-secondary" onClick={startBlank} disabled={fetcher.state !== "idle"}>
               <Icons.Plus size={14} /> Start blank
             </button>
             <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
@@ -712,86 +791,93 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
           </div>
         </header>
 
+        {fetcher.data?.ok === false && fetcher.data.error && (
+          <div className="auth-notice auth-notice-warn" style={{ margin: "0 24px" }}>{fetcher.data.error}</div>
+        )}
+
         <div className="rt-modal-body">
           {/* Filters */}
           <aside className="rt-cm-filters">
             <div className="t-micro muted rt-cm-filter-heading">Type</div>
             <div className="rt-cm-radio-list">
-              {typeOptions.map((t) => {
-                const count =
-                  t === "all"
-                    ? templates.length
-                    : templates.filter((x) => x.category === t || x.type === t).length;
+              {[{ id: "all", label: "All templates" }, ...categories].map((c) => {
+                const count = c.id === "all" ? templates.length : templates.filter((x) => x.category === c.id).length;
                 return (
-                  <button
-                    key={t}
-                    className={`rt-cm-radio${typeFilter === t ? " rt-on" : ""}`}
-                    onClick={() => setTypeFilter(t)}
-                  >
+                  <button key={c.id} className={`rt-cm-radio${typeFilter === c.id ? " rt-on" : ""}`} onClick={() => setTypeFilter(c.id)}>
                     <span className="rt-cm-radio-dot" />
-                    <span>{t === "all" ? "All templates" : t}</span>
+                    <span>{c.label}</span>
                     <span className="rt-cm-radio-count">{count}</span>
                   </button>
                 );
               })}
             </div>
 
-            <div className="t-micro muted rt-cm-filter-heading" style={{ marginTop: 28 }}>Channel</div>
-            <div className="rt-cm-radio-list">
-              <button
-                className={`rt-cm-radio${channelFilter === "email" ? " rt-on" : ""}`}
-                onClick={() => setChannelFilter("email")}
-              >
-                <span className="rt-cm-radio-dot" />
-                <Icons.Mail size={14} />
-                <span>Email</span>
-                <span className="rt-cm-radio-count">{templates.length}</span>
-              </button>
-              <button className="rt-cm-radio rt-locked">
-                <span className="rt-cm-radio-dot" />
-                <Icons.Bell size={14} />
-                <span>Push</span>
-                <span className="pill soon" style={{ height: 18, fontSize: 9, padding: "0 6px" }}>Soon</span>
-              </button>
-            </div>
+            {channels.length > 2 && (
+              <>
+                <div className="t-micro muted rt-cm-filter-heading" style={{ marginTop: 28 }}>Channel</div>
+                <div className="rt-cm-radio-list">
+                  {channels.map((c) => {
+                    const Icon = c.icon ? Icons[c.icon] : null;
+                    const count = c.id === "all" ? templates.length : templates.filter((x) => (x.channels || []).includes(c.id)).length;
+                    return (
+                      <button key={c.id} className={`rt-cm-radio${channelFilter === c.id ? " rt-on" : ""}`} onClick={() => setChannelFilter(c.id)}>
+                        <span className="rt-cm-radio-dot" />
+                        {Icon && <Icon size={14} />}
+                        <span>{c.label}</span>
+                        <span className="rt-cm-radio-count">{count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
           </aside>
 
           {/* Gallery */}
           <div className="rt-cm-gallery">
+            {filtered.length === 0 && (
+              <p className="t-small muted" style={{ padding: 16 }}>No templates match these filters.</p>
+            )}
             {filtered.map((t) => {
               const trig = TRIGGER_CONFIG[t.trigger] || TRIGGER_CONFIG.customer_created;
               const TrigIcon = Icons[trig.icon];
               const nodes = t.nodes || t.definition?.steps || [];
-              const emailCount = nodes.filter((n) => (n.type || n.nodeType) === "email").length;
               return (
                 <button
                   key={t.key}
-                  className={`rt-tmpl-card${selectedKey === t.key ? " rt-on" : ""}`}
+                  className={`rt-tmpl-card${selectedKey === t.key ? " rt-on" : ""}${t.recommendedReason ? " rt-tmpl-rec" : ""}`}
                   onClick={() => setSelectedKey(t.key)}
                 >
+                  {t.recommendedReason && <span className="rt-tmpl-rec-badge">Recommended</span>}
                   <div className="rt-tmpl-top">
                     <span className={`rt-tmpl-trig rt-tint-${trig.tint}`}>
                       {TrigIcon && <TrigIcon size={12} />}
-                      <span>{trig.label}</span>
+                      <span>{t.trigger === "api_event" ? `${t.triggerApp} · ${t.triggerEvent}` : trig.label}</span>
                     </span>
-                    <span className="rt-tmpl-emails t-mono">{emailCount} ✉</span>
+                    <span className="rt-tmpl-channels" aria-label={`Channels: ${(t.channels || []).join(", ")}`}>
+                      {(t.channels || []).map((c) => {
+                        const Icon = Icons[STEP_ICON[c]];
+                        return Icon ? <Icon key={c} size={12} /> : null;
+                      })}
+                    </span>
                   </div>
                   <h3 className="rt-tmpl-name">{t.name}</h3>
-                  <p className="rt-tmpl-desc">{t.description}</p>
+                  <p className="rt-tmpl-desc">{t.recommendedReason || t.description}</p>
                   <div className="rt-tmpl-seq">
-                    {nodes.slice(0, 5).map((n, i) => {
+                    {nodes.filter((n) => (n.type || n.nodeType) !== "exit").slice(0, 6).map((n, i) => {
                       const type = n.type || n.nodeType;
                       return (
-                        <span
-                          key={n.id || i}
-                          className={`rt-seq-dot rt-seq-${type}`}
-                          title={type}
-                        >
-                          {type === "email" ? "✉" : type === "delay" ? "·" : "○"}
+                        <span key={n.id || i} className={`rt-seq-dot rt-seq-${type}`} title={STEP_LABEL[type] || "Wait"}>
+                          {type === "email" ? "✉" : type === "whatsapp" ? "W" : type === "push" ? "🔔" : "·"}
                         </span>
                       );
                     })}
                   </div>
+                  {t.needsWhatsappSetup && (
+                    <span className="t-small" style={{ color: "var(--warn-ink)", display: "block", marginTop: 8 }}>
+                      Needs WhatsApp set up to send
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -805,12 +891,24 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
               </div>
               <div className="rt-cm-detail-body">
                 <div className="t-micro muted" style={{ marginBottom: 6 }}>
-                  {selected.category || selected.type || "Template"}
+                  {TEMPLATE_CATEGORIES.find((c) => c.id === selected.category)?.label || "Template"}
                 </div>
                 <h3 className="t-h1" style={{ margin: "0 0 8px" }}>{selected.name}</h3>
-                <p className="t-small muted" style={{ margin: "0 0 20px", lineHeight: 1.6 }}>
-                  {selected.description}
-                </p>
+                <p className="t-small muted" style={{ margin: "0 0 16px", lineHeight: 1.6 }}>{selected.description}</p>
+                {selected.recommendedReason && (
+                  <p className="t-small" style={{ margin: "0 0 16px", color: "var(--brand-700)", fontWeight: 600 }}>
+                    Recommended: {selected.recommendedReason}
+                  </p>
+                )}
+                {selected.needsWhatsappSetup && (
+                  <p className="t-small" style={{ margin: "0 0 16px", color: "var(--warn-ink)" }}>
+                    This flow sends on WhatsApp. You can build it now; it can be published once WhatsApp is connected
+                    and you've picked an approved template for each WhatsApp step.
+                  </p>
+                )}
+                {selected.trigger === "segment_entered" && !selected.triggerSegmentKey && (
+                  <p className="t-small muted" style={{ margin: "0 0 16px" }}>You&rsquo;ll choose the segment that starts it.</p>
+                )}
 
                 {selected.bestFor && selected.bestFor.length > 0 && (
                   <>
@@ -828,41 +926,37 @@ function CreateFlowModal({ templates, onClose, fetcher }) {
                   </>
                 )}
 
-                <div className="t-micro muted rt-cm-detail-section">What's inside</div>
+                <div className="t-micro muted rt-cm-detail-section">What&rsquo;s inside</div>
                 <div className="rt-cm-inside">
-                  {(selected.nodes || selected.definition?.steps || []).map((n, i) => {
-                    const type = n.type || n.nodeType;
-                    if (type === "email") {
+                  {(() => {
+                    let elapsed = 0;
+                    return (selected.nodes || selected.definition?.steps || []).map((n, i) => {
+                      const type = n.type || n.nodeType;
+                      if (type === "delay") {
+                        elapsed += Number(n.hours || n.delayHours || 0);
+                        return (
+                          <div key={n.id || i} className="rt-cm-inside-row rt-cm-inside-delay">
+                            <span className="rt-cm-inside-dot rt-tint-delay"><Icons.Clock size={11} /></span>
+                            <div style={{ fontSize: 12, color: "var(--ink-3)" }}>Wait {formatWait(n.hours || n.delayHours || 0)}</div>
+                          </div>
+                        );
+                      }
+                      if (!STEP_ICON[type]) return null;
+                      const Icon = Icons[STEP_ICON[type]];
+                      const name = type === "push" ? n.pushTitle : n.name || n.emailName || n.subject;
                       return (
                         <div key={n.id || i} className="rt-cm-inside-row">
-                          <span className="rt-cm-inside-dot rt-tint-email">
-                            <Icons.Mail size={11} />
-                          </span>
+                          <span className={`rt-cm-inside-dot rt-tint-${type}`}>{Icon && <Icon size={11} />}</span>
                           <div>
-                            <div className="rt-cm-inside-name">{n.name || n.emailName || n.subject || "Email"}</div>
-                            <div className="t-mono rt-cm-inside-time">
-                              {(n.after || n.delayHours) === 0
-                                ? "immediately"
-                                : `+${n.after || n.delayHours} ${n.afterUnit || "hours"}`}
+                            <div className="rt-cm-inside-name">{name || STEP_LABEL[type]}</div>
+                            <div className="rt-cm-inside-time">
+                              {STEP_LABEL[type]} · {elapsed === 0 ? "right away" : `after ${formatWait(elapsed)}`}
                             </div>
                           </div>
                         </div>
                       );
-                    }
-                    if (type === "delay") {
-                      return (
-                        <div key={n.id || i} className="rt-cm-inside-row rt-cm-inside-delay">
-                          <span className="rt-cm-inside-dot rt-tint-delay">
-                            <Icons.Clock size={11} />
-                          </span>
-                          <div className="t-mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                            Wait {n.hours || n.delayHours || 0} hours
-                          </div>
-                        </div>
-                      );
-                    }
-                    return null;
-                  })}
+                    });
+                  })()}
                 </div>
 
                 <button

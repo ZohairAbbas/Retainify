@@ -172,6 +172,7 @@ export default function Team() {
   const { shopify, accountName, members, invites, canManage: allowed, me } = useLoaderData();
   const fetcher = useFetcher();
   const [confirm, setConfirm] = useState(null);
+  const [inviteRole, setInviteRole] = useState("member");
   const busy = fetcher.state !== "idle";
   const result = fetcher.data;
 
@@ -198,6 +199,9 @@ export default function Team() {
         <div>
           <div className="t-micro muted" style={{ marginBottom: 8 }}>{accountName}</div>
           <h1 className="t-display-2" style={{ margin: 0 }}>Team</h1>
+          <p className="muted" style={{ margin: "8px 0 0", maxWidth: 560 }}>
+            Everyone who can work in this workspace, and what each of them is allowed to do.
+          </p>
         </div>
       </header>
 
@@ -216,20 +220,25 @@ export default function Team() {
           <p className="t-small muted" style={{ marginTop: 0, marginBottom: 16 }}>
             They&apos;ll get an email with a link to join. Invitations expire after 7 days.
           </p>
-          <fetcher.Form
-            method="post"
-            style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "flex-start" }}
-          >
+          {/* One row: address, role, send. Inputs default to full width, which
+              stacked all three and pushed the button onto its own line. */}
+          <fetcher.Form method="post" className="rt-invite-row">
             <input type="hidden" name="intent" value="invite" />
             <input
               className="input"
               name="email"
               type="email"
               placeholder="teammate@company.com"
+              aria-label="Email address"
               required
-              style={{ flex: "1 1 240px", minWidth: 0 }}
             />
-            <select className="select" name="role" defaultValue="member" aria-label="Role">
+            <select
+              className="select"
+              name="role"
+              value={inviteRole}
+              onChange={(e) => setInviteRole(e.target.value)}
+              aria-label="Role"
+            >
               {ROLES.map((r) => (
                 <option key={r} value={r}>{roleLabel(r)}</option>
               ))}
@@ -238,28 +247,28 @@ export default function Team() {
               {busy ? "Sending…" : "Send invitation"}
             </button>
           </fetcher.Form>
-          <div className="t-micro muted" style={{ marginTop: 10 }}>
-            {ROLES.map((r) => (
-              <div key={r}><strong>{r}</strong> — {ROLE_HELP[r]}</div>
-            ))}
-          </div>
+          {/* What the chosen role can do, in a sentence — not all three roles
+              in 11px capitals that nobody reads. */}
+          <p className="t-small muted" style={{ margin: "10px 0 0" }}>
+            <strong style={{ color: "var(--ink-1)" }}>{roleLabel(inviteRole)}:</strong> {ROLE_HELP[inviteRole]}
+          </p>
         </section>
       )}
 
       <section style={{ marginTop: 32 }}>
-        <div className="t-micro muted" style={{ marginBottom: 12 }}>
-          {members.length} {members.length === 1 ? "person" : "people"}
-        </div>
+        <h2 className="t-h3" style={{ margin: "0 0 12px" }}>
+          Members <span className="muted" style={{ fontWeight: 400 }}>· {members.length}</span>
+        </h2>
         <div className="card">
           {members.map((m) => (
             <div className="rt-member-row" key={m.id}>
               <div style={{ minWidth: 0 }}>
                 <div className="rt-member-name">
                   {m.name || m.email}
-                  {m.id === me && <span className="t-micro muted"> · you</span>}
+                  {m.id === me && <span className="pill" style={{ marginLeft: 8, height: 18, fontSize: 11 }}>You</span>}
                 </div>
                 <div className="rt-member-email">
-                  {m.email} · last seen {fmtDate(m.lastLoginAt)}
+                  {m.email} · {m.lastLoginAt ? `last signed in ${fmtDate(m.lastLoginAt)}` : "hasn't signed in yet"}
                 </div>
               </div>
 
@@ -280,7 +289,7 @@ export default function Team() {
                   </select>
                 </fetcher.Form>
               ) : (
-                <span className="pill">{m.role}</span>
+                <span className="pill">{roleLabel(m.role)}</span>
               )}
 
               {allowed && m.id !== me ? (
@@ -301,15 +310,17 @@ export default function Team() {
 
       {invites.length > 0 && (
         <section style={{ marginTop: 32 }}>
-          <div className="t-micro muted" style={{ marginBottom: 12 }}>Pending invitations</div>
+          <h2 className="t-h3" style={{ margin: "0 0 12px" }}>
+            Pending invitations <span className="muted" style={{ fontWeight: 400 }}>· {invites.length}</span>
+          </h2>
           <div className="card">
             {invites.map((i) => (
               <div className="rt-member-row" key={i.id}>
                 <div style={{ minWidth: 0 }}>
                   <div className="rt-member-name">{i.email}</div>
-                  <div className="rt-member-email">Expires {fmtDate(i.expiresAt)}</div>
+                  <div className="rt-member-email">Invited · link expires {fmtDate(i.expiresAt)}</div>
                 </div>
-                <span className="pill">{i.role}</span>
+                <span className="pill paused">{roleLabel(i.role)} · pending</span>
                 {allowed ? (
                   <fetcher.Form method="post">
                     <input type="hidden" name="intent" value="revoke" />

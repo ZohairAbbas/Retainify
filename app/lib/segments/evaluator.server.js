@@ -820,6 +820,20 @@ async function evaluateDynamic(shop, tree, sampleSize, returnIds = false) {
   };
 }
 
+/**
+ * Just the size of a dynamic tree, with no sample or mix. Used to put a live
+ * count on each segment template, where the template gallery would otherwise
+ * pay for up to ~20 full evaluations (each pulling 500 rows for the mix) on
+ * every visit to the segments page.
+ */
+export async function countSegmentTree(shop, tree) {
+  const { where: treeWhere, allSafe } = hasRules(tree)
+    ? treeToPrisma(tree)
+    : { where: null, allSafe: true };
+  if (!allSafe) throw new Error("Segment contains a rule that cannot be evaluated in the database");
+  return prisma.contact.count({ where: { shop, deletedAt: null, ...(treeWhere || {}) } });
+}
+
 /** Does this node carry any rules at all? */
 function hasRules(tree) {
   return Boolean(tree) && isGroup(tree) && (tree.children || []).length > 0;

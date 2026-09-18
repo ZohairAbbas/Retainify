@@ -218,15 +218,17 @@ export function flowFilterFieldsFor(isShopify, propertyDefs = []) {
 // with a bigger blast radius.
 
 /** Segment starter templates a workspace can actually use. */
-export function templatesFor(isShopify) {
-  if (isShopify) return TEMPLATES;
-  const allowed = new Set(fieldsFor(false).map((f) => f.id));
+export function templatesFor(isShopify, propertyDefs = []) {
+  // A template is offered only if every field it uses exists here: commerce
+  // fields need a store, and "prop:*" fields need that property defined
+  // (Growzar Internal's Merchant360 properties exist only once synced).
+  const allowed = new Set(fieldsFor(isShopify, propertyDefs).map((f) => f.id));
   const usesOnly = (node) => {
     if (!node) return true;
     if (node.type === "group") return (node.children || []).every(usesOnly);
     return allowed.has(node.field);
   };
-  return TEMPLATES.filter((t) => usesOnly(t.rules));
+  return TEMPLATES.filter((t) => (!t.requiresShopify || isShopify) && usesOnly(t.rules));
 }
 
 export const OPERATORS = {
@@ -323,5 +325,147 @@ export const TEMPLATES = [
       { type: "rule", field: "lifecycleStage", op: "is", value: "at_risk" },
       { type: "rule", field: "totalSpent", op: "gt", value: 100 },
     ] },
+  },
+  // ── Purchase (Shopify) ────────────────────────────────────────────────
+  {
+    id: "tpl_repeat", name: "Repeat customers", priority: 70,
+    description: "Ordered more than once — your most loyal buyers",
+    icon: "Heart", accent: "#DCE7DF", accentInk: "#1F3D2F",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "orderCount", op: "gt", value: 1 }] },
+  },
+  {
+    id: "tpl_onetime", name: "One-time buyers", priority: 75,
+    description: "Bought once, more than 30 days ago — ready for a second order",
+    icon: "Clock", accent: "#F1E4C5", accentInk: "#6B5018",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "orderCount", op: "eq", value: 1 },
+      { type: "rule", field: "lastOrderAt", op: "more_than", value: 30, unit: "days" },
+    ] },
+  },
+  {
+    id: "tpl_recent_buyers", name: "Recent buyers", priority: 55,
+    description: "Ordered in the last 30 days",
+    icon: "Cart", accent: "#DCE4ED", accentInk: "#25406A",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "lastOrderAt", op: "in_last", value: 30, unit: "days" }] },
+  },
+  {
+    id: "tpl_high_aov", name: "High order value", priority: 50,
+    description: "Average order over $100",
+    icon: "Heart", accent: "#EAD6EA", accentInk: "#5A2E5A",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "aov", op: "gt", value: 100 }] },
+  },
+  // ── Cart (Shopify) ─────────────────────────────────────────────────────
+  {
+    id: "tpl_active_cart", name: "Carts open right now", priority: 80,
+    description: "Abandoned a cart in the last 24 hours",
+    icon: "Cart", accent: "#F1E4C5", accentInk: "#6B5018",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "hasActiveCart", op: "is_true" }] },
+  },
+  {
+    id: "tpl_serial_abandoners", name: "Serial cart abandoners", priority: 60,
+    description: "Abandoned more than one cart — price-sensitive or undecided",
+    icon: "Cart", accent: "#E5DCCF", accentInk: "#5A4A33",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "cartAbandonCount", op: "gt", value: 1 }] },
+  },
+  // ── Engagement (every workspace) ──────────────────────────────────────
+  {
+    id: "tpl_new_week", name: "New this week", priority: 65,
+    description: "Joined your list in the last 7 days",
+    icon: "Sparkles", accent: "#DCE7DF", accentInk: "#1F3D2F",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "firstSeenAt", op: "in_last", value: 7, unit: "days" }] },
+  },
+  {
+    id: "tpl_readers", name: "Engaged readers", priority: 60,
+    description: "Opened an email in the last 30 days",
+    icon: "Eye", accent: "#DCE4ED", accentInk: "#25406A",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "lastEmailOpenedAt", op: "in_last", value: 30, unit: "days" }] },
+  },
+  {
+    id: "tpl_clickers", name: "Clickers", priority: 58,
+    description: "Clicked at least one email — your warmest audience",
+    icon: "Bolt", accent: "#EAD6EA", accentInk: "#5A2E5A",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "emailsClicked", op: "gt", value: 0 }] },
+  },
+  {
+    id: "tpl_never_opened", name: "Never opened", priority: 45,
+    description: "Sent 3+ emails and opened none — candidates for a sunset or a new channel",
+    icon: "EyeOff", accent: "#E4DAD7", accentInk: "#5A3F38",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "emailsSent", op: "gt", value: 2 },
+      { type: "rule", field: "emailsOpened", op: "eq", value: 0 },
+    ] },
+  },
+  // ── Reachability ───────────────────────────────────────────────────────
+  {
+    id: "tpl_whatsapp", name: "Reachable on WhatsApp", priority: 62,
+    description: "Opted in to WhatsApp messages",
+    icon: "Whatsapp", accent: "#DCF8E8", accentInk: "#075E54",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "whatsappStatus", op: "is", value: "subscribed" }] },
+  },
+  {
+    id: "tpl_whatsapp_not_email", name: "WhatsApp but not email", priority: 52,
+    description: "On WhatsApp, but unsubscribed or never opted in to email",
+    icon: "Whatsapp", accent: "#DCF8E8", accentInk: "#075E54",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "whatsappStatus", op: "is", value: "subscribed" },
+      { type: "rule", field: "subscriptionStatus", op: "is_not", value: "subscribed" },
+    ] },
+  },
+  {
+    id: "tpl_push", name: "Push subscribers", priority: 50, requiresShopify: true,
+    description: "Allowed browser notifications",
+    icon: "Bell", accent: "#EDE9FE", accentInk: "#5B21B6",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "pushEnabled", op: "is_true" }] },
+  },
+  // ── Growzar Internal (Merchant360 properties; shown once synced) ────────
+  {
+    id: "tpl_m360_near_limit", name: "Free plan near the limit", priority: 95,
+    description: "Courierify free-plan merchants past 70% of their bookings — ready to upgrade",
+    icon: "Bolt", accent: "#F1E4C5", accentInk: "#6B5018",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "prop:courierify_plan", op: "is", value: "free" },
+      { type: "rule", field: "prop:courierify_usage_pct", op: "gt", value: 70 },
+    ] },
+  },
+  {
+    id: "tpl_m360_never_booked", name: "Installed, never booked", priority: 90,
+    description: "Active Courierify merchants who haven't booked a shipment yet",
+    icon: "Clock", accent: "#E5DCCF", accentInk: "#5A4A33",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "prop:courierify_status", op: "is", value: "active" },
+      { type: "rule", field: "prop:courierify_first_booking_at", op: "empty" },
+    ] },
+  },
+  {
+    id: "tpl_m360_setup", name: "Setup incomplete", priority: 85,
+    description: "Active merchants with no courier connected",
+    icon: "Sliders", accent: "#DCE4ED", accentInk: "#25406A",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "prop:courierify_status", op: "is", value: "active" },
+      { type: "rule", field: "prop:courierify_courier_connected", op: "is_false" },
+    ] },
+  },
+  {
+    id: "tpl_m360_quiet", name: "Gone quiet", priority: 80,
+    description: "Active merchants with no booking in 14 days",
+    icon: "Clock", accent: "#E4DAD7", accentInk: "#5A3F38",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "prop:courierify_status", op: "is", value: "active" },
+      { type: "rule", field: "prop:courierify_last_booking_at", op: "more_than", value: 14, unit: "days" },
+    ] },
+  },
+  {
+    id: "tpl_m360_paid", name: "Paid merchants", priority: 60,
+    description: "On Courierify Starter, Pro or Growzar",
+    icon: "Heart", accent: "#DCE7DF", accentInk: "#1F3D2F",
+    rules: { type: "group", match: "all", children: [
+      { type: "rule", field: "prop:courierify_plan", op: "is_one_of", value: ["starter", "pro", "growzar"] },
+    ] },
+  },
+  {
+    id: "tpl_m360_uninstalled", name: "Uninstalled Courierify", priority: 55,
+    description: "Merchants who removed the app — for win-back and feedback",
+    icon: "Exit", accent: "#E4DAD7", accentInk: "#5A3F38",
+    rules: { type: "group", match: "all", children: [{ type: "rule", field: "prop:courierify_status", op: "is", value: "uninstalled" }] },
   },
 ];
