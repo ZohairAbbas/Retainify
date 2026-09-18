@@ -302,22 +302,34 @@ export default function Dashboard() {
       <section>
         <div className="t-micro muted" style={{ marginBottom: 12 }}>Email performance</div>
         {hasEmailData ? (
-          <div className="rt-table">
+          <div className="rt-table rt-table--emails">
             <div className="rt-thead">
               <div>Email</div>
               <div className="rt-tnum">Sent</div>
               <div className="rt-tnum">Opened</div>
               <div className="rt-tnum">Clicked</div>
               <div className="rt-tnum">CTR</div>
+              <div className="rt-tnum" title="Orders placed within the attribution window after clicking this email">Revenue</div>
+              <div aria-hidden="true" />
             </div>
             {breakdown.map((row) => (
-              <div key={row.stepId} className="rt-trow">
+              // Each row opens the full report for what sent it: a campaign's
+              // results page, or the flow's analytics with this email's detail.
+              // A real link, so it opens in a new tab and works from the keyboard.
+              <Link
+                key={row.stepId}
+                to={`${row.isCampaign ? `/app/campaigns/${row.journeyId}` : `/app/flows/${row.journeyId}/analytics`}${location.search}`}
+                className="rt-trow rt-trow-link"
+                title={`Open ${row.isCampaign ? "campaign" : "flow"} analytics`}
+              >
                 <div>
                   {row.label}
                   {/* The table now spans every flow, so the step label alone is
                       ambiguous once a shop runs more than one. */}
                   {row.journeyName && (
-                    <div className="t-micro muted" style={{ marginTop: 2 }}>{row.journeyName}</div>
+                    <div className="t-micro muted" style={{ marginTop: 2 }}>
+                      {row.isCampaign ? "Campaign · " : ""}{row.journeyName}
+                    </div>
                   )}
                 </div>
                 <div className="rt-tnum t-mono">{fmt(row.sent)}</div>
@@ -326,7 +338,18 @@ export default function Dashboard() {
                 <div className="rt-tnum t-mono">
                   {row.sent > 0 ? fmtPct((row.clicked / row.sent) * 100) : "—"}
                 </div>
-              </div>
+                <div className="rt-tnum t-mono">
+                  {row.revenue == null
+                    ? <span title="Not measurable in this period — no click tracking on these sends">—</span>
+                    : fmtRevenue(row.revenue, row.currency || stats.revenue.currency)}
+                  {row.orders > 0 && (
+                    <div className="t-micro muted" style={{ marginTop: 2 }}>
+                      {fmt(row.orders)} {row.orders === 1 ? "order" : "orders"}
+                    </div>
+                  )}
+                </div>
+                <div className="rt-trow-chevron" aria-hidden="true"><Icons.Chevron size={14} /></div>
+              </Link>
             ))}
           </div>
         ) : (

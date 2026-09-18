@@ -388,6 +388,37 @@ export async function getFlowAttributionBatch(shop, journeyIds, since) {
 }
 
 /**
+ * Attributed revenue per email step across many flows — the dashboard's
+ * per-email table, which would otherwise issue one query per flow.
+ *
+ * `tracked` is false when the window's sends carried no click tracking, so
+ * revenue could not be measured at all: the caller shows a dash rather than
+ * claiming the emails earned nothing.
+ *
+ * @returns {Promise<{ tracked: boolean, byStep: Map<string, {revenue: number, orders: number, currency: string}> }>}
+ */
+export async function getStepAttributionBatch(shop, journeyIds, since) {
+  if (!journeyIds?.length) return { tracked: true, byStep: new Map() };
+  if (!(await windowIsTracked(shop, since, journeyIds))) return { tracked: false, byStep: new Map() };
+
+  const rows = await prisma.$queryRawUnsafe(
+    `SELECT step_id, currency,
+            SUM(total_price)::float8 AS revenue,
+            COUNT(*)::int            AS orders
+       FROM (${ATTRIBUTED_ORDERS}) a
+      WHERE a.journey_id = ANY($5)
+      GROUP BY step_id, currency`,
+    shop,
+    since,
+    String(ATTRIBUTION_WINDOW_DAYS),
+    EXCLUDED_STATUSES,
+    journeyIds,
+  );
+
+  return { tracked: true, byStep: groupAndFold(rows, "step_id") };
+}
+
+/**
  * Whether a shop has any measurable click tracking at all.
  *
  * Lets a surface explain the absence once ("connect a sending domain to measure

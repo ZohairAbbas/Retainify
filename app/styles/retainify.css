@@ -3380,3 +3380,11 @@ a.rt-bulk-btn:hover { color: var(--on-brand); }
   font-variant-numeric: tabular-nums;
 }
 .rt-thead .rt-tnum, .rt-cthead .rt-tnum { font-size: inherit; color: inherit; }
+
+/* Dashboard per-email table: six figures and a chevron that says "opens". */
+.rt-table--emails .rt-thead, .rt-table--emails .rt-trow {
+  grid-template-columns: 2.6fr 0.8fr 0.8fr 0.8fr 0.7fr 1fr 20px;
+}
+.rt-trow-link { color: inherit; }
+.rt-trow-link:hover .rt-trow-chevron, .rt-trow-link:focus-visible .rt-trow-chevron { color: var(--brand-700); }
+.rt-trow-chevron { display: flex; justify-content: flex-end; color: var(--ink-4); }

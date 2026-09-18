@@ -12,7 +12,7 @@
  * participates in that funnel.
  */
 import prisma from "../../db.server.js";
-import { getShopAttribution } from "./attribution.server.js";
+import { getShopAttribution, getStepAttributionBatch } from "./attribution.server.js";
 
 function sinceDate(days) {
   return new Date(Date.now() - days * 24 * 60 * 60 * 1000);
@@ -223,11 +223,15 @@ export async function getEmailBreakdown(shop, days = 30, { journeyId = null } = 
       subject: true,
       emailName: true,
       journeyId: true,
-      journey: { select: { name: true } },
+      journey: { select: { name: true, trigger: true } },
     },
     orderBy: [{ journeyId: "asc" }, { stepNumber: "asc" }],
   });
   if (steps.length === 0) return [];
+
+  // Revenue each email earned (orders attributed to a click on it), so the
+  // table answers "which message made money", not only "which got opened".
+  const attribution = await getStepAttributionBatch(shop, ids, since);
 
   // One grouped query instead of three counts per step — a shop with a handful
   // of flows was previously issuing dozens of round trips to render this table.
@@ -251,14 +255,24 @@ export async function getEmailBreakdown(shop, days = 30, { journeyId = null } = 
 
   return steps.map((step) => {
     const s = statsByStep[step.id] || { sent: 0, opened: 0, clicked: 0 };
+    const money = attribution.byStep.get(step.id);
     return {
       stepId: step.id,
       stepNumber: step.stepNumber,
       label: step.emailName || step.subject || `Email ${step.stepNumber}`,
       journeyName: step.journey?.name || "",
+      // Where the row leads: a campaign has its own results page; a flow's
+      // per-email detail lives on the flow's analytics page.
+      journeyId: step.journeyId,
+      isCampaign: step.journey?.trigger === "broadcast",
       sent: s.sent,
       opened: s.opened,
       clicked: s.clicked,
+      // null = not measurable in this window (no click tracking), which is
+      // different from 0 = measured and earned nothing.
+      revenue: attribution.tracked ? (money?.revenue ?? 0) : null,
+      orders: attribution.tracked ? (money?.orders ?? 0) : null,
+      currency: money?.currency || "",
     };
   });
 }
