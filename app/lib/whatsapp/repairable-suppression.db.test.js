@@ -66,6 +66,21 @@ const REPAIRED = "927001234567";
 
 const realFetch = globalThis.fetch;
 
+/**
+ * A quiet-hours window guaranteed not to contain the current hour.
+ *
+ * Twelve hours from now, one hour wide, in UTC — the shop fixture leaves
+ * storeTimezone at its "UTC" default. Kept as a normal forward window
+ * (start < end) so isInQuietHours takes its simple branch rather than the
+ * overnight one.
+ */
+function quietWindowAwayFromNow() {
+  const start = (new Date().getUTCHours() + 12) % 24;
+  // 23 would wrap to 0 and become an overnight window that is always active.
+  const safeStart = start === 23 ? 22 : start;
+  return { quietHoursStart: safeStart, quietHoursEnd: safeStart + 1 };
+}
+
 /** 131026 — "message undeliverable", one of the codes that means permanent. */
 function metaRejects() {
   globalThis.fetch = async () => ({
@@ -89,7 +104,21 @@ async function seed(shop, { storedPhone }) {
     data: { key: shop, kind: "direct", name: "repairable test" },
   });
   await prisma.shopSettings.create({
-    data: { shop, whatsappEnabled: true, whatsappRequireOptIn: true },
+    data: {
+      shop,
+      whatsappEnabled: true,
+      whatsappRequireOptIn: true,
+      // Quiet hours default to 22:00-08:00 UTC and the worker defers anything
+      // landing inside them, so without this the result depends on what time of
+      // day the suite runs — these tests passed when written in the afternoon
+      // and failed at 04:00. They are about the suppression decision, not the
+      // schedule.
+      //
+      // A one-hour window on the far side of the clock. Equal start/end cannot
+      // be used: isInQuietHours treats start >= end as an overnight window, so
+      // 0-0 evaluates to "hour >= 0 || hour < 0" and is quiet at every hour.
+      ...quietWindowAwayFromNow(),
+    },
   });
   await prisma.whatsappAccount.create({
     data: {

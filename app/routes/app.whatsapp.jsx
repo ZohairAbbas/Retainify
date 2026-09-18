@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { requireAccount } from "../lib/auth/require.server.js";
+import { canManage } from "../lib/auth/roles.js";
 import prisma from "../db.server.js";
 import { resubscribeWebhooks } from "../lib/whatsapp/embedded-signup.server.js";
 import { syncTemplates, createTemplate } from "../lib/whatsapp/templates.server.js";
@@ -161,11 +162,31 @@ export const loader = async ({ request }) => {
   };
 };
 
+/**
+ * Intents that change the WhatsApp ACCOUNT rather than use it.
+ *
+ * Connecting, registering a number and disconnecting are workspace-level
+ * identity: they bind the workspace to a Meta WABA, put a phone number on the
+ * shop's behalf into Meta's hands, and — in the case of disconnect — silently
+ * stop every queued WhatsApp send. Separate from the plan gate below, which asks
+ * a different question (is this feature paid for), so the two lists differ on
+ * purpose: send-test is plan-gated but not role-gated, because sending a test
+ * to yourself is using the channel, not reconfiguring it.
+ */
+const MANAGE_INTENTS = ["connect", "register-number", "disconnect", "resubscribe-webhooks"];
+
 export const action = async ({ request }) => {
   const ctx = await requireAccount(request);
   const { shop } = ctx;
   const fd = await request.formData();
   const intent = String(fd.get("intent") || "");
+
+  // Role gate before the plan gate: "you may not do this" is a truer answer than
+  // "your plan does not include this" for someone who is not allowed either way.
+  // Embedded Shopify sessions resolve to owner and are unaffected.
+  if (MANAGE_INTENTS.includes(intent) && !canManage(ctx.role)) {
+    return { ok: false, error: "Only owners and admins can change the WhatsApp connection." };
+  }
 
   // Anything that connects or sends on WhatsApp is plan-gated. Read-only intents
   // (template sync/list) stay open so a downgraded shop can still see its state.
