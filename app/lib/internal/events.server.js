@@ -140,3 +140,100 @@ export async function handleAppEvent({ app, event, email, name, phone, data = {}
 
   return { exited, enrolled, declined };
 }
+
+// ── The event log and idempotency ─────────────────────────────────────────
+
+/**
+ * How long a "processing" row may sit before it is treated as a crashed
+ * request rather than one still running. Handling an event is a handful of
+ * queries; minutes means the process died mid-way.
+ */
+const STALE_PROCESSING_MS = 5 * 60 * 1000;
+
+/**
+ * handleAppEvent, recorded in InternalEvent and made safe to retry.
+ *
+ * With an `eventId`, the first call does the work and stores the outcome; any
+ * later call with the same (caller, eventId) gets that outcome back with
+ * `duplicate: true` and touches nothing. Re-entry rules already decline most
+ * repeats, but not all: a flow set to re-enter immediately would start a second
+ * drip, and a repeated exit event is not declined by anything.
+ *
+ * Without an `eventId` the call is still logged, just not deduplicated — the
+ * contract for callers that predate it is unchanged.
+ *
+ * Two copies of one event racing each other: the unique index lets exactly one
+ * create its row. The other is told to retry (`inProgress`), and on retry finds
+ * the finished outcome.
+ *
+ * @param {object} input  handleAppEvent's input plus:
+ * @param {string} input.caller   who authenticated — the app, or a broker
+ * @param {string} [input.eventId] caller's idempotency key
+ * @returns {Promise<
+ *   | { inProgress: true }
+ *   | ({ duplicate: boolean } & Awaited<ReturnType<typeof handleAppEvent>>)
+ * >}
+ */
+export async function handleLoggedAppEvent({ caller, eventId = null, ...input }) {
+  if (eventId) {
+    const existing = await prisma.internalEvent.findUnique({
+      where: { caller_eventId: { caller, eventId } },
+    });
+    if (existing) {
+      if (existing.status === "done") {
+        return {
+          duplicate: true,
+          exited: existing.exited,
+          enrolled: existing.enrolled || [],
+          declined: existing.declined || [],
+        };
+      }
+      if (Date.now() - existing.receivedAt.getTime() < STALE_PROCESSING_MS) {
+        return { inProgress: true };
+      }
+      // A crashed attempt. Clear it so this one can claim the id; the status
+      // guard stops this from deleting a row that finished in the meantime.
+      await prisma.internalEvent.deleteMany({ where: { id: existing.id, status: "processing" } });
+    }
+  }
+
+  let row;
+  try {
+    row = await prisma.internalEvent.create({
+      data: {
+        caller,
+        app: input.app,
+        event: input.event,
+        email: input.email,
+        eventId,
+        data: input.data && Object.keys(input.data).length ? input.data : undefined,
+      },
+      select: { id: true },
+    });
+  } catch (err) {
+    if (err?.code === "P2002") return { inProgress: true };
+    throw err;
+  }
+
+  let result;
+  try {
+    result = await handleAppEvent(input);
+  } catch (err) {
+    // Release the id so the caller's retry does the work instead of being told
+    // it is still in progress for the next five minutes.
+    await prisma.internalEvent.delete({ where: { id: row.id } }).catch(() => {});
+    throw err;
+  }
+
+  await prisma.internalEvent.update({
+    where: { id: row.id },
+    data: {
+      status: "done",
+      exited: result.exited,
+      enrolled: result.enrolled,
+      declined: result.declined,
+      finishedAt: new Date(),
+    },
+  });
+  return { duplicate: false, ...result };
+}

@@ -52,3 +52,20 @@ test("the internal tenant still loses the commerce triggers", () => {
   assert.ok(!("order_placed" in t));
   assert.ok("customer_created" in t);
 });
+
+test("apps a configured broker speaks for are offered as trigger sources", () => {
+  const env = {
+    INTERNAL_APP_SECRET_FINANCIFY: "x".repeat(40),
+    INTERNAL_BROKER_SECRET_MERCHANT360: "b".repeat(40),
+    INTERNAL_BROKER_APPS_MERCHANT360: "courierify,financify,inventorify",
+  };
+  assert.deepEqual(configuredApps(env), ["courierify", "financify", "inventorify"]);
+  assert.equal(isConfiguredApp("inventorify", env), true);
+  assert.equal(isConfiguredApp("preventify", env), false);
+});
+
+test("a broker without a secret contributes no apps", () => {
+  const env = { INTERNAL_BROKER_APPS_MERCHANT360: "courierify" };
+  assert.deepEqual(configuredApps(env), []);
+  assert.equal(isConfiguredApp("courierify", env), false);
+});

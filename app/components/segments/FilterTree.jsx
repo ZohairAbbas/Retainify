@@ -317,6 +317,22 @@ function ValueControl({ field, rule, onChange, tags }) {
     }
     case "boolean":
       return <div className="rt-val"><span className="rt-val-suffix">—</span></div>;
+    case "string": {
+      // Free text, used by custom text properties. "is empty" takes no value.
+      if (rule.op === "empty") {
+        return <div className="rt-val"><span className="rt-val-suffix">—</span></div>;
+      }
+      return (
+        <div className="rt-val">
+          <input
+            className="input"
+            type="text"
+            value={typeof rule.value === "string" ? rule.value : ""}
+            onChange={(e) => set({ value: e.target.value })}
+          />
+        </div>
+      );
+    }
     case "tag":
       return (
         <TagPicker
@@ -348,7 +364,7 @@ function ValueControlEnum({ field, rule, onChange }) {
 function isValueless(field, rule) {
   if (!field) return true;
   if (field.type === "boolean") return true;
-  return field.type === "date" && rule.op === "empty";
+  return (field.type === "date" || field.type === "string") && rule.op === "empty";
 }
 
 // ── Rule + Group ──────────────────────────────────────────────────────

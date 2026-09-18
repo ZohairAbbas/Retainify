@@ -43,7 +43,9 @@
 // rather than throw.
 
 import prisma from "../../db.server.js";
-import { FIELD_BY_ID } from "./fields.server.js";
+import { Prisma } from "@prisma/client";
+
+import { FIELD_BY_ID, propKeyOf, resolveField } from "./fields.server.js";
 import { computeLifecycle } from "../contacts/contacts.server.js";
 
 // How many contact ids the enrollment worker can diff in one pass. Not a
@@ -144,6 +146,9 @@ function numericComparison(col, rule) {
 // Returns a Prisma where-fragment for the rule, or null when the rule must
 // be evaluated in JS.
 function ruleToPrisma(rule) {
+  const propKey = propKeyOf(rule.field);
+  if (propKey) return propRuleToPrisma(propKey, rule);
+
   const field = FIELD_BY_ID[rule.field];
   if (!field) return null;
   if (!field.supported) return null;
@@ -266,6 +271,119 @@ function ruleToPrisma(rule) {
     }
     default:
       return null;
+  }
+}
+
+// ── Custom properties ───────────────────────────────────────────────────
+// A "prop:<key>" rule compares one key of Contact.customProps. The operator
+// alone decides how (see the note in fields.server.js), and the JS matcher
+// below applies exactly the same reading so the two cannot disagree.
+//
+// ── A missing key is not a value ───────────────────────────────────────────
+// Postgres answers a comparison against a key the JSON does not have with
+// NULL, and NOT NULL is still NULL. So a bare NOT around "plan is pro" does
+// not match a contact with no plan at all, although by any reading a person
+// would give, a contact with no plan is not on pro. Same trap as the nullable
+// date columns in nullSafeInactive: the negative operators spell the absent
+// case out as its own branch. AnyNull covers both a missing key and an
+// explicit JSON null.
+
+function propPath(key, filter) {
+  return { customProps: { path: [key], ...filter } };
+}
+
+function propMissing(key) {
+  return propPath(key, { equals: Prisma.AnyNull });
+}
+
+/** A date property threshold, as the ISO string the property is stored as. */
+function propDateBound(rule, relative) {
+  const d = relative ? dateThreshold(rule.value, rule.unit) : new Date(rule.value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+function propRuleToPrisma(key, rule) {
+  const values = Array.isArray(rule.value) ? rule.value : [rule.value];
+  switch (rule.op) {
+    // Text, choice list
+    case "is":
+      return propPath(key, { equals: rule.value });
+    case "is_not":
+      return { OR: [{ NOT: propPath(key, { equals: rule.value }) }, propMissing(key)] };
+    case "is_one_of":
+      if (values.length === 0) return { id: { in: [] } };
+      return { OR: values.map((v) => propPath(key, { equals: v })) };
+    case "contains":
+      return propPath(key, { string_contains: String(rule.value ?? ""), mode: "insensitive" });
+    case "empty":
+      return propMissing(key);
+    // Number
+    case "gt":
+      return propPath(key, { gt: Number(rule.value) || 0 });
+    case "lt":
+      return propPath(key, { lt: Number(rule.value) || 0 });
+    case "eq":
+      return propPath(key, { equals: Number(rule.value) || 0 });
+    case "between": {
+      const [lo, hi] = Array.isArray(rule.value) ? rule.value : [rule.value, rule.value2];
+      return { AND: [propPath(key, { gte: Number(lo) || 0 }), propPath(key, { lte: Number(hi) || 0 })] };
+    }
+    // Yes / no. "Is false" counts a contact with no value, as pushEnabled does.
+    case "is_true":
+      return propPath(key, { equals: true });
+    case "is_false":
+      return { OR: [{ NOT: propPath(key, { equals: true }) }, propMissing(key)] };
+    // Date — stored as ISO strings, which order the same as the instants.
+    case "in_last":
+    case "after": {
+      const bound = propDateBound(rule, rule.op === "in_last");
+      return bound ? propPath(key, rule.op === "in_last" ? { gte: bound } : { gt: bound }) : null;
+    }
+    case "more_than":
+    case "before": {
+      const bound = propDateBound(rule, rule.op === "more_than");
+      return bound ? propPath(key, { lt: bound }) : null;
+    }
+    default:
+      return null;
+  }
+}
+
+function propRuleJs(key, rule, contact) {
+  const bag = contact.customProps && typeof contact.customProps === "object" ? contact.customProps : {};
+  const raw = Object.prototype.hasOwnProperty.call(bag, key) ? bag[key] : null;
+  const missing = raw === null || raw === undefined;
+  const values = Array.isArray(rule.value) ? rule.value : [rule.value];
+  const isNum = typeof raw === "number";
+  switch (rule.op) {
+    case "is":        return !missing && raw === rule.value;
+    case "is_not":    return missing || raw !== rule.value;
+    case "is_one_of": return !missing && values.includes(raw);
+    case "contains":
+      return typeof raw === "string" && raw.toLowerCase().includes(String(rule.value ?? "").toLowerCase());
+    case "empty":     return missing;
+    case "gt":        return isNum && raw > (Number(rule.value) || 0);
+    case "lt":        return isNum && raw < (Number(rule.value) || 0);
+    case "eq":        return isNum && raw === (Number(rule.value) || 0);
+    case "between": {
+      const [lo, hi] = Array.isArray(rule.value) ? rule.value : [rule.value, rule.value2];
+      return isNum && raw >= (Number(lo) || 0) && raw <= (Number(hi) || 0);
+    }
+    case "is_true":   return raw === true;
+    case "is_false":  return raw !== true;
+    case "in_last":
+    case "after":
+    case "more_than":
+    case "before": {
+      if (typeof raw !== "string") return false;
+      const bound = propDateBound(rule, rule.op === "in_last" || rule.op === "more_than");
+      if (!bound) return false;
+      if (rule.op === "in_last") return raw >= bound;
+      if (rule.op === "after") return raw > bound;
+      return raw < bound;
+    }
+    default:
+      return false;
   }
 }
 
@@ -401,6 +519,9 @@ function treeToPrisma(node) {
 // Evaluate a single rule against a {contact} row. `lifecycle` is optional —
 // supplied by callers that already computed one, derived here otherwise.
 function evalRuleJs(rule, ctx) {
+  const propKey = propKeyOf(rule.field);
+  if (propKey) return propRuleJs(propKey, rule, ctx.contact);
+
   const field = FIELD_BY_ID[rule.field];
   if (!field) return true;
   if (!field.supported) return true; // unsupported fields are no-ops
@@ -598,7 +719,7 @@ export function validateFilterTree(tree) {
       return;
     }
     if (isRule(node)) {
-      const field = FIELD_BY_ID[node.field];
+      const field = resolveField(node.field);
       if (!field) throw new Error(`Unknown field: ${node.field}`);
       return;
     }

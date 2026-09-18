@@ -1226,3 +1226,38 @@ model WorkerLease {
 
   @@index([expiresAt])
 }
+
+// Every call to the internal event API (/internal/event), matched or not.
+//
+// Before this, an event that started and ended nothing left only a log line,
+// so "did Courierify ever tell us about this install?" had no answer. It is
+// also the idempotency ledger: a caller that sends an eventId gets the stored
+// outcome back on a retry instead of a second pass through the flows — the
+// re-entry rules alone decline most duplicates, but not for a flow set to
+// re-enter immediately, and not for exits.
+//
+// `caller` is who authenticated (the app itself, or a broker such as
+// merchant360 reporting on the app's behalf); `app` is whose event it is.
+// Uniqueness is per caller because each caller mints its own ids.
+model InternalEvent {
+  id         String    @id @default(cuid())
+  caller     String
+  app        String
+  event      String
+  email      String
+  eventId    String?
+  // processing → done. A row stuck in processing is a crashed request; the
+  // route treats one older than a few minutes as abandoned and retries it.
+  status     String    @default("processing")
+  exited     Int       @default(0)
+  enrolled   Json?
+  declined   Json?
+  data       Json?
+  receivedAt DateTime  @default(now())
+  finishedAt DateTime?
+
+  @@unique([caller, eventId])
+  @@index([app, event, receivedAt])
+  @@index([email, receivedAt])
+  @@index([receivedAt])
+}

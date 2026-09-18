@@ -90,9 +90,12 @@ export function validateInternalEmail(raw) {
  * @param {string} [input.name]
  * @param {string} [input.phone] E.164; recorded as a confirmed WhatsApp opt-in
  * @param {string} [input.app]   which Growzar app sent them, for the audit trail
+ * @param {boolean} [input.revive] bring a deleted contact back (events do; the
+ *                                 bulk sync does not — see lib/internal/sync.server.js)
+ * @param {boolean} [input.touch]  count this as seeing the person (lastSeenAt)
  * @returns {Promise<{ contact: object|null, created: boolean, whatsappOptIn: boolean }>}
  */
-export async function upsertInternalContact({ email, name, phone, app }) {
+export async function upsertInternalContact({ email, name, phone, app, revive = true, touch = true }) {
   const { contact, created } = await upsertContact({
     shop: INTERNAL_SHOP,
     email,
@@ -106,7 +109,8 @@ export async function upsertInternalContact({ email, name, phone, app }) {
     marketingConsentAt: new Date(),
     // revive: a user who uninstalled and came back should start receiving
     // lifecycle mail again, rather than staying soft-deleted forever.
-    revive: true,
+    revive,
+    touch,
   });
 
   let whatsappOptIn = false;

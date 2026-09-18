@@ -197,7 +197,10 @@ export async function upsertContact(input) {
     return { contact, created: true, revived: false };
   }
 
-  const data = { lastSeenAt: now };
+  // touch: false is for writers that restate facts rather than observe the
+  // person (the internal contact sync), which must not make every contact look
+  // freshly active to lastSeenAt-based rules and lifecycle stages.
+  const data = input.touch === false ? {} : { lastSeenAt: now };
 
   // The row survives a delete as a tombstone (deletedAt set), and findUnique
   // above matches it regardless — so without this an explicit re-add silently

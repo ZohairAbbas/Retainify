@@ -99,3 +99,23 @@ export function readEventData(value) {
   }
   return { ok: true, data: value };
 }
+
+const EVENT_ID_RE = /^[A-Za-z0-9._:-]{1,128}$/;
+
+/**
+ * Validate the optional idempotency key. Anything the caller can mint uniquely
+ * will do — Merchant360 sends its outbox row id.
+ *
+ * @param {unknown} value
+ * @returns {{ ok: true, eventId: string|null } | { ok: false, error: string }}
+ */
+export function readEventId(value) {
+  if (value === undefined || value === null || value === "") return { ok: true, eventId: null };
+  if (typeof value !== "string" || !EVENT_ID_RE.test(value)) {
+    return {
+      ok: false,
+      error: "eventId must be 1-128 characters of letters, numbers, dot, underscore, colon or dash.",
+    };
+  }
+  return { ok: true, eventId: value };
+}

@@ -11,7 +11,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { authenticateInternalCaller, secretEnvName } from "./auth.server.js";
+import {
+  authenticateInternalCaller,
+  brokerApps,
+  brokerAppsEnvName,
+  brokerSecretEnvName,
+  secretEnvName,
+} from "./auth.server.js";
 import { __resetRateLimits } from "../security/rate-limit.server.js";
 
 const SECRET = "s".repeat(40);
@@ -104,4 +110,91 @@ test("one app hitting its rate limit does not lock out another", () => {
   for (let i = 0; i < 200; i++) authenticateInternalCaller(req(SECRET), "courierify");
   const other = authenticateInternalCaller(req(OTHER_SECRET), "financify");
   assert.equal(other.ok, true);
+});
+
+// ── Brokers ────────────────────────────────────────────────────────────────
+
+const BROKER_SECRET = "b".repeat(40);
+
+function brokerReq(bearer, broker = "merchant360") {
+  return new Request("https://example.test/internal/event", {
+    method: "POST",
+    headers: {
+      ...(bearer ? { authorization: `Bearer ${bearer}` } : {}),
+      ...(broker ? { "x-internal-caller": broker } : {}),
+    },
+  });
+}
+
+function withBroker(fn) {
+  process.env[brokerSecretEnvName("merchant360")] = BROKER_SECRET;
+  process.env[brokerAppsEnvName("merchant360")] = "courierify, Inventorify ,bad-name";
+  try {
+    return fn();
+  } finally {
+    delete process.env[brokerSecretEnvName("merchant360")];
+    delete process.env[brokerAppsEnvName("merchant360")];
+  }
+}
+
+test("a broker may report for an app on its list, and is recorded as the caller", () => {
+  withBroker(() => {
+    const result = authenticateInternalCaller(brokerReq(BROKER_SECRET), "courierify");
+    assert.deepEqual(result, { ok: true, app: "courierify", caller: "merchant360" });
+  });
+});
+
+test("the broker's app list is trimmed and lowercased", () => {
+  withBroker(() => {
+    const result = authenticateInternalCaller(brokerReq(BROKER_SECRET), "inventorify");
+    assert.equal(result.ok, true);
+  });
+});
+
+test("a broker may not report for an app missing from its list", () => {
+  withBroker(() => {
+    const result = authenticateInternalCaller(brokerReq(BROKER_SECRET), "financify");
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 401);
+  });
+});
+
+test("an app's own secret does not pass as a broker's", () => {
+  withBroker(() => {
+    const result = authenticateInternalCaller(brokerReq(SECRET), "courierify");
+    assert.equal(result.ok, false);
+    assert.equal(result.status, 401);
+  });
+});
+
+test("a broker's secret does not pass as an app's own", () => {
+  withBroker(() => {
+    const result = authenticateInternalCaller(req(BROKER_SECRET), "courierify");
+    assert.equal(result.ok, false);
+  });
+});
+
+test("an unknown broker is indistinguishable from a wrong secret", () => {
+  withBroker(() => {
+    const unknown = authenticateInternalCaller(brokerReq(BROKER_SECRET, "nobody"), "courierify");
+    const wrong = authenticateInternalCaller(brokerReq("x".repeat(40)), "courierify");
+    const offList = authenticateInternalCaller(brokerReq(BROKER_SECRET), "financify");
+    assert.equal(unknown.status, 401);
+    assert.equal(unknown.error, wrong.error);
+    assert.equal(offList.error, wrong.error);
+  });
+});
+
+test("a broker call without an app authenticates with app null (contact sync)", () => {
+  withBroker(() => {
+    const result = authenticateInternalCaller(brokerReq(BROKER_SECRET), undefined);
+    assert.deepEqual(result, { ok: true, app: null, caller: "merchant360" });
+  });
+});
+
+test("brokerApps drops names the event API could never accept", () => {
+  assert.deepEqual(
+    brokerApps("merchant360", { INTERNAL_BROKER_APPS_MERCHANT360: "courierify,bad-name,,Financify" }),
+    ["courierify", "financify"],
+  );
 });

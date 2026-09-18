@@ -90,6 +90,75 @@ export const FIELDS = [
 
 export const FIELD_BY_ID = Object.fromEntries(FIELDS.map((f) => [f.id, f]));
 
+// ── Custom properties ───────────────────────────────────────────────────────
+// Merchant-defined properties (ContactPropertyDef) become rule fields named
+// "prop:<key>". They are per workspace, so they cannot live in FIELDS; the
+// routes append them to the catalog they send the builder, and resolveField
+// below is how the evaluator recognises one without a database lookup.
+//
+// The evaluator never needs the property's declared type. Values are coerced to
+// that type on write (lib/contacts/properties.server.js), and every operator
+// below belongs to exactly one type family, so the operator alone says how to
+// compare. That keeps a saved rule valid even if the definition it was built
+// from is later deleted: it simply matches nothing that has no value.
+
+export const PROP_FIELD_PREFIX = "prop:";
+const PROP_KEY_RE = /^[a-z0-9_]{1,40}$/;
+
+/** Rule-builder type for each property type. */
+const PROP_TYPE_TO_FIELD_TYPE = {
+  text: "string",
+  number: "number",
+  date: "date",
+  boolean: "boolean",
+  select: "enum",
+};
+
+/** The property key a "prop:<key>" field names, or null. */
+export function propKeyOf(fieldId) {
+  if (typeof fieldId !== "string" || !fieldId.startsWith(PROP_FIELD_PREFIX)) return null;
+  const key = fieldId.slice(PROP_FIELD_PREFIX.length);
+  return PROP_KEY_RE.test(key) ? key : null;
+}
+
+/**
+ * Rule fields for a workspace's custom properties.
+ *
+ * @param {Array<{ key: string, label: string, type: string, options?: unknown }>} defs
+ */
+export function propertyFields(defs = []) {
+  return defs
+    .filter((d) => PROP_KEY_RE.test(d.key))
+    .map((d) => {
+      const type = PROP_TYPE_TO_FIELD_TYPE[d.type] || "string";
+      const field = {
+        id: PROP_FIELD_PREFIX + d.key,
+        label: d.label || d.key,
+        group: "Custom properties",
+        type,
+        supported: true,
+      };
+      if (type === "enum") {
+        const opts = Array.isArray(d.options) ? d.options : [];
+        field.options = opts.map((o) => ({ id: String(o), label: String(o) }));
+      }
+      return field;
+    });
+}
+
+/**
+ * A field descriptor for any rule field, built-in or custom property.
+ *
+ * A property field resolves without knowing its definition — see the section
+ * header — so its descriptor carries only what the evaluator reads.
+ */
+export function resolveField(fieldId) {
+  if (FIELD_BY_ID[fieldId]) return FIELD_BY_ID[fieldId];
+  const key = propKeyOf(fieldId);
+  if (key) return { id: fieldId, propKey: key, group: "Custom properties", supported: true };
+  return null;
+}
+
 /**
  * Field groups that only ever hold data on a workspace with a connected store.
  * Purchase and Cart columns are written by order ingestion and checkout
@@ -106,8 +175,9 @@ const COMMERCE_GROUPS = new Set(["Purchase", "Cart"]);
  *
  * @param {boolean} isShopify
  */
-export function fieldsFor(isShopify) {
-  return isShopify ? FIELDS : FIELDS.filter((f) => !COMMERCE_GROUPS.has(f.group));
+export function fieldsFor(isShopify, propertyDefs = []) {
+  const base = isShopify ? FIELDS : FIELDS.filter((f) => !COMMERCE_GROUPS.has(f.group));
+  return propertyDefs.length ? [...base, ...propertyFields(propertyDefs)] : base;
 }
 
 /**
@@ -127,8 +197,8 @@ export function fieldsFor(isShopify) {
  *
  * @param {boolean} isShopify
  */
-export function flowFilterFieldsFor(isShopify) {
-  return fieldsFor(isShopify).filter((f) => f.supported);
+export function flowFilterFieldsFor(isShopify, propertyDefs = []) {
+  return fieldsFor(isShopify, propertyDefs).filter((f) => f.supported);
 }
 
 // ── A note on splits ───────────────────────────────────────────────────────

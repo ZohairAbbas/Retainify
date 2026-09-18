@@ -10,6 +10,7 @@ import { summarizeContacts } from "../lib/contacts/contacts.server.js";
 import { getSegmentById, updateSegment, listStaticMemberIds } from "../lib/segments/segments.server.js";
 import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
 import { fieldsFor, OPERATORS } from "../lib/segments/fields.server.js";
+import { listProperties } from "../lib/contacts/properties.server.js";
 import prisma from "../db.server.js";
 
 export const loader = async ({ params, request }) => {
@@ -44,7 +45,7 @@ export const loader = async ({ params, request }) => {
     segment,
     // Commerce fields are hidden without a store — a rule on them would
     // match nobody, permanently.
-    fields: fieldsFor(ctx.isShopify),
+    fields: fieldsFor(ctx.isShopify, await listProperties(shop)),
     operators: OPERATORS,
     tags,
     totalAudience: summary.total,

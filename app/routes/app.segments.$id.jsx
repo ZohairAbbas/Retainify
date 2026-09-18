@@ -29,6 +29,7 @@ import { getSystemSegmentById, isSystemSegmentId } from "../lib/segments/systemS
 import { listTagsForShop } from "../lib/contacts/tags.server.js";
 import { computeLifecycle, emptyContactStats, getContactStatsBatch } from "../lib/contacts/contacts.server.js";
 import { fieldsFor } from "../lib/segments/fields.server.js";
+import { listProperties } from "../lib/contacts/properties.server.js";
 import prisma from "../db.server.js";
 
 export const loader = async ({ params, request }) => {
@@ -164,7 +165,7 @@ export const loader = async ({ params, request }) => {
     tags,
     // Commerce fields are hidden without a store — a rule on them would
     // match nobody, permanently.
-    fields: fieldsFor(ctx.isShopify),
+    fields: fieldsFor(ctx.isShopify, await listProperties(shop)),
     snapshots: snapshots.map((s) => ({ takenAt: s.takenAt, count: s.count })),
     recentEntered: enteredRows.map((r) => enrich(r, "enteredAt")),
     recentLeft: leftRows.map((r) => enrich(r, "leftAt")),

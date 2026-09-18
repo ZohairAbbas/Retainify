@@ -9,6 +9,7 @@ import { listTagsForShop } from "../lib/contacts/tags.server.js";
 import { summarizeContacts } from "../lib/contacts/contacts.server.js";
 import { createSegment } from "../lib/segments/segments.server.js";
 import { fieldsFor, OPERATORS, templatesFor } from "../lib/segments/fields.server.js";
+import { listProperties } from "../lib/contacts/properties.server.js";
 import { requireQuota } from "../lib/billing/gate.server.js";
 
 export const loader = async ({ request }) => {
@@ -50,7 +51,7 @@ export const loader = async ({ request }) => {
   return Response.json({
     // Commerce fields are hidden without a store — a rule on them would
     // match nobody, permanently.
-    fields: fieldsFor(ctx.isShopify),
+    fields: fieldsFor(ctx.isShopify, await listProperties(shop)),
     operators: OPERATORS,
     tags,
     initial,

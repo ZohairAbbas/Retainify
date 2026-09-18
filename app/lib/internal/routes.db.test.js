@@ -121,6 +121,7 @@ async function clear() {
   await prisma.whatsappSuppression.deleteMany({ where: { shop: INTERNAL_SHOP, phoneNumber: PHONE } });
   await prisma.whatsappSubscription.deleteMany({ where: { shop: INTERNAL_SHOP, phoneNumber: PHONE } });
   await prisma.contact.deleteMany({ where: { shop: INTERNAL_SHOP, email: EMAIL } });
+  await prisma.internalEvent.deleteMany({ where: { app: { in: [APP, OTHER_APP] } } });
 }
 
 test.before(async () => {

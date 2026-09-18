@@ -14,6 +14,7 @@ import { isInternalShop } from "../lib/internal/tenant.js";
 import { configuredApps } from "../lib/internal/apps.server.js";
 import { listSegmentChoices } from "../lib/segments/segments.server.js";
 import { flowFilterFieldsFor, OPERATORS } from "../lib/segments/fields.server.js";
+import { listProperties } from "../lib/contacts/properties.server.js";
 import { listTagsForShop } from "../lib/contacts/tags.server.js";
 import { evaluateSegment, validateFilterTree } from "../lib/segments/evaluator.server.js";
 import { isSystemSegmentId } from "../lib/segments/systemSegments.server.js";
@@ -152,7 +153,7 @@ export const loader = async ({ request, params }) => {
     // Entry-filter builder inputs. Fields are the supported-only set — see
     // flowFilterFieldsFor for why gated fields are hidden here but shown in
     // the segment builder.
-    filterFields: flowFilterFieldsFor(ctx.isShopify),
+    filterFields: flowFilterFieldsFor(ctx.isShopify, await listProperties(shop)),
     filterOperators: OPERATORS,
     filterTags: await listTagsForShop(shop),
     // Prefills the "Send test" recipient. The logged-in staff address is the

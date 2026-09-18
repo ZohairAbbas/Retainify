@@ -12,6 +12,20 @@
  * is a redeploy, which is proportionate while the caller list is a handful of
  * our own services; moving them to a table later changes nothing about the
  * request contract.
+ *
+ * ── Brokers ────────────────────────────────────────────────────────────────
+ * A broker is a service that reports events ON BEHALF of apps — Merchant360,
+ * which already watches every app's installs, plans and usage, and so can
+ * report "courierify / installed" without Courierify shipping any code.
+ *
+ * It identifies itself with `X-Internal-Caller: <broker>` and presents its own
+ * secret, INTERNAL_BROKER_SECRET_<BROKER>. It may speak only for the apps listed
+ * in INTERNAL_BROKER_APPS_<BROKER> (comma-separated): a broker secret is one
+ * key to many doors, so which doors is written down rather than implied.
+ *
+ * Holding each app's own secret would have worked too, and been worse: the
+ * broker would carry N secrets, rotating one app's would silently break the
+ * broker, and nothing would record that the event came second-hand.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 
@@ -43,6 +57,35 @@ export function secretEnvName(app) {
   return `INTERNAL_APP_SECRET_${String(app).toUpperCase()}`;
 }
 
+/** The env var holding a broker's secret. */
+export function brokerSecretEnvName(broker) {
+  return `INTERNAL_BROKER_SECRET_${String(broker).toUpperCase()}`;
+}
+
+/** The env var listing the apps a broker may speak for. */
+export function brokerAppsEnvName(broker) {
+  return `INTERNAL_BROKER_APPS_${String(broker).toUpperCase()}`;
+}
+
+/**
+ * The apps a broker may report for, lowercased. Names the event API could
+ * never accept are dropped rather than repaired.
+ *
+ * @param {string} broker
+ * @param {Record<string, string|undefined>} [env]
+ * @returns {string[]}
+ */
+export function brokerApps(broker, env = process.env) {
+  const raw = env[brokerAppsEnvName(broker)] || "";
+  return raw
+    .split(",")
+    .map((a) => a.trim().toLowerCase())
+    .filter((a) => validateExternalKey(a).ok);
+}
+
+/** Brokers per window. A broker speaks for several apps, so it gets more room. */
+const BROKER_RATE_LIMIT = 600;
+
 /**
  * Pull the presented secret out of the request.
  *
@@ -68,6 +111,9 @@ function presentedSecret(request) {
  * @returns {{ ok: true, app: string } | { ok: false, status: number, error: string }}
  */
 export function authenticateInternalCaller(request, app) {
+  const brokerHeader = request.headers.get("x-internal-caller");
+  if (brokerHeader) return authenticateBroker(request, brokerHeader, app);
+
   const shape = validateExternalKey(app, "app");
   if (!shape.ok) {
     return { ok: false, status: 400, error: shape.error };
@@ -103,5 +149,59 @@ export function authenticateInternalCaller(request, app) {
     return { ok: false, status: 401, error: "Unknown app or invalid secret." };
   }
 
-  return { ok: true, app: appName };
+  return { ok: true, app: appName, caller: appName };
+}
+
+/**
+ * The broker half of authenticateInternalCaller.
+ *
+ * `app` may be omitted for calls that are not about one app (the contact sync);
+ * the result's `app` is then null and the caller is the broker.
+ *
+ * Same refusal rules as an app: an unknown broker, a wrong secret and an app the
+ * broker may not speak for all get the same 401, so none of them can be probed.
+ */
+function authenticateBroker(request, brokerRaw, app) {
+  const shape = validateExternalKey(String(brokerRaw).trim().toLowerCase(), "caller");
+  if (!shape.ok) return { ok: false, status: 400, error: shape.error };
+  const broker = shape.key;
+
+  let appName = null;
+  if (app !== undefined && app !== null && app !== "") {
+    const appShape = validateExternalKey(app, "app");
+    if (!appShape.ok) return { ok: false, status: 400, error: appShape.error };
+    appName = appShape.key;
+  }
+
+  const gate = hit(`internal-api:broker:${broker}`, BROKER_RATE_LIMIT, RATE_WINDOW_MS);
+  if (!gate.allowed) {
+    return {
+      ok: false,
+      status: 429,
+      error: `Rate limit exceeded. Retry in ${Math.ceil(gate.retryAfterMs / 1000)}s.`,
+    };
+  }
+
+  const expected = process.env[brokerSecretEnvName(broker)] || "";
+  const presented = presentedSecret(request);
+  const refused = { ok: false, status: 401, error: "Unknown app or invalid secret." };
+
+  if (!expected || expected.length < MIN_SECRET_LENGTH) {
+    console.warn(
+      `[internal-api] rejected broker "${broker}" — ${brokerSecretEnvName(broker)} is unset or too short`,
+    );
+    return refused;
+  }
+  if (!presented || !secretsMatch(presented, expected)) {
+    console.warn(`[internal-api] rejected broker "${broker}" — bad or missing bearer secret`);
+    return refused;
+  }
+  if (appName && !brokerApps(broker).includes(appName)) {
+    console.warn(
+      `[internal-api] rejected broker "${broker}" for "${appName}" — not in ${brokerAppsEnvName(broker)}`,
+    );
+    return refused;
+  }
+
+  return { ok: true, app: appName, caller: broker };
 }

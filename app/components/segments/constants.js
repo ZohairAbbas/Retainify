@@ -9,7 +9,7 @@ export const TYPE_DEFAULTS = {
   date:    { op: "in_last", value: 7, unit: "days" },
   enum:    { op: "is" },
   boolean: { op: "is_true", value: true },
-  string:  { op: "is" },
+  string:  { op: "is", value: "" },
   tag:     { op: "has" },
 };
 

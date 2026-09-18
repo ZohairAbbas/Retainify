@@ -261,7 +261,12 @@ export async function buildTimeline(shop, emailRaw) {
         tag: t.tag.name,
         // Absent for a tag applied by hand, which is the honest reading — the
         // renderer shows nothing rather than guessing at a source.
-        byFlow: t.appliedByStepKey ? flowByStepKey.get(t.appliedByStepKey) || "a flow" : null,
+        byFlow: !t.appliedByStepKey
+          ? null
+          : t.appliedByStepKey.startsWith("api:")
+            // Applied by an internal API sync (lib/internal/sync.server.js).
+            ? `${t.appliedByStepKey.slice(4)} sync`
+            : flowByStepKey.get(t.appliedByStepKey) || "a flow",
       },
     });
   }
