@@ -5,6 +5,7 @@ import { Fragment } from "react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react";
 import Icons, { IconChevron } from "../components/ui/Icons.jsx";
+import OpenInGrowzar from "../components/OpenInGrowzar.jsx";
 import { getOnboardingState } from "../lib/onboarding/onboarding.server.js";
 import { whatsappReadiness, flowsUsingWhatsapp } from "../lib/whatsapp/readiness.server.js";
 import { WHATSAPP_PROBLEMS } from "../lib/whatsapp/problems.js";
@@ -252,6 +253,14 @@ function AppNav({ currentPath, showSetup, isShopify, account, user, workspaces, 
           </Fragment>
         ))}
       </div>
+
+      {/* Open in Growzar. Embedded only: the claim token is minted from the
+          verified Shopify session, which a direct login does not have. */}
+      {isShopify && (
+        <div className="rt-retainify-subnav" style={{ marginTop: 12, paddingTop: 8, borderTop: "1px solid var(--hair-1)" }}>
+          <OpenInGrowzar collapsed={collapsed} />
+        </div>
+      )}
 
       {/* Account block. Only for a direct login — inside the Shopify admin the
           identity and the store switcher already live in Shopify's own chrome,

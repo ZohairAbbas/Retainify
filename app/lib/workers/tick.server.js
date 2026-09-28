@@ -34,6 +34,7 @@ import { pruneExpiredSessions } from "../auth/session.server.js";
 import { runStuckJobReaper, runEnrollmentStallReaper } from "../journey/stuck-jobs.server.js";
 import { runEnrollmentAdvanceWorker } from "../journey/advance.server.js";
 import { runWinbackWorker } from "../journey/winback-worker.server.js";
+import { runGrowzarEventWorker } from "../growzar/events.server.js";
 import { withLease } from "./lease.server.js";
 
 export const FAST_TICK_MS = 60_000;
@@ -121,6 +122,12 @@ export async function runFastTick() {
   //
   // Leased: it hands attempts back, and two instances would hand back two.
   await guarded("stuck-jobs", leased("stuck-jobs", runStuckJobReaper, 10 * MINUTE));
+  // Retries of events posted to Growzar (app.uninstalled in Phase 1). The
+  // first attempt happens inline where the event is raised; this picks up
+  // whatever that attempt could not deliver, on the §7 backoff schedule.
+  //
+  // Unleased: each row is claimed by a conditional update on nextAttemptAt.
+  await guarded("growzar-events", runGrowzarEventWorker);
 }
 
 /**

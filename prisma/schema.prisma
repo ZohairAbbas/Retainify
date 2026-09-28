@@ -1273,3 +1273,36 @@ model InternalEvent {
   @@index([email, receivedAt])
   @@index([receivedAt])
 }
+
+// Events posted to Growzar's relay (API-CONTRACT §7), one row per event.
+//
+// An outbox rather than a fire-and-forget fetch because delivery is
+// at-least-once with retries over hours (1m, 5m, 30m, 2h, 6h, 12h), and a
+// retry schedule held in memory dies with the process — which, for an
+// app/uninstalled that fires once, means Growzar never learns the app is gone
+// and the merchant sees stale data with no explanation.
+//
+// `body` is the serialized envelope, frozen at enqueue: every retry sends the
+// same bytes (re-signed with a fresh timestamp), so Growzar's dedupe by eventId
+// sees one event however many times it arrives.
+//
+// pending → delivered, or pending → failed after the last retry or a response
+// that retrying cannot fix. `nextAttemptAt` doubles as the claim: taking a row
+// pushes it forward, so two processes never post the same row at once.
+model GrowzarOutboundEvent {
+  id            String    @id @default(cuid())
+  eventId       String    @unique
+  topic         String
+  shop          String
+  body          String
+  status        String    @default("pending")
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now())
+  lastStatus    Int?
+  lastError     String?
+  createdAt     DateTime  @default(now())
+  deliveredAt   DateTime?
+
+  @@index([status, nextAttemptAt])
+  @@index([shop, topic])
+}

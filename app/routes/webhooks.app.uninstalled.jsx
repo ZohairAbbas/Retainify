@@ -23,11 +23,30 @@ import { authenticate } from "../shopify.server.js";
 import db from "../db.server.js";
 import { stopShopSending } from "../lib/journey/shop-work.server.js";
 import { forgetShopHealth } from "../lib/shopify/shop-health.server.js";
+import { enqueueGrowzarEvent, deliverGrowzarEvent } from "../lib/growzar/events.server.js";
 
 export const action = async ({ request }) => {
-  const { shop, session, topic } = await authenticate.webhook(request);
+  const { shop, session, topic, webhookId, triggeredAt } = await authenticate.webhook(request);
 
   console.log(`Received ${topic} webhook for ${shop}`);
+
+  // Tell Growzar first, so reconnect mode (D-17) does not depend on the rest of
+  // this handler succeeding. Only the outbox write is awaited; the post itself
+  // runs after we answer Shopify, and the worker retries it on the §7 schedule.
+  // A Growzar problem must never fail this webhook — Shopify would redeliver
+  // it and re-run the cleanup below for nothing.
+  const growzarEvent = await enqueueGrowzarEvent({
+    topic: "app.uninstalled",
+    shop,
+    occurredAt: triggeredAt || new Date(),
+    actor: { type: "shopify" },
+    data: {},
+    // Shopify redelivers with the same webhook id; this absorbs the repeat.
+    ...(webhookId ? { eventId: `retainify-app-uninstalled-${webhookId}` } : {}),
+  }).catch((err) => {
+    console.error(`[growzar] could not queue app.uninstalled for ${shop}`, err);
+    return null;
+  });
 
   const { jobs, journeys } = await stopShopSending(shop, "app uninstalled");
 
@@ -45,6 +64,12 @@ export const action = async ({ request }) => {
   // If this webhook already ran, the session may have been deleted previously.
   if (session) {
     await db.session.deleteMany({ where: { shop } });
+  }
+
+  if (growzarEvent?.created) {
+    void deliverGrowzarEvent(growzarEvent.id).catch((err) => {
+      console.error(`[growzar] app.uninstalled first attempt for ${shop} threw; worker will retry`, err);
+    });
   }
 
   return new Response();
