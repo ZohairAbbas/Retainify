@@ -196,7 +196,7 @@ export const action = async ({ request }) => {
   if (intent === "resubscribe") {
     // resubscribeContact clears the suppression row and flips the Contact back
     // to "subscribed" — the exact inverse of unsubscribeContact below.
-    await resubscribeContact(shop, email).catch((err) =>
+    await resubscribeContact(shop, email, "buyer_link").catch((err) =>
       console.error("[unsubscribe] undo resubscribe failed:", err.message),
     );
     return page(
@@ -208,7 +208,7 @@ export const action = async ({ request }) => {
 
   // Canonical path: writes the EmailSuppression row (the gate every worker
   // checks) and mirrors the status onto the Contact record.
-  await unsubscribeContact(shop, email);
+  await unsubscribeContact(shop, email, "unsubscribe", "buyer_link");
 
   await evaluateExitCriteria(shop, email, "unsubscribed").catch((err) =>
     console.error("[unsubscribe] exit-criteria failed:", err.message),

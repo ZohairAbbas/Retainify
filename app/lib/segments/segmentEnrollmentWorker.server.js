@@ -53,8 +53,10 @@ async function computeInputHash(shop, segmentKey) {
     isSystemSegmentId(segmentKey)
       ? 0
       : prisma.segmentMembership.count({ where: { segmentId: segmentKey } }),
+    // Phone-only checkouts are stored for Growzar and belong to no contact,
+    // so they cannot move a segment.
     prisma.abandonedCart.count({
-      where: { shop, abandonedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },
+      where: { shop, abandonedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) }, customerEmail: { not: "" } },
     }),
     prisma.journeyJob.count({
       where: { shop, updatedAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) } },

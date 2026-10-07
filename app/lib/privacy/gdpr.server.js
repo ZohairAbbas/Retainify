@@ -20,6 +20,7 @@
 import prisma from "../../db.server.js";
 import { normalizeEmail } from "../contacts/contacts.server.js";
 import { deleteLocal, isLocalAsset } from "../media/storage.server.js";
+import { recordCustomerTombstones } from "../growzar/tombstones.server.js";
 
 /** Case-insensitive equality filter for an email column. */
 function sameEmail(email) {
@@ -221,6 +222,20 @@ export async function redactCustomer(shop, rawEmail) {
     deleted[key] = result?.count ?? 0;
   };
 
+  // Growzar's feeds must report these rows as deleted rather than let them
+  // vanish (API-CONTRACT §6.2), and after the deletes below there is nothing
+  // left to read the ids from. Ids only — nothing that identifies the person.
+  // Awaited and allowed to throw: an erasure that Growzar never hears about
+  // leaves this shopper's rows in Growzar's copy, which is the same failure
+  // as not erasing them here.
+  await recordCustomerTombstones(shop, email, contact?.id ?? null);
+
+  // The consent history is about this person too. ConsentEvent has no foreign
+  // key to Contact (it outlives a soft delete on purpose), so it goes here.
+  if (contact?.id) {
+    count("consentEvents", await prisma.consentEvent.deleteMany({ where: { shop, contactId: contact.id } }));
+  }
+
   // Enrollment deletion cascades JourneyJob, PushJob and WhatsappJob.
   count(
     "journeyEnrollments",
@@ -292,6 +307,9 @@ export async function redactShop(shop) {
   await run("segmentEntryLogs", prisma.segmentEntryLog.deleteMany(where));
   // Contact and Tag both cascade ContactTag.
   await run("contacts", prisma.contact.deleteMany(where));
+  await run("consentEvents", prisma.consentEvent.deleteMany(where));
+  // The shop is gone, so its feeds are too (Growzar gets 410 from here on).
+  await run("growzarTombstones", prisma.growzarTombstone.deleteMany(where));
   await run("tags", prisma.tag.deleteMany(where));
   await run("abandonedCarts", prisma.abandonedCart.deleteMany(where));
   await run("emailSuppressions", prisma.emailSuppression.deleteMany(where));

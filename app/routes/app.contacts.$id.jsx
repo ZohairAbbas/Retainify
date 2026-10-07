@@ -146,13 +146,13 @@ export const action = async ({ request, params }) => {
 
   if (intent === "unsubscribe") {
     const contact = await getContactById(shop, contactId);
-    if (contact) await unsubscribeContact(shop, contact.email);
+    if (contact) await unsubscribeContact(shop, contact.email, "unsubscribe", "merchant");
     return { ok: true };
   }
 
   if (intent === "resubscribe") {
     const contact = await getContactById(shop, contactId);
-    if (contact) await resubscribeContact(shop, contact.email);
+    if (contact) await resubscribeContact(shop, contact.email, "merchant");
     return { ok: true };
   }
 
@@ -173,7 +173,7 @@ export const action = async ({ request, params }) => {
     // precisely the people a merchant most needs to be able to stop.
     const phoneNumber = sub?.phoneNumber || contact?.phone || "";
     if (!phoneNumber) return { ok: false, error: "This contact has no WhatsApp number." };
-    await recordOptOut({ shop, phoneNumber, reason: "opt_out" });
+    await recordOptOut({ shop, phoneNumber, reason: "opt_out", source: "merchant" });
     return { ok: true };
   }
 

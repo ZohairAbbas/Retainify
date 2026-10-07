@@ -1,4 +1,5 @@
 import prisma from "../../db.server.js";
+import { withConsentContext } from "../consent/context.server.js";
 
 const SUPPRESSION_REASON_TO_STATUS = {
   unsubscribe: "unsubscribed",
@@ -49,7 +50,9 @@ export async function runContactsBackfillIfNeeded(shop) {
   // overwrite source/status downward).
 
   // 1. PopupSignup
-  await prisma.$executeRaw`
+  // The one insert that can create a contact already subscribed (a confirmed
+  // popup signup), so the one that needs to say where that consent came from.
+  await withConsentContext({ source: "contacts_backfill" }, (tx) => tx.$executeRaw`
     INSERT INTO "Contact" (
       "id", "shop", "email", "name", "firstSeenAt", "lastSeenAt", "source",
       "subscriptionStatus", "marketingConsentAt", "createdAt", "updatedAt"
@@ -73,7 +76,7 @@ export async function runContactsBackfillIfNeeded(shop) {
       "lastSeenAt" = GREATEST("Contact"."lastSeenAt", EXCLUDED."lastSeenAt"),
       "firstSeenAt" = LEAST("Contact"."firstSeenAt", EXCLUDED."firstSeenAt"),
       "marketingConsentAt" = COALESCE("Contact"."marketingConsentAt", EXCLUDED."marketingConsentAt")
-  `;
+  `);
 
   // 2. AbandonedCart
   await prisma.$executeRaw`
@@ -192,10 +195,13 @@ export async function runContactsBackfillIfNeeded(shop) {
   for (const sup of suppressions) {
     const status = SUPPRESSION_REASON_TO_STATUS[sup.reason] || "unsubscribed";
     const email = sup.email.trim().toLowerCase();
-    await prisma.contact.updateMany({
-      where: { shop, email },
-      data: { subscriptionStatus: status },
-    });
+    const reason = sup.reason === "bounce" || sup.reason === "complaint" ? sup.reason : "unsubscribe";
+    await withConsentContext({ reason, source: "contacts_backfill" }, (tx) =>
+      tx.contact.updateMany({
+        where: { shop, email },
+        data: { subscriptionStatus: status },
+      }),
+    );
   }
 
   await prisma.shopSettings.upsert({

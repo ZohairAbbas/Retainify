@@ -15,6 +15,7 @@
  * process.loadEnvFile overwrites a variable that is already set, so .env can no
  * longer win.
  */
+/* global process */
 import fs from "node:fs";
 import path from "node:path";
 

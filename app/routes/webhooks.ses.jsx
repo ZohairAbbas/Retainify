@@ -161,7 +161,7 @@ async function handleSesEvent(event) {
       // echo back whatever casing the envelope carried, and the suppression
       // lookup on the send path uses the normalized Contact email — writing a
       // mixed-case row here would leave a suppression that never matches.
-      await unsubscribeContact(job.shop, toAddr, reason).catch((err) =>
+      await unsubscribeContact(job.shop, toAddr, reason, "provider_webhook").catch((err) =>
         console.error("[ses-webhook] suppression write failed:", err.message),
       );
       console.log(`[ses-webhook] suppressed ${toAddr} on ${job.shop} reason=${reason} via messageId=${messageId}`);

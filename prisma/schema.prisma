@@ -233,6 +233,14 @@ model ShopSettings {
   // Heartbeat for the above: when the current run last wrote state. Null on a
   // shop that has never run one.
   ordersBackfillRunAt                DateTime?
+  // The shop's own country, currency and timezone as Shopify reports them,
+  // cached for Growzar's read API (lib/growzar/shop-facts.server.js). Separate
+  // from storeTimezone, which is a merchant setting that defaults to "UTC" and
+  // was never set on most shops. Null until first fetched.
+  shopifyCountry                     String?
+  shopifyCurrency                    String?
+  shopifyTimezone                    String?
+  shopifyFactsAt                     DateTime?
   createdAt                          DateTime  @default(now())
   updatedAt                          DateTime  @updatedAt
 }
@@ -303,6 +311,12 @@ model Contact {
   // from email subscriptionStatus (a contact can be email-subscribed but not
   // WhatsApp-opted-in, or vice versa). WhatsappSubscription holds the detail.
   phone              String?
+  // The same number in E.164 with a leading "+", parsed with libphonenumber
+  // against the shop's country (lib/phone/e164.server.js). `phone` above stays
+  // as the permissive digits-only form the WhatsApp paths already rely on; this
+  // one is the join key other apps can match. Null when the number cannot be
+  // parsed as a valid number for that country — never a guess.
+  phoneE164          String?
   whatsappStatus     String    @default("never_opted_in") // subscribed | unsubscribed | invalid | never_opted_in
   whatsappOptInAt    DateTime?
   // ── Purchase facts, denormalized from Order ────────────────────────────
@@ -406,6 +420,9 @@ model Contact {
   @@index([shop, openRate])
   @@index([shop, clickRate])
   @@index([shop, lastEmailOpenedAt])
+  // Growzar's /consent feed reads contacts in (updatedAt, id) order per shop.
+  @@index([shop, updatedAt])
+  @@index([shop, phoneE164])
 }
 
 // Merchant-defined tag — per shop. `nameKey` is the lowercased uniqueness key;
@@ -621,10 +638,19 @@ model AbandonedCart {
   checkoutToken    String
   checkoutId       String
   cartToken        String    @default("")
+  // "" for a checkout that carried only a phone. Those are stored so the cart
+  // can be joined to a buyer by phone, but nothing else acts on them: contact
+  // creation, cart rollups and flow enrollment all still require an email.
   customerEmail    String
   customerName     String    @default("")
+  // The checkout's phone as the buyer typed it, and its E.164 form (null when
+  // it does not parse for the shop's country).
+  phone            String?
+  phoneE164        String?
   totalPrice       Float
-  currency         String    @default("USD")
+  // From the checkout payload, or null. It used to default to "USD", which
+  // turned a missing currency into a confident wrong one.
+  currency         String?
   lineItemsJson    String // JSON serialised line items
   recoveryUrl      String
   abandonedAt      DateTime  @default(now())
@@ -636,6 +662,7 @@ model AbandonedCart {
   @@unique([shop, checkoutToken])
   @@index([shop, customerEmail])
   @@index([shop, recoveredAt])
+  @@index([shop, updatedAt])
 }
 
 // Email suppression / unsubscribe list
@@ -675,19 +702,19 @@ model PopupSignup {
 
 // Per-shop popup widget configuration
 model PopupSettings {
-  id          String   @id @default(cuid())
-  shop        String   @unique
-  enabled     Boolean  @default(true)
-  template    String   @default("editorial")
-  config      Json?
+  id             String    @id @default(cuid())
+  shop           String    @unique
+  enabled        Boolean   @default(true)
+  template       String    @default("editorial")
+  config         Json?
   // Legacy columns — kept during storefront rollout, dropped in follow-up migration.
-  headline    String   @default("Wait — don't go yet!")
-  bodyText    String   @default("Enter your email and get 10% off your first order.")
-  buttonText  String   @default("Get my discount")
-  brandColor  String   @default("#000000")
-  logoUrl     String   @default("")
-  discountPct Int      @default(10)
-  delayMs     Int      @default(3000)
+  headline       String    @default("Wait — don't go yet!")
+  bodyText       String    @default("Enter your email and get 10% off your first order.")
+  buttonText     String    @default("Get my discount")
+  brandColor     String    @default("#000000")
+  logoUrl        String    @default("")
+  discountPct    Int       @default(10)
+  delayMs        Int       @default(3000)
   // Website embed (workspaces without Shopify). siteKey is public — it sits
   // in the merchant's page source — and only identifies the popup; the
   // domains list is what stops another site from loading it.
@@ -696,8 +723,8 @@ model PopupSettings {
   // Last time the embed loaded on an allowed domain, for the install check.
   lastSeenAt     DateTime?
   lastSeenOrigin String    @default("")
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 }
 
 // Flexible journey engine — a playbook (welcome, win-back, post-purchase, etc.)
@@ -764,6 +791,7 @@ model Journey {
   @@index([trigger, status, lastEnrollmentAt])
   // Drives the broadcast dispatcher's "which sends are due" query.
   @@index([trigger, status, scheduledFor])
+  @@index([shop, updatedAt])
 }
 
 // One step within a journey (email send, time delay, push, or exit)
@@ -945,6 +973,11 @@ model JourneyEnrollment {
   // back on the step they were actually standing on.
   currentStepKey String?
   nextRunAt      DateTime?
+  // Growzar's /enrollments feed syncs on this. Backfilled at creation to
+  // coalesce(completedAt, enrolledAt). Also moved by the Contact trigger when
+  // the buyer behind the enrollment changes (phone filled, contact deleted or
+  // restored), because the feed returns that buyer.
+  updatedAt      DateTime  @updatedAt
 
   journey      Journey            @relation(fields: [journeyId], references: [id], onDelete: Cascade)
   jobs         JourneyJob[]
@@ -956,6 +989,7 @@ model JourneyEnrollment {
   @@index([journeyId])
   // Drives the advance worker's "which enrollments are due" claim.
   @@index([nextRunAt])
+  @@index([shop, updatedAt])
 }
 
 // Scheduled send per step per enrollment
@@ -1056,6 +1090,8 @@ model PushJob {
   @@index([shop, clickedAt])
   // Same reason as JourneyJob: attribution walks one buyer's clicks per order.
   @@index([enrollmentId, clickedAt])
+  // Growzar's /messages feed reads each job table in (updatedAt, id) order.
+  @@index([shop, updatedAt])
 }
 
 // Per-shop WhatsApp Business Account, connected via Meta Embedded Signup.
@@ -1069,11 +1105,11 @@ model PushJob {
 // one. This row holds only the granted token, and is deleted the moment a
 // choice is made.
 model WhatsappConnectPending {
-  id             String   @id @default(cuid())
-  shop           String   @unique
+  id             String    @id @default(cuid())
+  shop           String    @unique
   accessTokenEnc String
   tokenExpiresAt DateTime?
-  createdAt      DateTime @default(now())
+  createdAt      DateTime  @default(now())
 }
 
 model WhatsappAccount {
@@ -1191,6 +1227,8 @@ model WhatsappJob {
   // Attribution reads these the same way it reads JourneyJob and PushJob.
   @@index([shop, clickedAt])
   @@index([enrollmentId, clickedAt])
+  // Growzar's /messages feed reads each job table in (updatedAt, id) order.
+  @@index([shop, updatedAt])
 }
 
 // Suppression list for WhatsApp — parallel to EmailSuppression.
@@ -1305,4 +1343,51 @@ model GrowzarOutboundEvent {
 
   @@index([status, nextAttemptAt])
   @@index([shop, topic])
+}
+
+// One change to a contact's consent on one channel. Append-only.
+//
+// Consent used to be current state only (Contact.subscriptionStatus,
+// whatsappStatus, pushEnabled), so nobody could say when or why a buyer opted
+// out. Rows are written by a Postgres trigger on Contact, not by app code (see
+// migration 20261007110000_g5_consent_events and lib/consent/context.server.js):
+// about fifteen writers change these fields, some in raw SQL or createMany, and
+// a trigger is the only place none of them can bypass. Writers say why through
+// withConsentContext(); one that does not still produces a row, with source
+// "unattributed" and the reason inferred from the new state.
+//
+// History starts at deploy. scripts/growzar-g5-backfill.mjs seeds one
+// source = "baseline" row per contact and channel holding the state at that
+// moment, so the record is complete from day one.
+model ConsentEvent {
+  id        String   @id @default(cuid())
+  shop      String
+  contactId String
+  channel   String // email | whatsapp | push
+  from      String // the channel's previous state
+  to        String // email: subscribed | unsubscribed | bounced | complained | never_opted_in; whatsapp: subscribed | unsubscribed | invalid | never_opted_in; push: subscribed | unsubscribed | never_opted_in
+  // opt_in | unsubscribe | bounce | complaint | blocked | invalid | shopify_sync
+  // | import | gdpr; null only on a baseline row
+  reason    String?
+  source    String // where the change came from (checkout, popup, buyer_link, merchant, provider_webhook, ...)
+  createdAt DateTime @default(now())
+
+  @@index([shop, createdAt, id])
+  @@index([contactId])
+}
+
+// Rows that were hard-deleted, kept as ids so Growzar's feeds can report them
+// (API-CONTRACT §6.2: a delete is a tombstone, never silent absence). Written
+// by GDPR redaction just before it deletes, so a customers/redact that removes
+// a contact, their enrollments, their messages and their carts is visible as
+// such. Ids only: nothing here identifies the person.
+model GrowzarTombstone {
+  id        String   @id @default(cuid())
+  shop      String
+  feed      String // contacts | enrollments | messages | checkouts | journeys
+  rowId     String
+  deletedAt DateTime @default(now())
+
+  @@unique([shop, feed, rowId])
+  @@index([shop, feed, deletedAt])
 }

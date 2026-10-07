@@ -95,6 +95,7 @@ export async function recordOptIn({ shop, phoneNumber, contactEmail, optInMethod
       whatsappStatus: "subscribed",
       whatsappOptInAt: now,
       revive: true,
+      consent: { reason: "opt_in", source: `whatsapp_${method}` },
     }).catch(() => {});
   }
 
@@ -113,11 +114,13 @@ export async function confirmOptIn(shop, phoneNumber) {
   });
 }
 
+const OPT_OUT_CONSENT_REASON = { opt_out: "unsubscribe", blocked: "blocked", invalid: "invalid" };
+
 /**
  * Record a WhatsApp opt-out — flips the subscription, adds suppression, and
  * downgrades the linked contact.
  */
-export async function recordOptOut({ shop, phoneNumber, reason = "opt_out" }) {
+export async function recordOptOut({ shop, phoneNumber, reason = "opt_out", source = "unattributed" }) {
   const phone = normalizePhone(phoneNumber);
   if (!shop || !phone) return null;
   const now = new Date();
@@ -144,6 +147,9 @@ export async function recordOptOut({ shop, phoneNumber, reason = "opt_out" }) {
       shop,
       email: sub.contactEmail,
       whatsappStatus: "unsubscribed",
+      // Suppression reasons map onto the consent reason codes one to one,
+      // except a STOP, which is an unsubscribe.
+      consent: { reason: OPT_OUT_CONSENT_REASON[reason] || "unsubscribe", source },
     }).catch(() => {});
   }
 

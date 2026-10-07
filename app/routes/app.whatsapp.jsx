@@ -275,7 +275,7 @@ export const action = async ({ request }) => {
   if (intent === "remove-subscriber") {
     const phoneNumber = String(fd.get("phoneNumber") || "");
     if (!phoneNumber) return { ok: false, error: "Missing phone number." };
-    await recordOptOut({ shop, phoneNumber, reason: "opt_out" });
+    await recordOptOut({ shop, phoneNumber, reason: "opt_out", source: "merchant" });
     return { ok: true, removed: true };
   }
 
