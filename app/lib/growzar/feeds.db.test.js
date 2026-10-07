@@ -130,6 +130,12 @@ test("a direct-workspace account answers shop_not_connected, as does a shop with
   assert.equal(gone.status, 410);
 });
 
+test("an install with a session but no Account row is connected, as several live shops are", async () => {
+  await prisma.account.deleteMany({ where: { key: SHOP } });
+  const { status } = await get("journeys");
+  assert.equal(status, 200);
+});
+
 test("status lists every feed as a capability", async () => {
   // The status route itself is .jsx, which node --test cannot import; it
   // returns this list as-is.

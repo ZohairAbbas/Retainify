@@ -18,20 +18,33 @@
 import prisma from "../../db.server.js";
 import { phoneToE164 } from "../phone/e164.js";
 import { getShopFacts } from "./shop-facts.server.js";
+import { canonicalShop } from "./config.js";
 
 const BATCH = 500;
 
 /**
- * Shops to fill: Shopify installs only (Account.kind = "shopify"). Direct
- * workspaces have no Shopify country, and the internal tenant is not a store.
+ * Shops to fill: every myshopify shop holding contacts that is not a direct
+ * workspace — the same rule the feeds use to decide a shop is a store.
+ *
+ * Not Account.kind = "shopify": five live installs (one of them the busiest
+ * email sender) have an offline session and no Account row at all, and would
+ * have been skipped. A direct workspace or the internal tenant never has a
+ * myshopify key, and an explicit direct Account is excluded besides.
  */
 export async function shopifyShops(only = null) {
-  const accounts = await prisma.account.findMany({
-    where: { kind: "shopify", ...(only ? { key: only } : {}) },
-    select: { key: true },
-    orderBy: { key: "asc" },
+  const rows = await prisma.contact.findMany({
+    where: { shop: only ? only : { endsWith: ".myshopify.com" } },
+    distinct: ["shop"],
+    select: { shop: true },
+    orderBy: { shop: "asc" },
   });
-  return accounts.map((a) => a.key);
+  const shops = rows.map((r) => r.shop).filter((s) => canonicalShop(s) === s);
+  const direct = await prisma.account.findMany({
+    where: { key: { in: shops }, kind: { not: "shopify" } },
+    select: { key: true },
+  });
+  const excluded = new Set(direct.map((a) => a.key));
+  return shops.filter((s) => !excluded.has(s));
 }
 
 /**

@@ -75,9 +75,11 @@ test("the consent baseline is one row per contact and channel, holding today's s
   assert.deepEqual((await base(b.id)).push, ["unsubscribed", "unsubscribed", null]);
 });
 
-test("only Shopify installs are filled", async () => {
+test("shops are every myshopify shop with contacts, with or without an Account row, never a direct one", async () => {
+  await prisma.contact.create({ data: { shop: SHOP, email: "s@example.test" } });
+  assert.deepEqual(await shopifyShops(SHOP), [SHOP], "no Account row, as five live installs have");
   await prisma.account.create({ data: { key: SHOP, name: "T", kind: "shopify" } });
-  assert.ok((await shopifyShops(SHOP)).includes(SHOP));
+  assert.deepEqual(await shopifyShops(SHOP), [SHOP]);
   await prisma.account.update({ where: { key: SHOP }, data: { kind: "direct" } });
   assert.deepEqual(await shopifyShops(SHOP), []);
 });
