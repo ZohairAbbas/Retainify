@@ -13,6 +13,7 @@
  * The queries here are the real ones the UI calls, not hand-written WHEREs —
  * a test that scopes its own query would pass while the product leaked.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

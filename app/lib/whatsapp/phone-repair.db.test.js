@@ -18,6 +18,7 @@
  * "dry run writes nothing" is a claim about the actual entry point — including
  * its argv handling — and importing a function would test something else.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";

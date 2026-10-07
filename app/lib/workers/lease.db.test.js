@@ -13,6 +13,7 @@
  * two holders racing for the same name at the same instant, and a holder that
  * overran its TTL trying to release a lease somebody else now owns.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

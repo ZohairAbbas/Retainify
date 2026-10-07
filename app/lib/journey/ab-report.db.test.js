@@ -9,6 +9,7 @@
  * rows, that the walk actually sends people down an arm, and that the report
  * counts the whole branch rather than one message.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

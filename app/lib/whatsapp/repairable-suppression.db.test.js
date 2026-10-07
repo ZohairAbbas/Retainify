@@ -23,6 +23,7 @@
  * subscription status and the contact flag are all database writes, and "did not
  * write" is exactly the property under test.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";

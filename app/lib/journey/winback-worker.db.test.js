@@ -18,6 +18,7 @@
  * Shop health is stubbed to live: this is a poller, so it checks, and without a
  * stub every test here would depend on a Shopify probe.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

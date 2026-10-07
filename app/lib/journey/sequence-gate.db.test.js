@@ -14,6 +14,7 @@
  * the Yes branch, so "every email step with a lower number" sweeps in messages
  * this contact was never on the path for.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

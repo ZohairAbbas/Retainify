@@ -17,6 +17,7 @@
  * settings. That is the test that would catch a catastrophic regression, so it
  * is here rather than assumed.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

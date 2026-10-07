@@ -16,6 +16,7 @@
  *      alone — both said "manual" — and are told apart only by the id the
  *      backfill mints. A test that cannot see real ids cannot see the bug.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

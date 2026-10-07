@@ -19,6 +19,7 @@
  * Every case here stops before rawProbe(): a shop with no offline session is
  * settled locally, so none of these tests reach the network.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

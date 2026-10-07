@@ -29,6 +29,7 @@
  * dates, activity exactly at a stage boundary, no signals at all, a cart
  * abandoned either side of the 24-hour active window.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

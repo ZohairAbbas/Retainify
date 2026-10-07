@@ -9,6 +9,7 @@
  * without a job or an error, and a rule naming a step that has moved can never
  * be true. None of them look wrong on the canvas.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

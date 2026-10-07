@@ -18,6 +18,7 @@
  * unreachable, because unreachable states are exactly what this file has to
  * keep unreachable.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

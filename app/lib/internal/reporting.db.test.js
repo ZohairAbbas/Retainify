@@ -3,6 +3,7 @@
  *
  * Run: node --test app/lib/internal/reporting.db.test.js  (DATABASE_URL → scratch DB)
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

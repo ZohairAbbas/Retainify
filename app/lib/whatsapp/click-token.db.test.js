@@ -8,6 +8,7 @@
  * separate files — so the round trip is exactly the kind of thing that breaks
  * silently, taking every WhatsApp order with it.
  */
+import "../../test-support/db-guard.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { clickToken } from "./whatsapp-worker.server.js";
