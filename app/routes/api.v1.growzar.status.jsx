@@ -5,8 +5,8 @@
  *   Authorization: Bearer <GROWZAR_PLATFORM_KEY>
  *   X-Growzar-Shop, X-Growzar-Timestamp, X-Growzar-Signature   (§2.1)
  *
- * `capabilities` is empty in Phase 1 on purpose: Growzar shows a locked section
- * with a preview for Retainify until the R2 read API lands and adds verbs here.
+ * `capabilities` lists the read feeds this build serves (Phase 5); Growzar opens
+ * a section only for the verbs listed here.
  *
  * `installed` means Shopify has an offline session for the shop — the one
  * app/uninstalled deletes. That is our own record, not a live probe of Shopify
@@ -16,6 +16,7 @@
 import prisma from "../db.server.js";
 import { authenticateGrowzarRequest, growzarError } from "../lib/growzar/platform-auth.js";
 import { APP_VERSION } from "../lib/growzar/version.server.js";
+import { GROWZAR_CAPABILITIES } from "../lib/growzar/capabilities.js";
 
 export const loader = async ({ request }) => {
   const auth = authenticateGrowzarRequest(request);
@@ -38,7 +39,7 @@ export const loader = async ({ request }) => {
       installed,
       appVersion: APP_VERSION,
       shop: auth.shop,
-      capabilities: [],
+      capabilities: GROWZAR_CAPABILITIES,
       planRelevantFeatures: [],
     }),
     { status: 200, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } },

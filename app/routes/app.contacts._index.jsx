@@ -263,7 +263,7 @@ export const action = async ({ request }) => {
   if (intent === "unsubscribe") {
     const id = String(fd.get("contactId") || "");
     const email = String(fd.get("email") || "");
-    await unsubscribeContact(shop, email || id);
+    await unsubscribeContact(shop, email || id, "unsubscribe", "merchant");
     return { ok: true };
   }
 
@@ -281,7 +281,7 @@ export const action = async ({ request }) => {
   if (intent === "bulk_unsubscribe") {
     const emails = await resolveBulkEmails();
     if (!emails.length) return { ok: false, error: "No contacts selected." };
-    const count = await bulkUnsubscribe(shop, emails);
+    const count = await bulkUnsubscribe(shop, emails, "merchant");
     return { ok: true, bulk: "unsubscribe", count };
   }
 
@@ -306,7 +306,7 @@ export const action = async ({ request }) => {
 
   if (intent === "resubscribe") {
     const email = String(fd.get("email") || "");
-    await resubscribeContact(shop, email);
+    await resubscribeContact(shop, email, "merchant");
     return { ok: true };
   }
 

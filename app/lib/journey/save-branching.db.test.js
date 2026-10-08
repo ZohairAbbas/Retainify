@@ -9,6 +9,7 @@
  * and read back as a graph, and a mistake there is invisible until a contact
  * takes a branch that does not exist.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

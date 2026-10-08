@@ -35,6 +35,7 @@
  */
 import { Prisma } from "@prisma/client";
 import prisma from "../../db.server.js";
+import { withConsentContext } from "../consent/context.server.js";
 import { normalizeEmail } from "./contacts.server.js";
 
 /** The zeroed row for a contact with no send history at all. */
@@ -148,8 +149,10 @@ export async function recalcContactEmailStats(shop, rawEmail) {
  *
  * @param {string} shop
  * @param {string} rawEmail
+ * @param {{ reason?: string|null, source: string }} [consent] why, for the
+ *   ConsentEvent written when this flips the flag
  */
-export async function recalcContactPushEnabled(shop, rawEmail) {
+export async function recalcContactPushEnabled(shop, rawEmail, consent = { reason: null, source: "unattributed" }) {
   const email = normalizeEmail(rawEmail);
   if (!shop || !email) return null;
 
@@ -157,6 +160,8 @@ export async function recalcContactPushEnabled(shop, rawEmail) {
     where: { shop, contactEmail: email, isActive: true },
   });
   const pushEnabled = active > 0;
-  await prisma.contact.updateMany({ where: { shop, email }, data: { pushEnabled } });
+  await withConsentContext(consent, (tx) =>
+    tx.contact.updateMany({ where: { shop, email }, data: { pushEnabled } }),
+  );
   return pushEnabled;
 }

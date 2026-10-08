@@ -274,7 +274,7 @@ async function handleEvent(eventType, messageId, data) {
     // back whatever casing the envelope carried, and the suppression lookup on
     // the send path uses the normalized Contact email — writing a mixed-case row
     // here would leave a suppression that never matches.
-    await unsubscribeContact(job.shop, toAddr, reason).catch((err) =>
+    await unsubscribeContact(job.shop, toAddr, reason, "provider_webhook").catch((err) =>
       console.error("[resend-webhook] suppression write failed:", err.message),
     );
     console.log(`[resend-webhook] suppressed ${toAddr} on ${job.shop} reason=${reason} via messageId=${messageId}`);

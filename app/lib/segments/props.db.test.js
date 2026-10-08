@@ -10,6 +10,7 @@
  * fixtures deliberately include a contact with no properties at all, one with
  * an empty bag, and one with an explicit JSON null.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

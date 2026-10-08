@@ -22,6 +22,7 @@ import { settleEnrollmentIfFinished } from "../journey/journey-queue.server.js";
 import { checkStepSequence, CANCEL, WAIT, SEQUENCE_RECHECK_MS } from "../journey/sequence-gate.server.js";
 import { decideFailureOutcome, MAX_ATTEMPTS, isStale, PERMANENT } from "../journey/failure-policy.server.js";
 import { toE164, isRepairableFormat } from "../contacts/contacts.server.js";
+import { withConsentContext } from "../consent/context.server.js";
 import { sendWhatsapp } from "./index.server.js";
 
 async function claimDueWhatsappJobs(limit = 20) {
@@ -294,12 +295,12 @@ async function processWhatsappJob(job) {
         data: { status: "invalid" },
       }).catch(() => {});
     }
-    await prisma.contact
-      .updateMany({
+    await withConsentContext({ reason: "invalid", source: "whatsapp_send" }, (tx) =>
+      tx.contact.updateMany({
         where: { shop: job.shop, email: enrollment.contactEmail },
         data: { whatsappStatus: "invalid" },
-      })
-      .catch(() => {});
+      }),
+    ).catch(() => {});
     await markWhatsappJobDone(job.id, { failedAt: new Date(), lastError: result.error || "invalid recipient" });
     console.warn(`[whatsapp-worker] job=${job.id} permanent failure — suppressed ${phoneNumber}`);
     return;

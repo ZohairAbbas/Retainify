@@ -3,6 +3,7 @@
  *
  * Run: node --test app/lib/analytics/email-breakdown.db.test.js  (scratch DB)
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

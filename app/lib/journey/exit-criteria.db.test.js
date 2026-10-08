@@ -13,6 +13,7 @@
  * internal flow exiting on "setup_completed" silently exited nobody: the drip
  * kept nagging users who had already finished setting up.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

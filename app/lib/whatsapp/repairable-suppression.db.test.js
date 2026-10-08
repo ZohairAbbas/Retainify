@@ -23,6 +23,7 @@
  * subscription status and the contact flag are all database writes, and "did not
  * write" is exactly the property under test.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
@@ -179,6 +180,7 @@ async function cleanupShop(shop) {
   await prisma.whatsappSuppression.deleteMany({ where: { shop } });
   await prisma.whatsappSubscription.deleteMany({ where: { shop } });
   await prisma.whatsappAccount.deleteMany({ where: { shop } });
+  await prisma.consentEvent.deleteMany({ where: { shop } });
   await prisma.contact.deleteMany({ where: { shop } });
   await prisma.shopSettings.deleteMany({ where: { shop } });
   await prisma.account.deleteMany({ where: { key: shop } });
@@ -252,6 +254,13 @@ test("a rejection on a correctly-stored number still suppresses, as it must", as
     where: { shop_email: { shop, email: EMAIL } },
   });
   assert.equal(contact.whatsappStatus, "invalid");
+
+  // Consent history (Phase 5): the worker is one of the writers, and says why.
+  const events = await prisma.consentEvent.findMany({ where: { contactId: contact.id, channel: "whatsapp", to: "invalid" } });
+  assert.deepEqual(
+    events.map((e) => [e.from, e.to, e.reason, e.source]),
+    [["subscribed", "invalid", "invalid", "whatsapp_send"]],
+  );
 
   const doneJob = await prisma.whatsappJob.findUnique({ where: { id: job.id } });
   assert.equal(doneJob.status, "done", "the existing suppression path marks the job done");

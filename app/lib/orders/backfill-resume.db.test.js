@@ -20,6 +20,7 @@
  * through the cursor the code actually sends back — not merely asserted about
  * the status column.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

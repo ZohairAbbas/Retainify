@@ -20,6 +20,7 @@
  * recording and the clearing are database writes keyed on a prefix, and the
  * prefix is what keeps an unrelated connect-time note from being wiped.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";

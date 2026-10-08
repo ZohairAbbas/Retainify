@@ -18,6 +18,7 @@
  * unsigned request is refused, and a signed one acts on the shop in the
  * signature rather than the one in the body.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";

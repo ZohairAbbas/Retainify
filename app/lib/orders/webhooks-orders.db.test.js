@@ -27,6 +27,7 @@
  * stubbed — refunds/create carries no order, so the refetch is the behaviour
  * under test, not a dependency to mock away.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHmac } from "node:crypto";

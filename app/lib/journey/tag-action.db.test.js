@@ -10,6 +10,7 @@
  * that the flow carries on regardless, and a rule like that is only safe if it
  * is actually implemented rather than assumed.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

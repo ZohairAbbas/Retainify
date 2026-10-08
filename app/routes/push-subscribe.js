@@ -69,7 +69,7 @@ export const action = async ({ request }) => {
   if (contactEmail) {
     // Only reached for an already-confirmed contact, so this can no longer be
     // used to set pushEnabled on someone who never opted in.
-    recalcContactPushEnabled(shop, contactEmail).catch((err) =>
+    recalcContactPushEnabled(shop, contactEmail, { reason: "opt_in", source: "push_subscribe" }).catch((err) =>
       console.error("[push-subscribe] pushEnabled rollup failed:", err.message),
     );
   }

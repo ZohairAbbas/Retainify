@@ -18,6 +18,7 @@
  * apps below and every person on a test address, and all of it is removed
  * afterwards. Point DATABASE_URL at a scratch schema to keep it off production.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

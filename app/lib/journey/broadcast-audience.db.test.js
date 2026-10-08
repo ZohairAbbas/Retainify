@@ -23,6 +23,7 @@
  * So these tests pin the rule to processWhatsappJob's own recipient
  * resolution, case by case, rather than to anything this module invented.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

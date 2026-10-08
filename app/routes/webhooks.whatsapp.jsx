@@ -146,7 +146,7 @@ async function handleStatus(status, phoneNumberId) {
     const recipient = normalize(status.recipient_id);
     const permanent = errs.some((e) => isPermanentError(e?.code));
     if (job && recipient && permanent) {
-      await recordOptOut({ shop: job.shop, phoneNumber: recipient, reason: "blocked" }).catch(() => {});
+      await recordOptOut({ shop: job.shop, phoneNumber: recipient, reason: "blocked", source: "whatsapp_webhook" }).catch(() => {});
     }
     return;
   }
@@ -188,7 +188,7 @@ async function handleInbound(message, phoneNumberId) {
   // templates, was being silently ignored and the contact stayed subscribed.
   const text = optOutCandidate(message);
   if (shop && text && STOP_KEYWORDS.has(text)) {
-    await recordOptOut({ shop, phoneNumber: from, reason: "opt_out" }).catch(() => {});
+    await recordOptOut({ shop, phoneNumber: from, reason: "opt_out", source: "whatsapp_webhook" }).catch(() => {});
   }
 
   await recordQuickReply(message);

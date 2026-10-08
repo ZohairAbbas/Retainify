@@ -25,6 +25,9 @@
  */
 import prisma from "../../db.server.js";
 import { normalizeEmail, normalizePhone } from "./contacts.server.js";
+import { withConsentContext } from "../consent/context.server.js";
+import { phoneToE164 } from "../phone/e164.js";
+import { getShopCountry } from "../growzar/shop-facts.server.js";
 import { coerceProperties, listProperties } from "./properties.server.js";
 
 export const MAX_ROWS_PER_BATCH = 500;
@@ -72,7 +75,10 @@ export async function importContactRows(shop, rows, { consent = false } = {}) {
       // Later rows fill gaps rather than clobbering — first occurrence wins on
       // conflict, which matches how a human reads a spreadsheet top-down.
       existing.name ||= String(raw.name || "").trim();
-      existing.phone ||= normalizePhone(raw.phone);
+      if (!existing.phone && normalizePhone(raw.phone)) {
+        existing.phone = normalizePhone(raw.phone);
+        existing.phoneInput = raw.phone;
+      }
       existing.tags = [...new Set([...existing.tags, ...tags])];
       existing.props = { ...(raw.props || {}), ...existing.props };
       result.skippedDuplicate++;
@@ -82,6 +88,9 @@ export async function importContactRows(shop, rows, { consent = false } = {}) {
       email,
       name: String(raw.name || "").trim(),
       phone: normalizePhone(raw.phone),
+      // As typed, for E.164: normalizePhone drops the "+" that carries the
+      // country.
+      phoneInput: normalizePhone(raw.phone) ? raw.phone : "",
       tags,
       props: raw.props && typeof raw.props === "object" ? raw.props : {},
     });
@@ -92,6 +101,14 @@ export async function importContactRows(shop, rows, { consent = false } = {}) {
 
   const now = new Date();
   const status = consent ? "subscribed" : "never_opted_in";
+
+  const country = await getShopCountry(shop);
+  for (const row of byEmail.values()) {
+    row.phoneE164 = row.phoneInput ? phoneToE164(row.phoneInput, country) : null;
+  }
+  // Every consent this import grants is recorded as an import, whichever
+  // statement makes it.
+  const consentCtx = { reason: "import", source: "csv_import" };
 
   // Property values are coerced against the shop's definitions, which also
   // drops any key that isn't a defined property — a CSV cannot inject arbitrary
@@ -121,12 +138,13 @@ export async function importContactRows(shop, rows, { consent = false } = {}) {
   // ── Insert the new ones ─────────────────────────────────────────────────
   const fresh = emails.filter((e) => !existingByEmail.has(e)).map((e) => byEmail.get(e));
   if (fresh.length) {
-    await prisma.contact.createMany({
+    await withConsentContext(consentCtx, (tx) => tx.contact.createMany({
       data: fresh.map((r) => ({
         shop,
         email: r.email,
         name: r.name,
         phone: r.phone || null,
+        phoneE164: r.phone ? r.phoneE164 : null,
         source: "csv_import",
         firstSeenAt: now,
         lastSeenAt: now,
@@ -136,7 +154,7 @@ export async function importContactRows(shop, rows, { consent = false } = {}) {
       })),
       // Guards against a concurrent import of the same file.
       skipDuplicates: true,
-    });
+    }));
     result.imported += fresh.length;
   }
 
@@ -155,7 +173,10 @@ export async function importContactRows(shop, rows, { consent = false } = {}) {
     // Only fill gaps. An import must never overwrite a name or phone the
     // merchant curated in the app.
     if (row.name && !prior.name) data.name = row.name;
-    if (row.phone && !prior.phone) data.phone = row.phone;
+    if (row.phone && !prior.phone) {
+      data.phone = row.phone;
+      data.phoneE164 = row.phoneE164;
+    }
     // A previously deleted contact reappearing in an import is a deliberate
     // re-add, so revive it and treat it as a fresh acquisition.
     if (prior.deletedAt) {
@@ -172,7 +193,12 @@ export async function importContactRows(shop, rows, { consent = false } = {}) {
       if (!prior.marketingConsentAt) data.marketingConsentAt = now;
     }
 
-    await prisma.contact.update({ where: { id: prior.id }, data });
+    const update = (db) => db.contact.update({ where: { id: prior.id }, data });
+    if (data.subscriptionStatus && data.subscriptionStatus !== prior.subscriptionStatus) {
+      await withConsentContext(consentCtx, update);
+    } else {
+      await update(prisma);
+    }
     result.updated++;
   }
 

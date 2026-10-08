@@ -9,6 +9,7 @@
  * addresses and test property keys below, and removed afterwards. Point
  * DATABASE_URL at a scratch database to keep it off production.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

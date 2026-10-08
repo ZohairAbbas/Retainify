@@ -7,6 +7,7 @@
  * a WhatsApp step whose channel could not send, every step "done", nothing
  * sent, and nowhere that said why.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

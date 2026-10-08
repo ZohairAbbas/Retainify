@@ -51,7 +51,7 @@ export const action = async ({ request }) => {
   });
 
   if (sub?.contactEmail) {
-    await recalcContactPushEnabled(shop, sub.contactEmail).catch((err) =>
+    await recalcContactPushEnabled(shop, sub.contactEmail, { reason: "unsubscribe", source: "push_unsubscribe" }).catch((err) =>
       console.error("[push-unsubscribe] pushEnabled rollup failed:", err.message),
     );
   }

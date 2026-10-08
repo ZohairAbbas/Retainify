@@ -1,5 +1,8 @@
 import { Prisma } from "@prisma/client";
 import prisma from "../../db.server.js";
+import { withConsentContext } from "../consent/context.server.js";
+import { phoneToE164 } from "../phone/e164.js";
+import { getShopCountry } from "../growzar/shop-facts.server.js";
 
 const SUPPRESSION_STATUSES = new Set(["unsubscribed", "bounced", "complained"]);
 const VALID_STATUSES = new Set([
@@ -123,6 +126,17 @@ const VALID_SOURCES = new Set([
  */
 const PLACEHOLDER_SOURCES = new Set(["", "manual", "journey_enrollment"]);
 
+/**
+ * The consent reason a write implies when its caller did not give one. Most
+ * sources leave it to the ConsentEvent trigger, which reads it off the new
+ * state ("subscribed" is an opt-in); these two are not opt-ins by the buyer in
+ * front of us but restatements of consent given elsewhere.
+ */
+const SOURCE_CONSENT_REASON = {
+  shopify_customer: "shopify_sync",
+  csv_import: "import",
+};
+
 export function normalizeEmail(raw) {
   if (!raw) return "";
   return String(raw).trim().toLowerCase();
@@ -165,6 +179,13 @@ export async function upsertContact(input) {
     : undefined;
   const shopifyCustomerId = input.shopifyCustomerId || undefined;
   const phone = input.phone ? normalizePhone(input.phone) : undefined;
+  // Who said this, for the ConsentEvent a status change produces. Callers that
+  // know more than the contact source (an unsubscribe link, a merchant action)
+  // pass `consent` explicitly.
+  const consentCtx = {
+    reason: input.consent?.reason ?? SOURCE_CONSENT_REASON[input.source] ?? null,
+    source: input.consent?.source || input.source || "unattributed",
+  };
   const whatsappStatusInput = VALID_WA_STATUSES.has(input.whatsappStatus)
     ? input.whatsappStatus
     : undefined;
@@ -177,8 +198,21 @@ export async function upsertContact(input) {
   });
   const now = new Date();
 
+  // E.164 is computed from what the caller gave us, before normalizePhone
+  // dropped the "+" that says the country is already in the number. Only when
+  // the phone is about to be written: an existing phone is never replaced.
+  const phoneE164 =
+    input.phone && (!existing || !existing.phone)
+      ? phoneToE164(input.phone, await getShopCountry(shop))
+      : undefined;
+
+  // Writes that can change consent run inside withConsentContext so the
+  // trigger's ConsentEvent says why. Everything else stays a single statement.
+  const touchesConsent = Boolean(statusInput || whatsappStatusInput);
+  const write = (fn) => (touchesConsent ? withConsentContext(consentCtx, fn) : fn(prisma));
+
   if (!existing) {
-    const contact = await prisma.contact.create({
+    const contact = await write((db) => db.contact.create({
       data: {
         shop,
         email,
@@ -190,10 +224,11 @@ export async function upsertContact(input) {
         marketingConsentAt: marketingConsentAt || null,
         shopifyCustomerId: shopifyCustomerId || null,
         phone: phone || null,
+        phoneE164: phone ? phoneE164 ?? null : null,
         whatsappStatus: whatsappStatusInput || "never_opted_in",
         whatsappOptInAt: whatsappOptInAt || null,
       },
-    });
+    }));
     return { contact, created: true, revived: false };
   }
 
@@ -233,7 +268,10 @@ export async function upsertContact(input) {
     data.shopifyCustomerId = shopifyCustomerId;
   }
 
-  if (phone && !existing.phone) data.phone = phone;
+  if (phone && !existing.phone) {
+    data.phone = phone;
+    data.phoneE164 = phoneE164 ?? null;
+  }
 
   if (whatsappStatusInput) {
     // Same suppression-wins rule as email: an unsubscribed/invalid WhatsApp
@@ -249,10 +287,11 @@ export async function upsertContact(input) {
     data.whatsappOptInAt = whatsappOptInAt;
   }
 
-  const contact = await prisma.contact.update({
-    where: { id: existing.id },
-    data,
-  });
+  const changesConsent =
+    (data.subscriptionStatus && data.subscriptionStatus !== existing.subscriptionStatus) ||
+    (data.whatsappStatus && data.whatsappStatus !== existing.whatsappStatus);
+  const update = (db) => db.contact.update({ where: { id: existing.id }, data });
+  const contact = changesConsent ? await withConsentContext(consentCtx, update) : await update(prisma);
   return { contact, created: false, revived };
 }
 
@@ -603,7 +642,14 @@ export async function getContactById(shop, id) {
   });
 }
 
-export async function unsubscribeContact(shop, email, reason = "unsubscribe") {
+/**
+ * @param {string} shop
+ * @param {string} email
+ * @param {"unsubscribe"|"bounce"|"complaint"} [reason]
+ * @param {string} [source] where the change came from, for the ConsentEvent:
+ *   "buyer_link" (the unsubscribe page), "merchant", "provider_webhook".
+ */
+export async function unsubscribeContact(shop, email, reason = "unsubscribe", source = "unattributed") {
   const lower = normalizeEmail(email);
   await prisma.emailSuppression.upsert({
     where: { shop_email: { shop, email: lower } },
@@ -612,19 +658,29 @@ export async function unsubscribeContact(shop, email, reason = "unsubscribe") {
   });
   const next =
     reason === "bounce" ? "bounced" : reason === "complaint" ? "complained" : "unsubscribed";
-  await prisma.contact.updateMany({
-    where: { shop, email: lower },
-    data: { subscriptionStatus: next },
-  });
+  const consentReason = reason === "bounce" || reason === "complaint" ? reason : "unsubscribe";
+  await withConsentContext({ reason: consentReason, source }, (tx) =>
+    tx.contact.updateMany({
+      where: { shop, email: lower },
+      data: { subscriptionStatus: next },
+    }),
+  );
 }
 
-export async function resubscribeContact(shop, email) {
+/**
+ * @param {string} shop
+ * @param {string} email
+ * @param {string} [source] "buyer_link" (undo on the unsubscribe page) or "merchant"
+ */
+export async function resubscribeContact(shop, email, source = "unattributed") {
   const lower = normalizeEmail(email);
   await prisma.emailSuppression.deleteMany({ where: { shop, email: lower } });
-  await prisma.contact.updateMany({
-    where: { shop, email: lower },
-    data: { subscriptionStatus: "subscribed" },
-  });
+  await withConsentContext({ reason: "opt_in", source }, (tx) =>
+    tx.contact.updateMany({
+      where: { shop, email: lower },
+      data: { subscriptionStatus: "subscribed" },
+    }),
+  );
 }
 
 /**
@@ -638,7 +694,7 @@ export async function resubscribeContact(shop, email) {
  * @param {string[]} emails
  * @returns {Promise<number>} contacts affected
  */
-export async function bulkUnsubscribe(shop, emails) {
+export async function bulkUnsubscribe(shop, emails, source = "merchant") {
   const unique = [...new Set(emails.map(normalizeEmail).filter(Boolean))];
   if (!unique.length) return 0;
 
@@ -646,19 +702,19 @@ export async function bulkUnsubscribe(shop, emails) {
   const CHUNK = 1000;
   for (let i = 0; i < unique.length; i += CHUNK) {
     const slice = unique.slice(i, i + CHUNK);
-    await prisma.$transaction([
+    await withConsentContext({ reason: "unsubscribe", source }, async (tx) => {
       // createMany + skipDuplicates is the set-based equivalent of upserting
       // each suppression; rows that already exist keep their original reason
       // and createdAt, which is what we want for an unsubscribe.
-      prisma.emailSuppression.createMany({
+      await tx.emailSuppression.createMany({
         data: slice.map((email) => ({ shop, email, reason: "unsubscribe" })),
         skipDuplicates: true,
-      }),
-      prisma.contact.updateMany({
+      });
+      await tx.contact.updateMany({
         where: { shop, email: { in: slice } },
         data: { subscriptionStatus: "unsubscribed" },
-      }),
-    ]);
+      });
+    });
   }
   return unique.length;
 }
@@ -711,6 +767,7 @@ export async function createManualContact(shop, { email, name, tagIds = [] }) {
     subscriptionStatus: "subscribed",
     marketingConsentAt: new Date(),
     revive: true,
+    consent: { reason: "opt_in", source: "merchant" },
   });
   if (contact && tagIds.length) {
     await prisma.contactTag.createMany({

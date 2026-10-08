@@ -14,6 +14,7 @@
  * wrong half of a list gets the wrong email. Most of what follows is checking
  * that a rule which cannot be answered says NO rather than yes.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

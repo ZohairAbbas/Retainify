@@ -7,6 +7,7 @@
  * count silently in the gallery), and "Recommended" must never point at a
  * template that matches nobody or one the merchant has already saved.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

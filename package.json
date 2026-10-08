@@ -22,7 +22,7 @@
     "billing:cutover": "node scripts/grandfather-shops.mjs",
     "billing:cutover:dry": "node scripts/grandfather-shops.mjs --dry-run",
     "check:gdpr": "node scripts/check-gdpr-coverage.mjs",
-    "test": "node --test $(find app -name '*.test.js')",
+    "test": "node scripts/run-tests.mjs",
     "popup:kit": "node scripts/sync-popup-kit.mjs"
   },
   "type": "module",
@@ -40,6 +40,7 @@
     "@shopify/shopify-app-react-router": "^1.1.0",
     "@shopify/shopify-app-session-storage-prisma": "^9.0.0",
     "isbot": "^5.1.31",
+    "libphonenumber-js": "^1.13.14",
     "prisma": "^6.16.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

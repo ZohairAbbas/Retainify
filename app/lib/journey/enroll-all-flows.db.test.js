@@ -14,6 +14,7 @@
  * directions — that every eligible flow is reached, AND that each flow's own
  * entry rules, status and archived state still decide independently.
  */
+import "../../test-support/db-guard.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 

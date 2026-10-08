@@ -213,7 +213,7 @@ async function processPushJob(job) {
         // Contact.pushEnabled is what the segment rule reads, so it has to
         // follow. A recompute rather than a flip: this contact may have other
         // browsers still subscribed.
-        await recalcContactPushEnabled(job.shop, enrollment.contactEmail).catch((err) =>
+        await recalcContactPushEnabled(job.shop, enrollment.contactEmail, { reason: "invalid", source: "push_send" }).catch((err) =>
           console.error(`[push-worker] pushEnabled rollup failed for job=${job.id}:`, err.message),
         );
       }

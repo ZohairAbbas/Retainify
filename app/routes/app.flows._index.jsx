@@ -121,7 +121,7 @@ async function templateChoices(shop, ctx, templates, journeys) {
     whatsappReadiness(shop),
     ctx.isShopify ? prisma.pushSubscription.count({ where: { shop, isActive: true } }) : 0,
     ctx.isShopify ? prisma.order.count({ where: { shop, processedAt: { gte: since } } }) : 0,
-    ctx.isShopify ? prisma.abandonedCart.count({ where: { shop, abandonedAt: { gte: since } } }) : 0,
+    ctx.isShopify ? prisma.abandonedCart.count({ where: { shop, abandonedAt: { gte: since }, customerEmail: { not: "" } } }) : 0,
     prisma.contact.count({ where: { shop, deletedAt: null } }),
   ]);
   // Connected and switched on is enough to recommend a WhatsApp template:
