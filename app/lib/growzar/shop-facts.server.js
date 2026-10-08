@@ -11,6 +11,14 @@
  * day. A shop that cannot be asked (no session, Shopify down) keeps what was
  * cached, and a value never fetched stays null. The contract's rule is that
  * unknown is null, never a default, so no fallback is invented here.
+ *
+ * The country is the one the shop's PRIMARY LOCATION is in, the same source
+ * Inventorify uses — not the billing address. The billing address is the
+ * account holder's and says nothing about where buyers are: 0dscam-qn, a
+ * Karachi store selling in PKR, has a GB one, and read as the phone region it
+ * turned a local "0300 1234567" into a valid UK number (+44 300 …). Reading the
+ * location needs read_locations; a token without it gets country null, so
+ * phones written without "+" stay null rather than being guessed.
  */
 import prisma from "../../db.server.js";
 import { canonicalShop } from "./config.js";
@@ -19,20 +27,29 @@ export const FACTS_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
 const SHOP_QUERY = `#graphql
   query GrowzarShopFacts {
-    shop {
-      currencyCode
-      ianaTimezone
-      billingAddress { countryCodeV2 }
-    }
+    shop { currencyCode ianaTimezone }
+  }`;
+
+// `location` with no id is the shop's primary location. A separate query, so a
+// token without read_locations still refreshes the currency and timezone.
+const PRIMARY_LOCATION_QUERY = `#graphql
+  query GrowzarPrimaryLocationCountry {
+    location { address { countryCode } }
   }`;
 
 /**
  * @typedef {{ country: string|null, currency: string|null, timezone: string|null }} ShopFacts
+ *
+ * What a fetch returns. countryStatus says how to treat `country`:
+ *   "ok"       Shopify answered; null means it had no valid country
+ *   "no_scope" the token cannot read locations; the country is unknown (null)
+ *   "error"    the location could not be read this time; keep what is cached
+ * @typedef {ShopFacts & { countryStatus: "ok"|"no_scope"|"error" }} FetchedFacts
  */
 
 /**
  * @param {string} shop
- * @param {{ maxAgeMs?: number, fetchFacts?: (shop: string) => Promise<ShopFacts>, now?: Date }} [opts]
+ * @param {{ maxAgeMs?: number, fetchFacts?: (shop: string) => Promise<FetchedFacts>, now?: Date }} [opts]
  * @returns {Promise<ShopFacts>}
  */
 export async function getShopFacts(shop, { maxAgeMs = FACTS_MAX_AGE_MS, fetchFacts = fetchFromShopify, now = new Date() } = {}) {
@@ -62,7 +79,7 @@ export async function getShopFacts(shop, { maxAgeMs = FACTS_MAX_AGE_MS, fetchFac
   }
 
   const next = {
-    country: validCountry(fetched?.country) ?? cached.country,
+    country: fetched?.countryStatus === "error" ? cached.country : validCountry(fetched?.country),
     currency: validCurrency(fetched?.currency) ?? cached.currency,
     timezone: fetched?.timezone || cached.timezone,
   };
@@ -119,15 +136,37 @@ async function fetchFromShopify(shop) {
   // as well, which otherwise never needs it on this path.
   const { unauthenticated } = await import("../../shopify.server.js");
   const { admin } = await unauthenticated.admin(shop);
-  const resp = await admin.graphql(SHOP_QUERY);
-  const json = await resp.json();
+  return readShopFacts(admin);
+}
+
+/**
+ * Both queries against an Admin client. Throws only if the shop query fails;
+ * the location query's failure is reported through countryStatus.
+ *
+ * @param {{ graphql: (q: string) => Promise<Response> }} admin
+ * @returns {Promise<FetchedFacts>}
+ */
+export async function readShopFacts(admin) {
+  const json = await (await admin.graphql(SHOP_QUERY)).json();
   if (json.errors) throw new Error(JSON.stringify(json.errors).slice(0, 300));
   const s = json.data?.shop;
-  return {
-    country: s?.billingAddress?.countryCodeV2 ?? null,
-    currency: s?.currencyCode ?? null,
-    timezone: s?.ianaTimezone ?? null,
-  };
+  const facts = { currency: s?.currencyCode ?? null, timezone: s?.ianaTimezone ?? null };
+
+  try {
+    const loc = await (await admin.graphql(PRIMARY_LOCATION_QUERY)).json();
+    if (loc.errors) throw new Error(JSON.stringify(loc.errors).slice(0, 300));
+    return { ...facts, country: loc.data?.location?.address?.countryCode ?? null, countryStatus: "ok" };
+  } catch (err) {
+    if (isMissingScope(err)) return { ...facts, country: null, countryStatus: "no_scope" };
+    console.warn(`[growzar] primary location country unavailable: ${err.message}`);
+    return { ...facts, country: null, countryStatus: "error" };
+  }
+}
+
+/** The Admin API's answer to a token without the scope a field needs. */
+export function isMissingScope(err) {
+  const text = `${err?.message ?? err} ${JSON.stringify(err?.body?.errors ?? err?.response?.errors ?? "")}`;
+  return /access denied|access scope/i.test(text);
 }
 
 function validCountry(v) {
