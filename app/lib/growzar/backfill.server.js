@@ -55,7 +55,9 @@ export async function shopifyShops(only = null) {
  * @returns {Promise<{ shop: string, country: string|null, candidates: number, normalized: number, unparseable: number, written: number }>}
  */
 export async function backfillPhones(shop, { apply, country } = {}) {
-  const c = country !== undefined ? country : (await getShopFacts(shop)).country;
+  // Fetched fresh (maxAgeMs 0): a shop that approved read_locations since the
+  // last read should be filled with its country now, not tomorrow.
+  const c = country !== undefined ? country : (await getShopFacts(shop, { maxAgeMs: 0 })).country;
   const out = { shop, country: c, candidates: 0, normalized: 0, unparseable: 0, written: 0 };
   let cursor = null;
   for (;;) {
@@ -82,6 +84,40 @@ export async function backfillPhones(shop, { apply, country } = {}) {
           where: { id: r.id, phoneE164: null },
           data: { phoneE164: e164 },
         });
+        out.written += count;
+      }
+    }
+  }
+  out.carts = await backfillCartPhones(shop, { apply, country: c });
+  return out;
+}
+
+/**
+ * AbandonedCart.phoneE164 for carts that have a phone and no E.164 yet. Same
+ * rules as contacts; counts folded into the result under `carts`.
+ */
+async function backfillCartPhones(shop, { apply, country }) {
+  const out = { candidates: 0, normalized: 0, unparseable: 0, written: 0 };
+  let cursor = null;
+  for (;;) {
+    const rows = await prisma.abandonedCart.findMany({
+      where: { shop, phoneE164: null, phone: { not: null }, NOT: { phone: "" }, ...(cursor ? { id: { gt: cursor } } : {}) },
+      select: { id: true, phone: true },
+      orderBy: { id: "asc" },
+      take: BATCH,
+    });
+    if (!rows.length) break;
+    cursor = rows[rows.length - 1].id;
+    for (const r of rows) {
+      out.candidates++;
+      const e164 = phoneToE164(r.phone, country);
+      if (!e164) {
+        out.unparseable++;
+        continue;
+      }
+      out.normalized++;
+      if (apply) {
+        const { count } = await prisma.abandonedCart.updateMany({ where: { id: r.id, phoneE164: null }, data: { phoneE164: e164 } });
         out.written += count;
       }
     }

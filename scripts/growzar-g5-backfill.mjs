@@ -8,7 +8,9 @@
  *   node scripts/growzar-g5-backfill.mjs --apply         # write
  *   node scripts/growzar-g5-backfill.mjs --apply --shop=x.myshopify.com
  *
- * Idempotent: a second --apply writes 0. Prints counts only, never a phone or
+ * Idempotent: a second --apply writes 0. Re-run it after merchants approve the
+ * read_locations scope: a shop whose country was unknown leaves phones written
+ * without "+" null until then, and the next run fills them. Prints counts only, never a phone or
  * an address.
  *
  * --apply refuses to run between 05:00 and 15:00 UTC (Pakistan business
@@ -47,7 +49,8 @@ try {
     const c = await backfillConsentBaseline(shop, { apply });
     console.log(
       `${shop}  country=${p.country ?? "unknown"}  phones: ${p.candidates} to fill, ${p.normalized} normalize, ` +
-        `${p.unparseable} stay null${apply ? `, ${p.written} written` : ""}  ` +
+        `${p.unparseable} stay null${apply ? `, ${p.written} written` : ""}; carts ${p.carts.candidates} to fill, ` +
+        `${p.carts.normalized} normalize${apply ? `, ${p.carts.written} written` : ""}  ` +
         `baseline ${apply ? "written" : "missing"}: email ${c.email}, whatsapp ${c.whatsapp}, push ${c.push}`,
     );
     for (const k of ["candidates", "normalized", "unparseable", "written"]) totals[k] += p[k];

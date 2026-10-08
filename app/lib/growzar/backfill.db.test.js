@@ -16,6 +16,7 @@ async function cleanup() {
   await prisma.consentEvent.deleteMany({ where: { shop: SHOP } });
   await prisma.contact.deleteMany({ where: { shop: SHOP } });
   await prisma.pushSubscription.deleteMany({ where: { shop: SHOP } });
+  await prisma.abandonedCart.deleteMany({ where: { shop: SHOP } });
   await prisma.account.deleteMany({ where: { key: SHOP } });
 }
 
@@ -49,7 +50,20 @@ test("03xx and +923xx for the same buyer get the same phone; the second run writ
 
   const second = await backfillPhones(SHOP, { apply: true, country: "PK" });
   assert.equal(second.written, 0);
+  assert.equal(second.carts.written, 0);
   assert.equal(second.unparseable, 1, "the bad number is counted again, and still not guessed");
+});
+
+test("cart phones are filled the same way, once", async () => {
+  await prisma.abandonedCart.create({
+    data: { shop: SHOP, checkoutToken: "tok_bf", checkoutId: "1", customerEmail: "", phone: "0300 1234567", totalPrice: 1, currency: "PKR", lineItemsJson: "[]", recoveryUrl: "" },
+  });
+  const first = await backfillPhones(SHOP, { apply: true, country: "PK" });
+  assert.equal(first.carts.written, 1);
+  assert.equal((await prisma.abandonedCart.findFirst({ where: { shop: SHOP } })).phoneE164, "+923001234567");
+  assert.equal((await backfillPhones(SHOP, { apply: true, country: "PK" })).carts.written, 0);
+  const unknown = await backfillPhones(SHOP, { apply: false, country: null });
+  assert.equal(unknown.carts.candidates, 0);
 });
 
 test("the consent baseline is one row per contact and channel, holding today's state, once", async () => {
