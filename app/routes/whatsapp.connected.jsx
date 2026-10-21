@@ -87,7 +87,7 @@ export const loader = async ({ request }) => {
     };
   }
 
-  return finish(check.shop, tokenRes.accessToken, tokenRes.expiresAt ?? null, found.wabaIds[0]);
+  return finish(check.shop, tokenRes.accessToken, tokenRes.expiresAt ?? null, found.wabaIds[0], check.flow);
 };
 
 /** The merchant picked one of their accounts. */
@@ -120,7 +120,7 @@ export const action = async ({ request }) => {
     return { ok: false, error: "That WhatsApp Business account wasn't part of this login. Please start again." };
   }
 
-  const result = await finish(check.shop, accessToken, pending.tokenExpiresAt, wabaId);
+  const result = await finish(check.shop, accessToken, pending.tokenExpiresAt, wabaId, check.flow);
   if (!result.ok) return result;
 
   await prisma.whatsappConnectPending.delete({ where: { shop: check.shop } }).catch(() => {});
@@ -132,8 +132,8 @@ export const action = async ({ request }) => {
   return redirect(`/whatsapp/connected?${done}`);
 };
 
-async function finish(shop, accessToken, expiresAt, wabaId) {
-  const result = await provisionWhatsappAccount({ shop, accessToken, expiresAt, wabaId });
+async function finish(shop, accessToken, expiresAt, wabaId, connectionType) {
+  const result = await provisionWhatsappAccount({ shop, accessToken, expiresAt, wabaId, connectionType });
   if (!result.ok) return { ok: false, error: result.error };
   return {
     ok: true,

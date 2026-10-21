@@ -155,6 +155,17 @@ export async function registerWhatsappNumber(shop, pin) {
   const account = await resolveAccount(shop);
   if (!account) return { ok: false, error: "no connected WhatsApp account for shop" };
 
+  // Refused outright, not checked with Meta first: registering a coexistence
+  // number moves it onto the Cloud API alone and signs it out of the WhatsApp
+  // Business app on the merchant's phone. It never needs registering.
+  if (account.connectionType === "coexistence") {
+    return {
+      ok: false,
+      error:
+        "This number is connected through the WhatsApp Business app and doesn't need registering. Registering it would sign it out of the app on your phone.",
+    };
+  }
+
   let accessToken;
   try {
     accessToken = decryptSecret(account.accessTokenEnc);

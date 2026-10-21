@@ -23,8 +23,13 @@ import { useRevalidator } from "react-router";
  * context, and cross-tab messaging is exactly what browsers have been closing
  * down. So this asks its own server instead, which is the authority anyway —
  * the account either exists now or it does not.
+ *
+ * ── Two ways in ────────────────────────────────────────────────────────────
+ * Most merchants already sell over the WhatsApp Business app, so keeping that
+ * number (coexistence) leads. A fresh number, or one moved off the app
+ * entirely, is the other way, for numbers not in use on any WhatsApp app.
  */
-export default function EmbeddedSignup({ connectUrl, connected = false }) {
+export default function EmbeddedSignup({ connectUrls = {}, connected = false }) {
   const revalidator = useRevalidator();
   const [waiting, setWaiting] = useState(false);
   const stopAt = useRef(0);
@@ -47,7 +52,7 @@ export default function EmbeddedSignup({ connectUrl, connected = false }) {
     return () => clearInterval(id);
   }, [waiting, connected, revalidator]);
 
-  if (!connectUrl) {
+  if (!connectUrls.coexistence || !connectUrls.cloud_api) {
     return (
       <div
         className="t-small"
@@ -63,28 +68,29 @@ export default function EmbeddedSignup({ connectUrl, connected = false }) {
     );
   }
 
+  // Open through window.open rather than letting the link navigate. App
+  // Bridge v4 proxies window.open out of the admin iframe into a real
+  // top-level tab, which is documented; how it treats a plain target="_blank"
+  // link to the app's own origin is not, and treated as in-app navigation it
+  // would load inside the iframe — where Meta refuses to be framed. The href
+  // stays as the fallback for a browser where window.open is unavailable.
+  const open = (url) => (event) => {
+    if (typeof window !== "undefined" && typeof window.open === "function") {
+      event.preventDefault();
+      window.open(url, "_blank", "noopener,noreferrer");
+    }
+    stopAt.current = Date.now() + 10 * 60 * 1000;
+    setWaiting(true);
+  };
+
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       <a
         className="btn btn-primary"
-        href={connectUrl}
+        href={connectUrls.coexistence}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={(event) => {
-          // Open through window.open rather than letting the link navigate.
-          // App Bridge v4 proxies window.open out of the admin iframe into a
-          // real top-level tab, which is documented; how it treats a plain
-          // target="_blank" link to the app's own origin is not, and treated
-          // as in-app navigation it would load inside the iframe — where
-          // Meta refuses to be framed. The href stays as the fallback for a
-          // browser where window.open is unavailable.
-          if (typeof window !== "undefined" && typeof window.open === "function") {
-            event.preventDefault();
-            window.open(connectUrl, "_blank", "noopener,noreferrer");
-          }
-          stopAt.current = Date.now() + 10 * 60 * 1000;
-          setWaiting(true);
-        }}
+        onClick={open(connectUrls.coexistence)}
         style={{
           background: "var(--node-whatsapp-ink)",
           borderColor: "var(--node-whatsapp-ink)",
@@ -92,8 +98,27 @@ export default function EmbeddedSignup({ connectUrl, connected = false }) {
           justifyContent: "center",
         }}
       >
-        Connect WhatsApp
+        Connect my existing WhatsApp Business app number
       </a>
+      <div className="t-small muted">
+        Keeps the number working in the WhatsApp Business app on your phone. You keep your
+        chats, and Retainify sends alongside.
+      </div>
+
+      <a
+        className="btn"
+        href={connectUrls.cloud_api}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={open(connectUrls.cloud_api)}
+        style={{ textDecoration: "none", justifyContent: "center" }}
+      >
+        Use a new number
+      </a>
+      <div className="t-small muted">
+        For a number that isn&rsquo;t on WhatsApp or the WhatsApp Business app. It will only
+        work through Retainify afterwards.
+      </div>
 
       <div className="t-small muted">
         {waiting

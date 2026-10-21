@@ -1122,6 +1122,11 @@ model WhatsappAccount {
   accessTokenEnc       String    @default("")
   status               String    @default("pending") // pending | connected | disconnected
   connectedAt          DateTime?
+  // How the number was onboarded:
+  //   "cloud_api"   — a fresh number or a full migration; registered to the Cloud API.
+  //   "coexistence" — stays live on the merchant's WhatsApp Business app; we must
+  //                   NEVER call /register for it (that signs it out of the app).
+  connectionType       String    @default("cloud_api")
   // Cloud API registration (POST /{phoneNumberId}/register). A number must be
   // registered before it can send ANY message (template or free-text); without
   // it Meta returns error #133010 "Account not registered".
