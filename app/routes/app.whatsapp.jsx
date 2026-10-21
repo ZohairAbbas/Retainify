@@ -129,6 +129,7 @@ export const loader = async ({ request }) => {
           wabaId: account.wabaId,
           displayPhoneNumber: account.displayPhoneNumber,
           registered: !!account.registeredAt || registration.registered === true,
+          connectionType: account.connectionType,
           // Null means Meta sends us no events for this shop at all: sends
           // work, but delivery, reads, replies and STOP never come back.
           webhooksSubscribed: !!account.webhooksSubscribedAt,
@@ -173,12 +174,16 @@ export const loader = async ({ request }) => {
     // rejection, edits made in Business Manager) with no webhook for shops whose
     // subscription is off, so a list last pulled an hour ago can be wrong.
     templatesStale: isConnected && isStale(account?.templatesSyncedAt),
-    // A signed, short-lived link that starts Meta's flow in a top-level tab.
-    // Minted per page load so it cannot outlive the session that produced it.
-    connectUrl: (() => {
-      const token = mintConnectToken(shop);
+    // Signed, short-lived links that start Meta's flow in a top-level tab, one
+    // per way of connecting. Minted per page load so they cannot outlive the
+    // session that produced them.
+    connectUrls: (() => {
       const base = appBaseUrl();
-      return token && base ? `${base}/whatsapp/connect/${token}` : "";
+      const link = (flow) => {
+        const token = mintConnectToken(shop, { flow });
+        return token && base ? `${base}/whatsapp/connect/${token}` : "";
+      };
+      return { coexistence: link("coexistence"), cloud_api: link("cloud_api") };
     })(),
   };
 };
@@ -385,7 +390,7 @@ export const action = async ({ request }) => {
 };
 
 function WhatsappPageInner() {
-  const { gate, isShopify = true, returnTo = "", flowsWithWhatsapp = 0, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, popupTakesOptIn = true, subCount, subscribers = [], templates, templatesStale, connectUrl } = useLoaderData();
+  const { gate, isShopify = true, returnTo = "", flowsWithWhatsapp = 0, account, whatsappEnabled, whatsappRequireOptIn, popupOptIn, popupTakesOptIn = true, subCount, subscribers = [], templates, templatesStale, connectUrls } = useLoaderData();
   const connectFetcher = useFetcher();
   const toggleFetcher = useFetcher();
   const syncFetcher = useFetcher();
@@ -536,9 +541,11 @@ function WhatsappPageInner() {
                     </div>
                     <div className="t-small muted" style={{ marginTop: 2 }}>
                       WABA {account.wabaId} · <span style={{ color: "var(--node-whatsapp-ink)" }}>Connected</span>
-                      {isRegistered
-                        ? <> · <span style={{ color: "var(--node-whatsapp-ink)" }}>Registered</span></>
-                        : <> · <span style={{ color: "var(--danger-ink)" }}>Not registered</span></>}
+                      {account.connectionType === "coexistence"
+                        ? <> · <span style={{ color: "var(--node-whatsapp-ink)" }}>Via WhatsApp Business app</span></>
+                        : isRegistered
+                          ? <> · <span style={{ color: "var(--node-whatsapp-ink)" }}>Registered</span></>
+                          : <> · <span style={{ color: "var(--danger-ink)" }}>Not registered</span></>}
                       {webhooksLive
                         ? <> · <span style={{ color: "var(--node-whatsapp-ink)" }}>Events on</span></>
                         : <> · <span style={{ color: "var(--danger-ink)" }}>Events off</span></>}
@@ -628,7 +635,7 @@ function WhatsappPageInner() {
                 <div className="t-small muted">
                   Connect your WhatsApp Business account through Meta to start sending. Takes a couple of minutes.
                 </div>
-                <EmbeddedSignup connectUrl={connectUrl} connected={isConnected} />
+                <EmbeddedSignup connectUrls={connectUrls} connected={isConnected} />
                 {account?.status === "disconnected" && account?.lastError && (
                   <div className="t-small muted">Last attempt: {account.lastError}</div>
                 )}

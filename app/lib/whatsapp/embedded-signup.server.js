@@ -308,9 +308,17 @@ export async function describeWabas(accessToken, wabaIds) {
  * the code itself — an authorization code is single-use, so it cannot be handed
  * on to be exchanged a second time.
  */
-export async function provisionWhatsappAccount({ shop, accessToken, expiresAt = null, wabaId, businessId = "" }) {
+export async function provisionWhatsappAccount({
+  shop,
+  accessToken,
+  expiresAt = null,
+  wabaId,
+  businessId = "",
+  connectionType = "cloud_api",
+}) {
   if (!shop) return { ok: false, error: "missing shop" };
   const tokenRes = { accessToken, expiresAt };
+  const isCoexistence = connectionType === "coexistence";
 
   const phoneRes = await fetchPhoneNumber(tokenRes.accessToken, wabaId);
   if (!phoneRes.ok) {
@@ -341,9 +349,29 @@ export async function provisionWhatsappAccount({ shop, accessToken, expiresAt = 
     connectedAt: new Date(),
     webhooksSubscribedAt: subscribedAt,
     lastError: subRes.ok ? "" : String(subRes.error || "").slice(0, 500),
+    connectionType: isCoexistence ? "coexistence" : "cloud_api",
   };
 
-  const before = await prisma.whatsappAccount.findUnique({ where: { shop }, select: { status: true } });
+  const before = await prisma.whatsappAccount.findUnique({
+    where: { shop },
+    select: { status: true, connectionType: true },
+  });
+
+  // A coexistence number is never registered by us: POST /register would move
+  // it onto the Cloud API alone and sign it out of the WhatsApp Business app on
+  // the merchant's phone. It is already live — that is what the flow requires —
+  // so it is stamped as sendable here, or the page would show a PIN prompt that
+  // must not be answered and campaigns would refuse to send.
+  //
+  // Going the other way, a shop that was on coexistence and has now connected
+  // an ordinary number drops that stamp: it vouched for the old number, not
+  // this one. The page reconciles the new number with Meta on its next load.
+  if (isCoexistence) {
+    shared.registeredAt = new Date();
+  } else if (before?.connectionType === "coexistence") {
+    shared.registeredAt = null;
+  }
+
   const account = await prisma.whatsappAccount.upsert({
     where: { shop },
     create: { shop, ...shared },

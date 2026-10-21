@@ -33,13 +33,37 @@ function secret() {
 const b64url = (buf) => Buffer.from(buf).toString("base64url");
 
 /**
+ * The two ways a number can be connected.
+ *
+ *   "cloud_api"    — a fresh number, or one moved off the phone app entirely.
+ *                    It is registered to the Cloud API and lives only there.
+ *   "coexistence"  — the merchant's existing WhatsApp Business app number. It
+ *                    stays live in the app on their phone, and the Cloud API
+ *                    sends from it alongside. Registering it would sign it out
+ *                    of the app, which is exactly what this flow exists to avoid.
+ *
+ * Anything unrecognised is the original flow, so old links keep working.
+ */
+export function normalizeConnectionType(raw) {
+  return raw === "coexistence" ? "coexistence" : "cloud_api";
+}
+
+/**
  * Mint a link token for one shop.
+ *
+ * The flow rides inside the signed payload because the redirect back from Meta
+ * carries nothing else of ours — `state` is the one value that survives the
+ * round trip, and signing it means the flow cannot be switched on the way.
+ *
  * @param {string} shop
+ * @param {{ flow?: "cloud_api" | "coexistence" }} [opts]
  * @returns {string} "" when the server has no signing secret.
  */
-export function mintConnectToken(shop) {
+export function mintConnectToken(shop, { flow = "cloud_api" } = {}) {
   if (!shop || !secret()) return "";
-  const payload = b64url(JSON.stringify({ shop, exp: Date.now() + TTL_MS }));
+  const payload = b64url(
+    JSON.stringify({ shop, flow: normalizeConnectionType(flow), exp: Date.now() + TTL_MS }),
+  );
   const sig = createHmac("sha256", secret()).update(payload).digest("base64url");
   return `${payload}.${sig}`;
 }
@@ -53,7 +77,7 @@ export function mintConnectToken(shop) {
  * WhatsApp account to someone else's shop.
  *
  * @param {string} token
- * @returns {{ ok: true, shop: string } | { ok: false, error: string }}
+ * @returns {{ ok: true, shop: string, flow: "cloud_api" | "coexistence" } | { ok: false, error: string }}
  */
 export function verifyConnectToken(token) {
   if (!secret()) return { ok: false, error: "server is not configured to sign connect links" };
@@ -77,7 +101,7 @@ export function verifyConnectToken(token) {
   if (!(Number(data.exp) > Date.now())) {
     return { ok: false, error: "This link has expired. Start again from the WhatsApp page." };
   }
-  return { ok: true, shop: String(data.shop) };
+  return { ok: true, shop: String(data.shop), flow: normalizeConnectionType(data.flow) };
 }
 
 /** Public base URL of this deployment, without a trailing slash. */
@@ -99,9 +123,19 @@ export function connectCallbackUrl(env = process.env) {
  * authorization code — the configuration's own default is a token, which
  * cannot be exchanged for the long-lived system-user token the app stores.
  *
+ * Coexistence is the same dialog with `extras` naming Meta's "WhatsApp Business
+ * app onboarding" feature, which lets the merchant pick the number already in
+ * their phone app instead of demanding one that isn't. These are the extras
+ * Meta's JavaScript SDK would send; FB.login only ever forwarded them onto this
+ * same URL. The ordinary flow sends none, so it behaves exactly as before.
+ * ("coexistence" was the feature's old name, and Meta no longer accepts it.)
+ *
+ * @param {string} state
+ * @param {object} [env]
+ * @param {{ flow?: "cloud_api" | "coexistence" }} [opts]
  * @returns {{ ok: true, url: string } | { ok: false, error: string }}
  */
-export function buildConnectDialogUrl(state, env = process.env) {
+export function buildConnectDialogUrl(state, env = process.env, { flow = "cloud_api" } = {}) {
   const appId = String(env.META_APP_ID || "").trim();
   const configId = String(env.META_ES_CONFIG_ID || "").trim();
   const redirectUri = connectCallbackUrl(env);
@@ -121,5 +155,11 @@ export function buildConnectDialogUrl(state, env = process.env) {
   url.searchParams.set("override_default_response_type", "true");
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
+  if (normalizeConnectionType(flow) === "coexistence") {
+    url.searchParams.set(
+      "extras",
+      JSON.stringify({ featureType: "whatsapp_business_app_onboarding", sessionInfoVersion: "3", setup: {} }),
+    );
+  }
   return { ok: true, url: url.toString() };
 }

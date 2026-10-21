@@ -22,7 +22,25 @@ const { mintConnectToken, verifyConnectToken, buildConnectDialogUrl, connectCall
 const SHOP = "acme.myshopify.com";
 
 test("a freshly minted token names the shop it was minted for", () => {
-  assert.deepEqual(verifyConnectToken(mintConnectToken(SHOP)), { ok: true, shop: SHOP });
+  assert.deepEqual(verifyConnectToken(mintConnectToken(SHOP)), { ok: true, shop: SHOP, flow: "cloud_api" });
+});
+
+test("the chosen flow survives the round trip, and cannot be switched", () => {
+  const token = mintConnectToken(SHOP, { flow: "coexistence" });
+  assert.equal(verifyConnectToken(token).flow, "coexistence");
+
+  // Flipping the flow in the payload breaks the signature like any other edit.
+  const [, sig] = token.split(".");
+  const flipped = Buffer.from(JSON.stringify({ shop: SHOP, flow: "cloud_api", exp: Date.now() + 60000 }))
+    .toString("base64url");
+  assert.equal(verifyConnectToken(`${flipped}.${sig}`).ok, false);
+});
+
+test("a link minted before flows existed is the ordinary flow", () => {
+  // Signed exactly as the old mintConnectToken did, with no flow in it.
+  const payload = Buffer.from(JSON.stringify({ shop: SHOP, exp: Date.now() + 60000 })).toString("base64url");
+  const sig = createHmac("sha256", process.env.SHOPIFY_API_SECRET).update(payload).digest("base64url");
+  assert.equal(verifyConnectToken(`${payload}.${sig}`).flow, "cloud_api");
 });
 
 test("a tampered payload or signature is refused", () => {
@@ -78,6 +96,22 @@ test("the dialog URL asks for a code, not a token", () => {
   assert.equal(parsed.searchParams.get("override_default_response_type"), "true");
   assert.equal(parsed.searchParams.get("state"), "state-token");
   assert.equal(parsed.searchParams.get("redirect_uri"), "https://app.example.com/whatsapp/connected");
+});
+
+test("coexistence asks Meta for the WhatsApp Business app onboarding", () => {
+  const env = { META_APP_ID: "111", META_ES_CONFIG_ID: "222", SHOPIFY_APP_URL: "https://app.example.com" };
+
+  const coexist = new URL(buildConnectDialogUrl("s", env, { flow: "coexistence" }).url);
+  const extras = JSON.parse(coexist.searchParams.get("extras"));
+  // "coexistence" was the feature's old name; Meta no longer accepts it.
+  assert.equal(extras.featureType, "whatsapp_business_app_onboarding");
+  // Everything else about the dialog is unchanged — the code exchange depends on it.
+  assert.equal(coexist.searchParams.get("response_type"), "code");
+  assert.equal(coexist.searchParams.get("redirect_uri"), "https://app.example.com/whatsapp/connected");
+
+  // The ordinary flow sends no extras at all, exactly as before.
+  assert.equal(new URL(buildConnectDialogUrl("s", env).url).searchParams.has("extras"), false);
+  assert.equal(new URL(buildConnectDialogUrl("s", env, { flow: "cloud_api" }).url).searchParams.has("extras"), false);
 });
 
 test("a server missing its Meta config refuses to build a dialog URL", () => {

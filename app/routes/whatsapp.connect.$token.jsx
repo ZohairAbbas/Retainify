@@ -25,7 +25,7 @@ export const loader = async ({ params, request }) => {
   const check = verifyConnectToken(params.token);
   if (!check.ok) return problem(check.error);
 
-  const dialog = buildConnectDialogUrl(params.token);
+  const dialog = buildConnectDialogUrl(params.token, process.env, { flow: check.flow });
   if (!dialog.ok) return problem(dialog.error);
 
   return redirect(dialog.url);
